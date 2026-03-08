@@ -22,7 +22,7 @@ jobs:
       - name: Build with Buildozer
         uses: digreatbrian/buildozer-action@v2
         with:
-          python-version: 3.11
+          python-version: "3.11"
           workdir: android_kivy_app
           buildozer-cmd: yes | buildozer -v android debug
 
@@ -31,3 +31,4 @@ jobs:
         with:
           name: medimap-pro-apk
           path: android_kivy_app/bin/*.apk
+          if-no-files-found: error
