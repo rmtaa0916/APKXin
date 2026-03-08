@@ -20,10 +20,11 @@ jobs:
           python-version: "3.11"
 
       - name: Build with Buildozer
-        uses: digreatbrian/buildozer-action@v1
+        uses: digreatbrian/buildozer-action@v2
         with:
-          work-dir: android_kivy_app
-          buildozer-cmd: buildozer android debug
+          python-version: 3.11
+          workdir: android_kivy_app
+          buildozer-cmd: yes | buildozer -v android debug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
