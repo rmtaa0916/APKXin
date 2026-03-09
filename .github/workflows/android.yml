@@ -32,8 +32,8 @@ jobs:
           yes | "$SDKMANAGER" --sdk_root="$BUILD_SDK" --licenses
           "$SDKMANAGER" --sdk_root="$BUILD_SDK" --channel=0 --install \
             "platform-tools" \
-            "platforms;android-30" \
-            "build-tools;30.0.3"
+            "platforms;android-34" \
+            "build-tools;34.0.0"
 
           test -x "$BUILD_SDK/tools/bin/sdkmanager"
           find "$BUILD_SDK" -maxdepth 4 \( -name sdkmanager -o -name aidl -o -path "*/platforms/*" \) -print
@@ -44,6 +44,8 @@ jobs:
           ANDROIDSDK: /home/runner/.buildozer/android/platform/android-sdk
           ANDROID_HOME: /home/runner/.buildozer/android/platform/android-sdk
           ANDROID_SDK_ROOT: /home/runner/.buildozer/android/platform/android-sdk
+          ANDROIDAPI: "34"
+          ANDROIDMINAPI: "21"
         with:
           python-version: "3.11"
           work-dir: android_kivy_app
