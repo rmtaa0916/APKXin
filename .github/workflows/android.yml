@@ -1,34 +1,24 @@
-name: Build Android APK
+[app]
+title = MediMap Pro
+package.name = medimap
+package.domain = org.example
+version = 0.1
 
-on:
-  workflow_dispatch:
-  push:
-    branches:
-      - main
+source.dir = .
+source.main = main.py
+source.include_exts = py,png,jpg,kv,atlas
+source.exclude_dirs = build,.buildozer,.git,.github,__pycache__,venv
+source.exclude_patterns = *.pyc,*.pyo
 
-jobs:
-  build:
-    runs-on: ubuntu-22.04
+orientation = portrait
 
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
+android.permissions = READ_EXTERNAL_STORAGE,WRITE_EXTERNAL_STORAGE
+requirements = python3,kivy,Pillow,plyer,pdfplumber
+android.archs = arm64-v8a
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Build with Buildozer
-        uses: digreatbrian/buildozer-action@v2
-        with:
-          python-version: "3.11"
-          workdir: android_kivy_app
-          buildozer-cmd: yes | buildozer -v android debug
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: medimap-pro-apk
-          path: android_kivy_app/bin/*.apk
-          if-no-files-found: error
+[buildozer]
+log_level = 2
+warn_on_root = 1
+android.ndk_api = 21
+android.api = 31
+copy_to_sdcard = False
