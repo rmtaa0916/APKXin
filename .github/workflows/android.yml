@@ -24,7 +24,10 @@ jobs:
         with:
           python-version: "3.11"
           workdir: android_kivy_app
-          buildozer-cmd: yes | buildozer -v android debug
+          buildozer-cmd: buildozer -v android debug
+
+      - name: Show APK files
+        run: ls -R android_kivy_app/bin || true
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
