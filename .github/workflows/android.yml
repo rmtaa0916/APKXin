@@ -19,6 +19,15 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Accept Android licenses and install stable SDK tools
+        run: |
+          export PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH"
+          yes | sdkmanager --licenses
+          sdkmanager --install --channel=0 \
+            "platform-tools" \
+            "platforms;android-31" \
+            "build-tools;36.0.0"
+
       - name: Build with Buildozer
         uses: digreatbrian/buildozer-action@v2
         with:
