@@ -1,60 +1,24 @@
-name: Build Android APK
+[app]
+title = MediMap Pro
+package.name = medimap
+package.domain = org.example
+version = 0.1
 
-on:
-  workflow_dispatch:
-  push:
-    branches:
-      - main
+source.dir = .
+source.main = main.py
+source.include_exts = py,png,jpg,kv,atlas
+source.exclude_dirs = build,.buildozer,.git,.github,__pycache__,venv
+source.exclude_patterns = *.pyc,*.pyo
 
-jobs:
-  build:
-    runs-on: ubuntu-22.04
+orientation = portrait
 
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
+android.permissions = READ_EXTERNAL_STORAGE,WRITE_EXTERNAL_STORAGE
+requirements = python3,kivy,Pillow,plyer,pdfplumber
+android.archs = arm64-v8a
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Prepare Buildozer SDK layout
-        run: |
-          BUILD_SDK="$HOME/.buildozer/android/platform/android-sdk"
-          RUNNER_SDK="/usr/local/lib/android/sdk"
-          SDKMANAGER="$RUNNER_SDK/cmdline-tools/latest/bin/sdkmanager"
-
-          mkdir -p "$BUILD_SDK"
-          rm -rf "$BUILD_SDK/tools"
-          ln -s "$RUNNER_SDK/cmdline-tools/latest" "$BUILD_SDK/tools"
-
-          yes | "$SDKMANAGER" --sdk_root="$BUILD_SDK" --licenses
-          "$SDKMANAGER" --sdk_root="$BUILD_SDK" --channel=0 --install \
-            "platform-tools" \
-            "platforms;android-30" \
-            "build-tools;30.0.3"
-
-          test -x "$BUILD_SDK/tools/bin/sdkmanager"
-          find "$BUILD_SDK" -maxdepth 4 \( -name sdkmanager -o -name aidl -o -path "*/platforms/*" \) -print
-
-      - name: Build with Buildozer
-        uses: digreatbrian/buildozer-action@v2
-        env:
-          ANDROIDSDK: /home/runner/.buildozer/android/platform/android-sdk
-          ANDROID_HOME: /home/runner/.buildozer/android/platform/android-sdk
-          ANDROID_SDK_ROOT: /home/runner/.buildozer/android/platform/android-sdk
-        with:
-          python-version: "3.11"
-          workdir: android_kivy_app
-          buildozer-cmd: buildozer -v android debug
-
-      - name: Show APK files
-        run: ls -R android_kivy_app/bin || true
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: medimap-pro-apk
-          path: android_kivy_app/bin/*.apk
-          if-no-files-found: error
+[buildozer]
+log_level = 2
+warn_on_root = 1
+android.ndk_api = 21
+android.api = 30
+copy_to_sdcard = False
