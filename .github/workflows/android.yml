@@ -46,7 +46,7 @@ jobs:
           ANDROID_SDK_ROOT: /home/runner/.buildozer/android/platform/android-sdk
         with:
           python-version: "3.11"
-          workdir: android_kivy_app
+          work-dir: android_kivy_app
           buildozer-cmd: buildozer -v android debug
 
       - name: Show APK files
