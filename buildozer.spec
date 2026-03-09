@@ -20,5 +20,5 @@ android.archs = arm64-v8a
 log_level = 2
 warn_on_root = 1
 android.ndk_api = 21
-android.api = 30
+android.api = 34
 copy_to_sdcard = False
