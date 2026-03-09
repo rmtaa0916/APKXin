@@ -32,11 +32,11 @@ jobs:
           yes | "$SDKMANAGER" --sdk_root="$BUILD_SDK" --licenses
           "$SDKMANAGER" --sdk_root="$BUILD_SDK" --channel=0 --install \
             "platform-tools" \
-            "platforms;android-31" \
-            "build-tools;36.0.0"
+            "platforms;android-30" \
+            "build-tools;30.0.3"
 
           test -x "$BUILD_SDK/tools/bin/sdkmanager"
-          find "$BUILD_SDK" -maxdepth 4 \( -name sdkmanager -o -name aidl \) -print
+          find "$BUILD_SDK" -maxdepth 4 \( -name sdkmanager -o -name aidl -o -path "*/platforms/*" \) -print
 
       - name: Build with Buildozer
         uses: digreatbrian/buildozer-action@v2
