@@ -35,22 +35,23 @@ jobs:
           ln -s "$RUNNER_SDK/cmdline-tools/latest" "$BUILD_SDK/tools"
 
           yes | "$SDKMANAGER" --sdk_root="$BUILD_SDK" --licenses
+
           "$SDKMANAGER" --sdk_root="$BUILD_SDK" --channel=0 --install \
             "platform-tools" \
             "platforms;android-34" \
             "build-tools;34.0.0"
 
-          test -x "$BUILD_SDK/tools/bin/sdkmanager"
-          find "$BUILD_SDK" -maxdepth 4 \( -name sdkmanager -o -name aidl -o -path "*/platforms/*" \) -print
-
       - name: Build APK
-        env:
-          ANDROIDSDK: /home/runner/.buildozer/android/platform/android-sdk
-          ANDROID_HOME: /home/runner/.buildozer/android/platform/android-sdk
-          ANDROID_SDK_ROOT: /home/runner/.buildozer/android/platform/android-sdk
-          ANDROIDAPI: "34"
-          ANDROIDMINAPI: "21"
         run: |
+          export ANDROIDSDK="$HOME/.buildozer/android/platform/android-sdk"
+          export ANDROID_HOME="$HOME/.buildozer/android/platform/android-sdk"
+          export ANDROID_SDK_ROOT="$HOME/.buildozer/android/platform/android-sdk"
+          export ANDROIDAPI="34"
+          export ANDROIDMINAPI="21"
+
+          echo "ANDROIDAPI=$ANDROIDAPI"
+          echo "ANDROIDMINAPI=$ANDROIDMINAPI"
+
           buildozer -v android debug
 
       - name: Show APK files
