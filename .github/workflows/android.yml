@@ -44,7 +44,6 @@ jobs:
           find "$BUILD_SDK" -maxdepth 4 \( -name sdkmanager -o -name aidl -o -path "*/platforms/*" \) -print
 
       - name: Build APK
-        working-directory: android_kivy_app
         env:
           ANDROIDSDK: /home/runner/.buildozer/android/platform/android-sdk
           ANDROID_HOME: /home/runner/.buildozer/android/platform/android-sdk
@@ -55,11 +54,11 @@ jobs:
           buildozer -v android debug
 
       - name: Show APK files
-        run: ls -R android_kivy_app/bin || true
+        run: ls -R bin || true
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: medimap-pro-apk
-          path: android_kivy_app/bin/*.apk
+          path: bin/*.apk
           if-no-files-found: error
