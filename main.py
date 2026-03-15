@@ -2166,7 +2166,7 @@ class MediMapProApp(App):
                 os.path.dirname(self.engine.pdf_path),
                 f"Filled_{safe_name}_page_{page_idx + 1}.pdf"
             )
-            )
+            
 
             doc.save(out_path)
             doc.close()
