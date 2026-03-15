@@ -72,14 +72,14 @@ jobs:
         run: |
           rm -rf .buildozer
           rm -rf ~/.buildozer/android/platform/build-*
-          rm -rf ~/.buildozer/android/platform/python-for-android
+          rm -rf ~/.buildozer/android/platform/packages
+          rm -rf ~/.gradle/caches
 
       - name: Build APK
         env:
           ANDROID_SDK_ROOT: /home/runner/.buildozer/android/platform/android-sdk
           ANDROID_HOME: /home/runner/.buildozer/android/platform/android-sdk
         run: |
-          buildozer android clean
           buildozer -v android debug
 
       - name: Upload APK artifact
