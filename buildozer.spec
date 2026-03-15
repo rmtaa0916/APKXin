@@ -1,24 +1,30 @@
 [app]
-title = MediMap Pro
-package.name = medimap
-package.domain = org.example
-version = 0.1
-
+title = MediMapPro
+package.name = medimappro
+package.domain = org.medimap
 source.dir = .
-source.main = main.py
-source.include_exts = py,png,jpg,kv,atlas
-source.exclude_dirs = build,.buildozer,.git,.github,__pycache__,venv
-source.exclude_patterns = *.pyc,*.pyo
+source.include_exts = py,png,jpg,jpeg,kv,atlas,xlsx,pdf
+version = 1.5.0
+
+requirements = python3,kivy,pandas,numpy,openpyxl,pypdf,reportlab,pillow
 
 orientation = portrait
+fullscreen = 0
 
-android.permissions = READ_EXTERNAL_STORAGE,WRITE_EXTERNAL_STORAGE
-requirements = python3,kivy,Pillow,plyer,pdfplumber
 android.archs = arm64-v8a
+android.allow_backup = True
+
+# Safer defaults for newer Android packaging
+android.api = 33
+android.minapi = 21
+
+# Storage permissions
+android.permissions = READ_EXTERNAL_STORAGE,WRITE_EXTERNAL_STORAGE,MANAGE_EXTERNAL_STORAGE
+
+# Optional but often helpful
+log_level = 2
+warn_on_root = 1
 
 [buildozer]
 log_level = 2
 warn_on_root = 1
-android.ndk_api = 21
-android.api = 34
-copy_to_sdcard = False
