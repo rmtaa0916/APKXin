@@ -28,12 +28,12 @@ import numpy as np
 import pandas as pd
 
 from pypdf import PdfReader, PdfWriter
-from reportlab.pdfgen import canvas as rl_canvas
 
 from kivy.app import App
 from kivy.clock import Clock
 from kivy.core.image import Image as CoreImage
 from kivy.graphics import Color, Line, Rectangle
+from kivy.graphics.texture import Texture
 from kivy.metrics import dp
 from kivy.properties import StringProperty, NumericProperty, BooleanProperty, ListProperty, ObjectProperty
 from kivy.uix.boxlayout import BoxLayout
@@ -471,476 +471,588 @@ class MediMapEngine:
         return True
 
 # =========================
-# PART 1 / 4
-# Imports + Compatibility + Helpers + Engine Base
+# PART 2 / 4
+# Detection Engine Continuation
+# Add this BELOW Part 1, inside the MediMapEngine class
 # =========================
 
-import os
-import io
-import json
-import math
-import base64
-import zipfile
-import traceback
-from functools import partial
-
-# -------------------------------------------------------------------
-# Python 3.10+ compatibility patch for older reportlab builds
-# Fixes:
-# ImportError: cannot import name 'decodestring' from 'base64'
-# -------------------------------------------------------------------
-if not hasattr(base64, "decodestring"):
-    base64.decodestring = base64.decodebytes
-if not hasattr(base64, "encodestring"):
-    base64.encodestring = base64.encodebytes
-
-import cv2
-import fitz
-import numpy as np
-import pandas as pd
-
-from pypdf import PdfReader, PdfWriter
-from reportlab.pdfgen import canvas as rl_canvas
-
-from kivy.app import App
-from kivy.clock import Clock
-from kivy.core.image import Image as CoreImage
-from kivy.graphics import Color, Line, Rectangle
-from kivy.metrics import dp
-from kivy.properties import StringProperty, NumericProperty, BooleanProperty, ListProperty, ObjectProperty
-from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.button import Button
-from kivy.uix.checkbox import CheckBox
-from kivy.uix.filechooser import FileChooserListView
-from kivy.uix.gridlayout import GridLayout
-from kivy.uix.image import Image
-from kivy.uix.label import Label
-from kivy.uix.popup import Popup
-from kivy.uix.scrollview import ScrollView
-from kivy.uix.slider import Slider
-from kivy.uix.spinner import Spinner
-from kivy.uix.textinput import TextInput
-from kivy.utils import platform
-
-
-# ============================================================
-# Defaults
-# ============================================================
-APP_TITLE = "MediMap Pro: Intelligent Form Automator"
-CONFIG_FILENAME = "medimap_config.json"
-ZOOM = 4.0
-PREVIEW_SCALE = 1.25
-
-DEFAULTS = {
-    "F_Area": 500,
-    "F_MinW": 15,
-    "F_MinH": 35,
-    "F_Close": 1,
-    "Line_MinW": 100,
-    "Line_MaxW": 1680,
-    "C_Strict": 40,
-    "C_Size": (14, 65),
-    "C_Border": 0.10,
-    "C_Inner": 0.40,
-    "ROI_Max": 200,
-    "C_Open": 1,
-    "C_Close": 0,
-    "C_BandPct": 0.18,
-    "C_AspectTol": 0.10,
-    "Ext_Low": 0.04,
-    "Ext_High": 0.60,
-    "C_FillMin": 0.45,
-    "C_Eps": 0.04,
-    "Use_Extent": False,
-    "Is_Grid": False,
-    "Grid_N": 1,
-}
-
-
-# ============================================================
-# Small helpers
-# ============================================================
-def safe_name(text):
-    text = str(text or "").strip()
-    text = "".join(c if c.isalnum() or c in (" ", "-", "_") else "_" for c in text)
-    return text.strip() or "Unknown"
-
-def _norm_str(v):
-    return str(v or "").strip()
-
-def _rect_area(r):
-    return max(0.0, r.width) * max(0.0, r.height)
-
-def _rect_intersection_area(a, b):
-    ix0 = max(a.x0, b.x0)
-    iy0 = max(a.y0, b.y0)
-    ix1 = min(a.x1, b.x1)
-    iy1 = min(a.y1, b.y1)
-    if ix1 <= ix0 or iy1 <= iy0:
-        return 0.0
-    return (ix1 - ix0) * (iy1 - iy0)
-
-def _rect_iou(a, b):
-    inter = _rect_intersection_area(a, b)
-    if inter <= 0:
-        return 0.0
-    union = (a.width * a.height) + (b.width * b.height) - inter
-    return inter / union if union > 0 else 0.0
-
-def _x_intersection(a, b):
-    return max(0.0, min(a.x1, b.x1) - max(a.x0, b.x0))
-
-def _x_overlap_ratio(a, b):
-    inter_x = _x_intersection(a, b)
-    return inter_x / max(min(a.width, b.width), 1e-6)
-
-def _rect_union(rects):
-    return fitz.Rect(
-        min(r.x0 for r in rects),
-        min(r.y0 for r in rects),
-        max(r.x1 for r in rects),
-        max(r.y1 for r in rects)
-    )
-
-def _rect_close(a, b, tol=0.20):
-    return (
-        abs(a.x0 - b.x0) <= tol and
-        abs(a.y0 - b.y0) <= tol and
-        abs(a.x1 - b.x1) <= tol and
-        abs(a.y1 - b.y1) <= tol
-    )
-
-def _rect_list_close(rects_a, rects_b, tol=0.20):
-    if len(rects_a) != len(rects_b):
-        return False
-    aa = sorted(rects_a, key=lambda r: (round(r.y0, 3), r.x0, r.x1, r.y1))
-    bb = sorted(rects_b, key=lambda r: (round(r.y0, 3), r.x0, r.x1, r.y1))
-    return all(_rect_close(a, b, tol=tol) for a, b in zip(aa, bb))
-
-def find_col_safe(df, *keywords):
-    keys = [k.lower() for k in keywords]
-    for c in df.columns:
-        if all(k in str(c).lower() for k in keys):
-            return c
-    return None
-
-
-# ============================================================
-# Detection / mapping engine
-# ============================================================
-class MediMapEngine:
-    def __init__(self):
-        self.pdf_path = ""
-        self.df = pd.DataFrame()
-        self.patient_names = []
-
-        self.first_col = None
-        self.last_col = None
-        self.mid_col = None
-        self.suf_col = None
-        self.dob_col = None
-        self.phil_col = None
-
-        self.geom = {"names": [], "dob": [], "phil": []}
-        self.all_boxes = []
-        self.box_types = []
-        self.custom_mappings = {}
-        self.selected_box_ids = []
-
-        self.settings = dict(DEFAULTS)
-        self.settings["C_Size"] = list(DEFAULTS["C_Size"])
-
     # --------------------------------------------------------
-    # Data loading
+    # Line detection
     # --------------------------------------------------------
-    def load_dataframe(self, path):
-        ext = os.path.splitext(path)[1].lower()
-        if ext == ".csv":
-            df = pd.read_csv(path, dtype=str).fillna("")
-        else:
-            df = pd.read_excel(path, dtype=str).fillna("")
+    def find_answer_lines(self, img, zoom_factor=3.0, min_line_w=100, max_line_w=900):
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        gray = cv2.GaussianBlur(gray, (3, 3), 0)
+        _, binv = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
 
-        self.df = df
-        self.first_col = find_col_safe(df, "first", "name")
-        self.last_col = find_col_safe(df, "surname") or find_col_safe(df, "last", "name")
-        self.mid_col = find_col_safe(df, "middle", "name")
-        self.suf_col = find_col_safe(df, "suffix")
-        self.dob_col = find_col_safe(df, "birth", "date") or find_col_safe(df, "birthdate")
-        self.phil_col = find_col_safe(df, "philhealth")
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (max(40, int(min_line_w) // 4), 2))
+        detected_lines = cv2.morphologyEx(binv, cv2.MORPH_OPEN, kernel, iterations=1)
+        cnts, _ = cv2.findContours(detected_lines, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        f_col_safe = self.first_col if self.first_col else df.columns[0]
-        l_col_safe = self.last_col if self.last_col else df.columns[0]
+        line_rects = []
+        img_h, img_w = img.shape[:2]
 
-        self.df["_DISPLAY_NAME"] = (
-            df[f_col_safe].fillna("").astype(str) + " " +
-            df[l_col_safe].fillna("").astype(str)
-        ).str.strip()
+        for c in cnts:
+            x, y, w, h = cv2.boundingRect(c)
 
-        self.patient_names = sorted([
-            str(x).strip()
-            for x in self.df["_DISPLAY_NAME"].dropna().tolist()
-            if str(x).strip()
-        ])
+            effective_max_line_w = int(max_line_w)
 
-    def total_pages(self):
-        if not self.pdf_path or not os.path.exists(self.pdf_path):
-            return 1
-        try:
-            with fitz.open(self.pdf_path) as doc:
-                return max(len(doc), 1)
-        except Exception:
-            return 1
-
-    # --------------------------------------------------------
-    # Box append helpers
-    # --------------------------------------------------------
-    def _append_box_unique(self, rect, box_type="check", iou_thresh=0.55):
-        for j, existing in enumerate(self.all_boxes):
-            if self.box_types[j] != box_type:
-                continue
-            if _rect_iou(rect, existing) >= iou_thresh:
-                return
-        self.all_boxes.append(rect)
-        self.box_types.append(box_type)
-
-    def _append_geom_fields(self):
-        for key in ["names", "dob", "phil"]:
-            for r in self.geom.get(key, []):
-                self._append_box_unique(r, "field", iou_thresh=0.60)
-
-    # --------------------------------------------------------
-    # Cleanup helpers
-    # --------------------------------------------------------
-    def _cleanup_field_fragments(self):
-        if not self.all_boxes:
-            return
-
-        keep = [True] * len(self.all_boxes)
-        field_idxs = [i for i, t in enumerate(self.box_types) if t == "field"]
-
-        for si in field_idxs:
-            if not keep[si]:
-                continue
-
-            sr = self.all_boxes[si]
-            s_area = _rect_area(sr)
-            if s_area <= 0:
-                keep[si] = False
-                continue
-
-            for bi in field_idxs:
-                if si == bi or not keep[bi]:
+            if w > min_line_w and w < effective_max_line_w and 1 <= h <= 12:
+                roi_tl = binv[max(0, y - 5):y, x:x + 4]
+                roi_tr = binv[max(0, y - 5):y, x + w - 4:x + w]
+                if cv2.countNonZero(roi_tl) > 4 and cv2.countNonZero(roi_tr) > 4:
                     continue
 
-                br = self.all_boxes[bi]
-                if br.height < sr.height or _rect_area(br) <= s_area:
+                roi_left_edge = binv[y:y + h, max(0, x - 5):x]
+                roi_right_edge = binv[y:y + h, x + w:min(img_w, x + w + 5)]
+                if cv2.countNonZero(roi_left_edge) > 8 and cv2.countNonZero(roi_right_edge) > 8:
                     continue
 
-                x_overlap = _x_overlap_ratio(sr, br)
-                gap = br.y0 - sr.y1
+                roi_above = binv[max(0, y - 12):y, x:x + w]
+                if roi_above.size > 0 and (cv2.countNonZero(roi_above) / float(roi_above.size)) > 0.35:
+                    continue
 
-                if (
-                    x_overlap >= 0.80 and
-                    0 <= gap <= 6.0 and
-                    sr.height <= max(4.0, br.height * 0.45)
-                ):
-                    keep[si] = False
-                    break
+                if y < (img_h * 0.05) or y > (img_h * 0.95):
+                    continue
 
-                inter = _rect_intersection_area(sr, br)
-                if inter > 0:
-                    cover_small = inter / max(s_area, 1e-6)
-                    if cover_small >= 0.75 and sr.y1 <= (br.y0 + br.height * 0.45):
-                        keep[si] = False
-                        break
-
-        self.all_boxes = [r for k, r in zip(keep, self.all_boxes) if k]
-        self.box_types = [t for k, t in zip(keep, self.box_types) if k]
-
-    def _cleanup_line_field_conflicts(self):
-        if not self.all_boxes:
-            return
-
-        keep = [True] * len(self.all_boxes)
-        field_idxs = [i for i, t in enumerate(self.box_types) if t == "field"]
-        line_idxs = [i for i, t in enumerate(self.box_types) if t == "line"]
-
-        for li in line_idxs:
-            if not keep[li]:
-                continue
-
-            lr = self.all_boxes[li]
-            la = _rect_area(lr)
-            if la <= 0:
-                keep[li] = False
-                continue
-
-            lmid_y = (lr.y0 + lr.y1) / 2.0
-
-            for fi in field_idxs:
-                fr = self.all_boxes[fi]
-
-                inter = _rect_intersection_area(lr, fr)
-                overlap_ratio = inter / max(la, 1e-6)
-                x_overlap = _x_intersection(lr, fr) / max(lr.width, 1e-6)
-
-                gap_above = fr.y0 - lr.y1
-                gap_below = lr.y0 - fr.y1
-
-                if overlap_ratio >= 0.35:
-                    keep[li] = False
-                    break
-
-                if x_overlap >= 0.70 and (fr.y0 - 1.5) <= lmid_y <= (fr.y0 + fr.height * 0.60):
-                    keep[li] = False
-                    break
-
-                if x_overlap >= 0.70 and (0 <= gap_above <= 4.0 or 0 <= gap_below <= 4.0):
-                    keep[li] = False
-                    break
-
-                line_mid_x = (lr.x0 + lr.x1) / 2.0
-                near_top_band = fr.y0 <= lr.y1 <= (fr.y0 + fr.height * 0.55)
-
-                if (fr.x0 <= line_mid_x <= fr.x1) and near_top_band:
-                    keep[li] = False
-                    break
-
-        self.all_boxes = [r for k, r in zip(keep, self.all_boxes) if k]
-        self.box_types = [t for k, t in zip(keep, self.box_types) if k]
-
-    # --------------------------------------------------------
-    # Field refinement
-    # --------------------------------------------------------
-    def _refine_field_rect_from_mask(
-        self,
-        binv, x, y, w, h,
-        zoom_factor=1.0,
-        row_frac_thresh=0.45,
-        col_frac_thresh=0.18,
-        min_inner_h=18,
-        pad_px=2
-    ):
-        roi = binv[y:y+h, x:x+w]
-        if roi.size == 0:
-            return fitz.Rect(x/zoom_factor, y/zoom_factor, (x+w)/zoom_factor, (y+h)/zoom_factor)
-
-        row_frac = (roi > 0).sum(axis=1) / float(max(w, 1))
-        col_frac = (roi > 0).sum(axis=0) / float(max(h, 1))
-
-        strong_rows = np.where(row_frac >= row_frac_thresh)[0]
-        strong_cols = np.where(col_frac >= col_frac_thresh)[0]
-
-        if len(strong_rows) >= 2 and len(strong_cols) >= 2:
-            ry0 = max(0, int(strong_rows[0]) - pad_px)
-            ry1 = min(h, int(strong_rows[-1]) + pad_px + 1)
-            rx0 = max(0, int(strong_cols[0]) - pad_px)
-            rx1 = min(w, int(strong_cols[-1]) + pad_px + 1)
-
-            if (ry1 - ry0) >= min_inner_h and (rx1 - rx0) >= max(20, int(w * 0.40)):
-                return fitz.Rect(
-                    (x + rx0) / zoom_factor,
-                    (y + ry0) / zoom_factor,
-                    (x + rx1) / zoom_factor,
-                    (y + ry1) / zoom_factor
+                line_rects.append(
+                    fitz.Rect(
+                        x / zoom_factor,
+                        (y - 28) / zoom_factor,
+                        (x + w) / zoom_factor,
+                        y / zoom_factor
+                    )
                 )
 
-        return fitz.Rect(x/zoom_factor, y/zoom_factor, (x+w)/zoom_factor, (y+h)/zoom_factor)
+        return line_rects
 
     # --------------------------------------------------------
-    # Checkbox logic
+    # Checkbox ROI scan
     # --------------------------------------------------------
-    def looks_like_checkbox(self, binv, x, y, w, h, cc_area=None):
-        strictness = self.settings["C_Strict"]
-        border_override = self.settings["C_Border"]
-        inner_override = self.settings["C_Inner"]
-        band_pct = self.settings["C_BandPct"]
-        aspect_tol = self.settings["C_AspectTol"]
-        extent_low = self.settings["Ext_Low"]
-        extent_high = self.settings["Ext_High"]
-        fill_min = self.settings["C_FillMin"]
-        eps = self.settings["C_Eps"]
-        use_extent = self.settings["Use_Extent"]
-
-        roi = binv[y:y+h, x:x+w]
+    def find_checkbox_rects_in_roi(self, binv, x, y, w, h):
+        roi = binv[y:y + h, x:x + w]
         if roi.size == 0:
+            return []
+
+        min_sz, max_sz = self.settings["C_Size"]
+        cnts, _ = cv2.findContours(roi, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        found = []
+
+        for c in cnts:
+            rx, ry, rw, rh = cv2.boundingRect(c)
+            if not (min_sz <= rw <= max_sz and min_sz <= rh <= max_sz):
+                continue
+
+            cc_area = cv2.contourArea(c)
+            if self.looks_like_checkbox(binv, x + rx, y + ry, rw, rh, cc_area=cc_area):
+                found.append((x + rx, y + ry, rw, rh))
+
+        return found
+
+    # --------------------------------------------------------
+    # Red checkbox color-assisted detection
+    # --------------------------------------------------------
+    def find_red_checkbox_candidates(
+        self,
+        img_bgr,
+        zoom_factor=3.0,
+        min_sz=8,
+        max_sz=40,
+        border_min=0.06,
+        inner_max=0.65,
+        band_pct=0.12,
+        aspect_tol=0.45,
+        fill_min=0.18,
+        eps=0.06
+    ):
+        hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
+
+        lower1 = np.array([0, 70, 60], dtype=np.uint8)
+        upper1 = np.array([12, 255, 255], dtype=np.uint8)
+        lower2 = np.array([168, 70, 60], dtype=np.uint8)
+        upper2 = np.array([180, 255, 255], dtype=np.uint8)
+
+        mask1 = cv2.inRange(hsv, lower1, upper1)
+        mask2 = cv2.inRange(hsv, lower2, upper2)
+        red_mask = cv2.bitwise_or(mask1, mask2)
+
+        red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_CLOSE, np.ones((2, 2), np.uint8))
+        red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_OPEN, np.ones((1, 1), np.uint8))
+
+        cnts, _ = cv2.findContours(red_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        out = []
+
+        for c in cnts:
+            x, y, w, h = cv2.boundingRect(c)
+
+            if not (min_sz <= w <= max_sz and min_sz <= h <= max_sz):
+                continue
+
+            aspect = w / float(h) if h > 0 else 999
+            if not (1 - aspect_tol <= aspect <= 1 + aspect_tol):
+                continue
+
+            roi = red_mask[y:y + h, x:x + w]
+            if roi.size == 0:
+                continue
+
+            t = max(1, int(min(w, h) * band_pct))
+            if w <= 2 * t or h <= 2 * t:
+                continue
+
+            top, bottom = roi[:t, :], roi[-t:, :]
+            left, right = roi[:, :t], roi[:, -t:]
+            inner = roi[t:-t, t:-t]
+
+            def frac(a):
+                return cv2.countNonZero(a) / float(a.size) if a.size > 0 else 0.0
+
+            if min(frac(top), frac(bottom), frac(left), frac(right)) < border_min:
+                continue
+            if frac(inner) > inner_max:
+                continue
+
+            peri = cv2.arcLength(c, True)
+            approx = cv2.approxPolyDP(c, eps * peri, True)
+            if len(approx) != 4:
+                continue
+
+            area = cv2.contourArea(c)
+            if (area / float(w * h)) < fill_min:
+                continue
+
+            out.append(
+                fitz.Rect(
+                    x / zoom_factor,
+                    y / zoom_factor,
+                    (x + w) / zoom_factor,
+                    (y + h) / zoom_factor
+                )
+            )
+
+        return out
+
+    # --------------------------------------------------------
+    # Main detection entry
+    # --------------------------------------------------------
+    def run_detection(self, page_idx=0):
+        if not self.pdf_path or not os.path.exists(self.pdf_path):
+            raise FileNotFoundError("PDF path is missing or invalid.")
+
+        doc = fitz.open(self.pdf_path)
+        page_obj = doc[page_idx]
+        pix = page_obj.get_pixmap(matrix=fitz.Matrix(ZOOM, ZOOM))
+        img = cv2.imdecode(np.frombuffer(pix.tobytes(), np.uint8), cv2.IMREAD_COLOR)
+
+        if img is None:
+            doc.close()
+            raise ValueError("Failed to render PDF page into image.")
+
+        h_img, w_img = img.shape[:2]
+
+        field_area_thresh = int(self.settings["F_Area"])
+        field_min_w_val = int(self.settings["F_MinW"])
+        field_min_h_val = int(self.settings["F_MinH"])
+        field_close_k = int(self.settings["F_Close"])
+        line_min_w_val = int(self.settings["Line_MinW"])
+        line_max_w_val = int(self.settings["Line_MaxW"])
+        checkbox_min_sz = int(self.settings["C_Size"][0])
+        checkbox_max_sz = int(self.settings["C_Size"][1])
+
+        red_border_min = float(self.settings["C_Border"])
+        red_inner_max = float(self.settings["C_Inner"])
+        red_roi_max_val = int(self.settings["ROI_Max"])
+        red_open_k = int(self.settings["C_Open"])
+        red_close_k = int(self.settings["C_Close"])
+        red_band_pct = float(self.settings["C_BandPct"])
+        red_aspect_tol = float(self.settings["C_AspectTol"])
+        red_extent_low_val = float(self.settings["Ext_Low"])
+        red_extent_high_val = float(self.settings["Ext_High"])
+        red_fill_min = float(self.settings["C_FillMin"])
+        red_eps_val = float(self.settings["C_Eps"])
+        red_use_extent_val = bool(self.settings["Use_Extent"])
+
+        # --- Page 0 DEM ROI band detection
+        self.geom = {"names": [], "dob": [], "phil": []}
+        if page_idx == 0:
+            y0_roi, y1_roi = int(0.22 * h_img), int(0.82 * h_img)
+            gray_roi = cv2.cvtColor(img[y0_roi:y1_roi, :], cv2.COLOR_BGR2GRAY)
+            _, bin_roi = cv2.threshold(gray_roi, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+            num, _, stats, _ = cv2.connectedComponentsWithStats(bin_roi)
+
+            cands = [
+                (x, y, ww, hh)
+                for i, (x, y, ww, hh, area) in enumerate(stats[1:], 1)
+                if hh >= 20 and area > field_area_thresh
+            ]
+
+            def get_band(l, h):
+                b = [c for c in cands if l <= c[1] / gray_roi.shape[0] <= h]
+                return [
+                    fitz.Rect(
+                        x / ZOOM,
+                        (y + y0_roi) / ZOOM,
+                        (x + ww) / ZOOM,
+                        (y + hh + y0_roi) / ZOOM
+                    )
+                    for x, y, ww, hh in sorted(b, key=lambda t: t[0])
+                ]
+
+            self.geom = {
+                "names": get_band(0.46, 0.50),
+                "dob": get_band(0.56, 0.66),
+                "phil": get_band(0.36, 0.40),
+            }
+
+        # --- General detection
+        full_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        base_bin = cv2.threshold(full_gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
+
+        bin_checks = base_bin.copy()
+        if red_close_k > 0:
+            bin_checks = cv2.morphologyEx(
+                bin_checks,
+                cv2.MORPH_CLOSE,
+                np.ones((red_close_k, red_close_k), np.uint8)
+            )
+        if red_open_k > 0:
+            bin_checks = cv2.morphologyEx(
+                bin_checks,
+                cv2.MORPH_OPEN,
+                np.ones((red_open_k, red_open_k), np.uint8)
+            )
+
+        if field_close_k > 0:
+            bin_fields = cv2.morphologyEx(
+                base_bin,
+                cv2.MORPH_CLOSE,
+                np.ones((field_close_k, field_close_k), np.uint8)
+            )
+        else:
+            bin_fields = base_bin
+
+        self.all_boxes = []
+        self.box_types = []
+
+        if page_idx == 0:
+            self._append_geom_fields()
+
+        # --- answer lines
+        line_rects = self.find_answer_lines(
+            img,
+            ZOOM,
+            min_line_w=line_min_w_val,
+            max_line_w=line_max_w_val
+        )
+        for lr in line_rects:
+            self.all_boxes.append(lr)
+            self.box_types.append("line")
+
+        # --- color-assisted red checkbox detection
+        red_color_boxes = self.find_red_checkbox_candidates(
+            img,
+            zoom_factor=ZOOM,
+            min_sz=max(7, checkbox_min_sz - 5),
+            max_sz=min(int(checkbox_max_sz), 42),
+            border_min=max(0.05, float(red_border_min) * 0.7),
+            inner_max=min(0.75, float(red_inner_max) + 0.20),
+            band_pct=max(0.10, min(float(red_band_pct), 0.16)),
+            aspect_tol=max(0.30, float(red_aspect_tol)),
+            fill_min=max(0.12, float(red_fill_min) * 0.45),
+            eps=max(0.04, float(red_eps_val))
+        )
+        for rr in red_color_boxes:
+            self._append_box_unique(rr, "check", iou_thresh=0.45)
+
+        # --- grayscale checkbox detection
+        nf, _, sf, _ = cv2.connectedComponentsWithStats(bin_checks)
+        small_min = max(7, int(checkbox_min_sz) - 5)
+
+        for i in range(1, nf):
+            x, y, w, h, area = sf[i]
+            if w >= w_img * 0.9:
+                continue
+
+            aspect = w / float(h) if h > 0 else 999
+
+            if (
+                small_min <= w <= checkbox_max_sz and
+                small_min <= h <= checkbox_max_sz and
+                0.68 <= aspect <= 1.45
+            ):
+                if self.looks_like_checkbox(bin_checks, x, y, w, h, area):
+                    self._append_box_unique(
+                        fitz.Rect(x / ZOOM, y / ZOOM, (x + w) / ZOOM, (y + h) / ZOOM),
+                        "check",
+                        iou_thresh=0.45
+                    )
+
+            elif (
+                max(w, h) <= int(red_roi_max_val) and
+                min(w, h) >= small_min and
+                0.55 <= aspect <= 1.75
+            ):
+                for fx, fy, fw, fh in self.find_checkbox_rects_in_roi(bin_checks, x, y, w, h):
+                    self._append_box_unique(
+                        fitz.Rect(fx / ZOOM, fy / ZOOM, (fx + fw) / ZOOM, (fy + fh) / ZOOM),
+                        "check",
+                        iou_thresh=0.45
+                    )
+
+            elif (
+                max(w, h) <= int(red_roi_max_val) and
+                min(w, h) >= small_min and
+                0.60 <= aspect <= 1.60
+            ):
+                for fx, fy, fw, fh in self.find_checkbox_rects_in_roi(bin_checks, x, y, w, h):
+                    self.all_boxes.append(
+                        fitz.Rect(fx / ZOOM, fy / ZOOM, (fx + fw) / ZOOM, (fy + fh) / ZOOM)
+                    )
+                    self.box_types.append("check")
+
+            elif max(w, h) <= int(red_roi_max_val) and min(w, h) >= checkbox_min_sz:
+                for fx, fy, fw, fh in self.find_checkbox_rects_in_roi(bin_checks, x, y, w, h):
+                    self.all_boxes.append(
+                        fitz.Rect(fx / ZOOM, fy / ZOOM, (fx + fw) / ZOOM, (fy + fh) / ZOOM)
+                    )
+                    self.box_types.append("check")
+
+        # --- field detection
+        nf2, _, sf2, _ = cv2.connectedComponentsWithStats(bin_fields)
+        for i in range(1, nf2):
+            x, y, w, h, area = sf2[i]
+
+            if w >= w_img * 0.90 or h >= h_img * 0.12 or area >= (w_img * h_img * 0.03):
+                continue
+
+            if (w > 1200 and h > 120) or (w > 1600 and h > 80):
+                continue
+
+            if h < field_min_h_val or w < field_min_w_val or area < field_area_thresh:
+                continue
+
+            refined_rect = self._refine_field_rect_from_mask(
+                bin_fields,
+                x, y, w, h,
+                zoom_factor=ZOOM,
+                row_frac_thresh=0.45,
+                col_frac_thresh=0.18,
+                min_inner_h=max(18, int(field_min_h_val * 0.45)),
+                pad_px=2
+            )
+
+            self.all_boxes.append(refined_rect)
+            self.box_types.append("field")
+
+        self._cleanup_field_fragments()
+        self._cleanup_line_field_conflicts()
+        doc.close()
+
+    # --------------------------------------------------------
+    # Mapping helpers
+    # --------------------------------------------------------
+    def _mapping_rect_list(self, item):
+        rects = item.get("rects")
+        if rects:
+            out = []
+            for r in rects:
+                out.append(r if isinstance(r, fitz.Rect) else fitz.Rect(*r))
+            return sorted(out, key=lambda rr: (round(rr.y0, 3), rr.x0))
+
+        r = item.get("rect")
+        if r is None:
+            return []
+        return [r if isinstance(r, fitz.Rect) else fitz.Rect(*r)]
+
+    def _rects_refer_to_same_target(self, a, b, tol=0.01):
+        if (
+            abs(a.x0 - b.x0) < tol and
+            abs(a.y0 - b.y0) < tol and
+            abs(a.x1 - b.x1) < tol and
+            abs(a.y1 - b.y1) < tol
+        ):
+            return True
+
+        acx = (a.x0 + a.x1) / 2.0
+        acy = (a.y0 + a.y1) / 2.0
+        bcx = (b.x0 + b.x1) / 2.0
+        bcy = (b.y0 + b.y1) / 2.0
+
+        if (b.x0 <= acx <= b.x1 and b.y0 <= acy <= b.y1):
+            return True
+        if (a.x0 <= bcx <= a.x1 and a.y0 <= bcy <= a.y1):
+            return True
+
+        inter = _rect_intersection_area(a, b)
+        if inter <= 0:
             return False
 
-        s = max(10.0, min(float(strictness), 100.0))
-        delta = (s - 40.0) / 60.0
+        a_area = max(a.width * a.height, 1e-6)
+        b_area = max(b.width * b.height, 1e-6)
+        iou = inter / (a_area + b_area - inter)
+        cover_small = inter / min(a_area, b_area)
 
-        eff_border = border_override + (delta * 0.05)
-        eff_inner  = inner_override - (delta * 0.06)
-        eff_aspect = aspect_tol - (delta * 0.05)
-        eff_fill   = fill_min + (delta * 0.05)
+        return iou >= 0.60 or cover_small >= 0.80
 
-        eff_border = max(0.03, min(0.95, eff_border))
-        eff_inner  = max(0.05, min(0.95, eff_inner))
-        eff_aspect = max(0.08, min(1.00, eff_aspect))
-        eff_fill   = max(0.18, min(0.95, eff_fill))
+    def _mapping_match_score(self, target_rect, mapped_rect, tol=0.01):
+        if (
+            abs(target_rect.x0 - mapped_rect.x0) < tol and
+            abs(target_rect.y0 - mapped_rect.y0) < tol and
+            abs(target_rect.x1 - mapped_rect.x1) < tol and
+            abs(target_rect.y1 - mapped_rect.y1) < tol
+        ):
+            return 9999.0
 
-        aspect = w / float(h)
-        if not (1 - eff_aspect <= aspect <= 1 + eff_aspect):
-            return False
+        inter = _rect_intersection_area(target_rect, mapped_rect)
+        if inter <= 0:
+            return -1.0
 
-        if use_extent and cc_area is not None:
-            extent = cc_area / float(w * h)
-            if extent < extent_low or extent > extent_high:
+        t_area = max(target_rect.width * target_rect.height, 1e-6)
+        iou = inter / (t_area + max(mapped_rect.width * mapped_rect.height, 1e-6) - inter)
+        cover_target = inter / t_area
+
+        cx = (target_rect.x0 + target_rect.x1) / 2.0
+        cy = (target_rect.y0 + target_rect.y1) / 2.0
+        center_inside = (mapped_rect.x0 <= cx <= mapped_rect.x1) and (mapped_rect.y0 <= cy <= mapped_rect.y1)
+
+        score = 0.0
+        if center_inside:
+            score += 1.0
+        score += iou * 10.0
+        score += cover_target * 5.0
+        return score
+
+    def describe_box_mapping(self, box_idx, page_idx):
+        if box_idx < 0 or box_idx >= len(self.all_boxes):
+            return "EMPTY"
+
+        target_rect = self.all_boxes[box_idx]
+        best_hit = None
+        best_score = -1.0
+
+        for map_key, configs in self.custom_mappings.items():
+            for c in configs:
+                if c.get("page", 0) != page_idx:
+                    continue
+
+                rects = self._mapping_rect_list(c)
+                if not rects:
+                    continue
+
+                for r in rects:
+                    score = self._mapping_match_score(target_rect, r)
+                    if score > best_score:
+                        best_score = score
+                        best_hit = c
+
+        if best_hit is not None and best_score >= 1.0:
+            col = str(best_hit.get("column", "")).strip()
+            trig = str(best_hit.get("trigger", "")).strip()
+            is_grid = bool(best_hit.get("g", False))
+            grid_n = int(best_hit.get("n", 1))
+
+            parts = [f"Mapped: {col}"]
+            if trig:
+                parts.append(f"trigger={trig}")
+            if is_grid:
+                parts.append(f"grid={grid_n}")
+
+            return " | ".join(parts)
+
+        return "EMPTY"
+
+    def get_box_mapping_payload(self, box_id, page_idx):
+        if box_id < 0 or box_id >= len(self.all_boxes):
+            return {"box_id": box_id, "page": page_idx, "status": "EMPTY", "entries": []}
+
+        target_rect = self.all_boxes[box_id]
+        best_hit = None
+        best_score = -1.0
+
+        for map_key, configs in self.custom_mappings.items():
+            for c in configs:
+                if c.get("page", 0) != page_idx:
+                    continue
+
+                rects = self._mapping_rect_list(c)
+                if not rects:
+                    continue
+
+                for r in rects:
+                    score = self._mapping_match_score(target_rect, r)
+                    if score > best_score:
+                        best_score = score
+                        best_hit = c
+
+        if best_hit is not None and best_score >= 1.0:
+            return {
+                "box_id": box_id,
+                "page": page_idx,
+                "status": "MAPPED",
+                "entries": [
+                    {
+                        "column": str(best_hit.get("column", "")),
+                        "trigger": str(best_hit.get("trigger", "")),
+                        "g": bool(best_hit.get("g", False)),
+                        "n": int(best_hit.get("n", 1)),
+                    }
+                ]
+            }
+
+        return {
+            "box_id": box_id,
+            "page": page_idx,
+            "status": "EMPTY",
+            "entries": []
+        }
+
+    def assign_mapping(self, box_ids, column, trigger, is_grid, grid_n, page_idx):
+        selected_rects = []
+        for b_id in box_ids:
+            if b_id < 0 or b_id >= len(self.all_boxes):
+                raise ValueError(f"Box ID {b_id} is out of range.")
+            selected_rects.append(self.all_boxes[b_id])
+
+        selected_rects = sorted(selected_rects, key=lambda rr: (round(rr.y0, 3), rr.x0))
+        map_key = f"{str(column).strip()}_{str(trigger).strip()}"
+
+        def mapping_conflicts_with_selected(mapping_item, selected_rects_):
+            existing_rects = self._mapping_rect_list(mapping_item)
+            if not existing_rects:
                 return False
 
-        t = max(1, int(min(w, h) * band_pct))
-        if w <= 2 * t or h <= 2 * t:
+            for er in existing_rects:
+                for sr in selected_rects_:
+                    if self._rects_refer_to_same_target(er, sr, tol=0.20):
+                        return True
             return False
 
-        top, bottom, left, right = roi[:t, :], roi[-t:, :], roi[:, :t], roi[:, -t:]
-        inner = roi[t:-t, t:-t]
+        for k in list(self.custom_mappings.keys()):
+            kept = []
+            for m in self.custom_mappings[k]:
+                if m.get("page", 0) != page_idx:
+                    kept.append(m)
+                    continue
 
-        def frac(a):
-            return cv2.countNonZero(a) / float(a.size) if a.size > 0 else 0
+                if mapping_conflicts_with_selected(m, selected_rects):
+                    continue
+                kept.append(m)
 
-        if min(frac(top), frac(bottom), frac(left), frac(right)) < eff_border:
-            return False
-        if frac(inner) > eff_inner:
-            return False
+            if kept:
+                self.custom_mappings[k] = kept
+            else:
+                del self.custom_mappings[k]
 
-        cnts, _ = cv2.findContours(roi, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if not cnts:
-            return False
+        if map_key not in self.custom_mappings:
+            self.custom_mappings[map_key] = []
 
-        c = max(cnts, key=cv2.contourArea)
-        peri = cv2.arcLength(c, True)
-        approx = cv2.approxPolyDP(c, eps * peri, True)
-
-        if len(approx) != 4 or not cv2.isContourConvex(approx):
-            return False
-
-        bx, by, bw, bh = cv2.boundingRect(c)
-        c_area = cv2.contourArea(c)
-        rect_fill = c_area / float(max(bw * bh, 1))
-        if rect_fill < 0.70:
-            return False
-
-        pad = max(2, int(min(w, h) * 0.35))
-        y0 = max(0, y - pad)
-        y1 = min(binv.shape[0], y + h + pad)
-        x0 = max(0, x - pad)
-        x1 = min(binv.shape[1], x + w + pad)
-        outer = binv[y0:y1, x0:x1].copy()
-
-        ix0 = x - x0
-        iy0 = y - y0
-        ix1 = ix0 + w
-        iy1 = iy0 + h
-        outer[iy0:iy1, ix0:ix1] = 0
-
-        outer_frac = cv2.countNonZero(outer) / float(max(outer.size, 1))
-        if outer_frac > 0.10:
-            return False
-
-        if (c_area / float(w * h)) < eff_fill:
-            return False
-
-        return True
+        self.custom_mappings[map_key].append({
+            "column": str(column).strip(),
+            "trigger": str(trigger).strip(),
+            "rects": selected_rects,
+            "page": int(page_idx),
+            "g": bool(is_grid),
+            "n": int(grid_n),
+        })
 
 # =========================
 # PART 3 / 4
@@ -1669,9 +1781,14 @@ class MediMapProApp(App):
 
     def current_page_idx(self):
         try:
-            return max(0, int(self.page_input.text.strip()))
+            idx = max(0, int(self.page_input.text.strip()))
         except Exception:
+            idx = 0
+    
+        total = self.engine.total_pages()
+        if total <= 0:
             return 0
+        return min(idx, total - 1)
 
     def apply_ui_settings_to_engine(self):
         try:
@@ -1784,6 +1901,8 @@ class MediMapProApp(App):
                 total_pages = len(doc)
 
             self.page_input.text = "0"
+            self.engine.all_boxes = []
+            self.engine.box_types = []
             self.set_status(f"PDF loaded:\n{os.path.basename(path)}\nPages: {total_pages}")
         except Exception as e:
             self.set_status(f"Load PDF error:\n{e}")
@@ -1796,6 +1915,12 @@ class MediMapProApp(App):
                 return
 
             self.engine.load_dataframe(path)
+            self.engine.all_boxes = []
+            self.engine.box_types = []
+            self.refresh_patient_and_column_lists()
+            self.set_status(f"Data loaded:\n{os.path.basename(path)}\nRows: {len(self.engine.df)}")self.engine.load_dataframe(path)
+            self.engine.all_boxes = []
+            self.engine.box_types = []
             self.refresh_patient_and_column_lists()
             self.set_status(f"Data loaded:\n{os.path.basename(path)}\nRows: {len(self.engine.df)}")
         except Exception as e:
@@ -1809,6 +1934,8 @@ class MediMapProApp(App):
                 return
 
             self.engine.load_config(path)
+            self.engine.all_boxes = []
+            self.engine.box_types = []
             self.push_engine_settings_to_ui()
             self.set_status(f"Config loaded:\n{os.path.basename(path)}")
         except Exception as e:
@@ -1830,6 +1957,8 @@ class MediMapProApp(App):
                 keep_current_detection=True,
                 prefer="incoming"
             )
+            self.engine.all_boxes = []
+            self.engine.box_types = []
             self.push_engine_settings_to_ui()
             self.set_status(f"Config merged:\n{os.path.basename(path)}")
         except Exception as e:
@@ -1864,7 +1993,8 @@ class MediMapProApp(App):
 
     def on_next_page(self, instance):
         try:
-            idx = self.current_page_idx() + 1
+            total = self.engine.total_pages()
+            idx = min(self.current_page_idx() + 1, max(total - 1, 0))
             self.page_input.text = str(idx)
             self.on_preview(None)
         except Exception as e:
@@ -2035,6 +2165,7 @@ class MediMapProApp(App):
             out_path = os.path.join(
                 os.path.dirname(self.engine.pdf_path),
                 f"Filled_{safe_name}_page_{page_idx + 1}.pdf"
+            )
             )
 
             doc.save(out_path)
