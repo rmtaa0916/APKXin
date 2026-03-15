@@ -5,7 +5,6 @@ package.domain = org.medimap
 
 source.dir = .
 source.include_exts = py,png,jpg,jpeg,kv,atlas,xlsx,pdf
-
 version = 1.5.0
 
 requirements = python3==3.10.11,hostpython3==3.10.11,kivy,pandas,numpy,openpyxl,pypdf,typing_extensions,reportlab,pillow
