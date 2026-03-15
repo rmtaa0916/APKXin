@@ -1,117 +1,134 @@
-"""
-Android‑friendly MediMap Pro skeleton
--------------------------------------
-
-This file defines a minimal Kivy application that follows the high‑level
-structure of the original Google Colab notebook without depending on
-libraries that are difficult to compile on Android (such as OpenCV and
-PyMuPDF).  It provides basic UI components — a patient selector, page
-slider, mapping controls, an image placeholder and a log area — that can
-be extended with your own detection and PDF‑processing logic.
-
-To keep the app Android‑compatible, the following changes have been made:
-
-* **No OpenCV or PyMuPDF imports.** These libraries rely on native C/C++
-  components and have no official Android wheels.  If you need image
-  processing or PDF rendering you should either write Python code using
-  pure‑Python libraries (e.g. `pdfplumber` and `numpy`) or create custom
-  `python‑for‑android` recipes.
-* **Placeholder image widget.** The `Image` widget shows a blank area; you
-  can load bitmaps at runtime via `PIL.Image` and convert them to a
-  Kivy texture when you implement PDF rendering.
-* **Simplified logic.** Complex functions like `run_detection` and
-  `process_doc` are not part of this example.  You can port those from
-  your notebook once you have appropriate Android‑compatible dependencies.
-
-Usage:
-    python main.py  # Run on desktop for development
-
-When packaged with Buildozer this script is invoked on Android devices.
-"""
+import os
+import traceback
+import pandas as pd
+from io import BytesIO
 
 from kivy.app import App
 from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.label import Label
-from kivy.uix.spinner import Spinner
-from kivy.uix.slider import Slider
-from kivy.uix.textinput import TextInput
 from kivy.uix.button import Button
-from kivy.uix.image import Image
+from kivy.uix.label import Label
+from kivy.uix.filechooser import FileChooserListView
+from kivy.utils import platform
+
+from pypdf import PdfReader, PdfWriter
+from reportlab.pdfgen import canvas
 
 
-class MediMapProApp(App):
-    """Minimal Kivy UI for MediMap Pro."""
-
+class MediMapProAutomator(App):
     def build(self):
-        # Root container
-        root = BoxLayout(orientation='vertical')
+        root = BoxLayout(orientation="vertical", padding=20, spacing=15)
 
-        # Title
-        root.add_widget(Label(text="MediMap Pro: Intelligent Form Automator",
-                               size_hint=(1, 0.06),
-                               bold=True,
-                               halign='center'))
+        self.status = Label(
+            text="MediMap Pro APK\nStable GitHub Build",
+            halign="center",
+            valign="middle"
+        )
+        self.status.bind(size=self._update_text_size)
+        root.add_widget(self.status)
 
-        # Patient selector and page slider row
-        patient_layout = BoxLayout(size_hint=(1, 0.1), padding=5, spacing=5)
-        # In a real app you would populate these values from your CSV
-        self.patient_spinner = Spinner(text="Select Patient",
-                                       values=['Patient 1', 'Patient 2'],
-                                       size_hint=(0.5, 1))
-        # The page slider's max will be updated after the PDF is loaded
-        self.page_slider = Slider(min=0, max=0, value=0, step=1, size_hint=(0.5, 1))
-        patient_layout.add_widget(self.patient_spinner)
-        patient_layout.add_widget(self.page_slider)
-        root.add_widget(patient_layout)
+        initial_path = "/sdcard/Download" if platform == "android" else os.path.expanduser("~")
+        self.pdf_chooser = FileChooserListView(path=initial_path, filters=["*.pdf"])
+        root.add_widget(self.pdf_chooser)
 
-        # Mapping controls row
-        mapping_layout = BoxLayout(size_hint=(1, 0.1), padding=5, spacing=5)
-        self.col_spinner = Spinner(text="CSV Column", values=['col1', 'col2'],
-                                   size_hint=(0.3, 1))
-        self.ids_input = TextInput(hint_text='Box IDs (e.g. 15,16)',
-                                   size_hint=(0.3, 1))
-        self.trigger_input = TextInput(hint_text='Trigger value',
-                                       size_hint=(0.3, 1))
-        self.map_button = Button(text="Map to Box",
-                                 size_hint=(0.1, 1))
-        self.map_button.bind(on_press=self.on_map)
-        mapping_layout.add_widget(self.col_spinner)
-        mapping_layout.add_widget(self.ids_input)
-        mapping_layout.add_widget(self.trigger_input)
-        mapping_layout.add_widget(self.map_button)
-        root.add_widget(mapping_layout)
-
-        # Placeholder for detection controls
-        root.add_widget(Label(text="Detection and tuning controls go here",
-                               size_hint=(1, 0.05),
-                               italic=True))
-
-        # Image display area
-        self.image_widget = Image(size_hint=(1, 0.5))
-        root.add_widget(self.image_widget)
-
-        # Log/output area
-        self.log = TextInput(readonly=True,
-                             size_hint=(1, 0.2),
-                             background_color=(0.95, 0.95, 0.95, 1),
-                             foreground_color=(0, 0, 0, 1))
-        root.add_widget(self.log)
+        self.run_btn = Button(
+            text="GENERATE AUTOMATED FORMS",
+            size_hint_y=None,
+            height=100
+        )
+        self.run_btn.bind(on_release=self.execute_logic)
+        root.add_widget(self.run_btn)
 
         return root
 
-    def on_map(self, instance):
-        """Handle the Map to Box button press."""
-        # Append mapping action to the log. In a real app you would also store
-        # the mapping configuration and update the PDF rendering accordingly.
-        patient = self.patient_spinner.text
-        column = self.col_spinner.text
-        ids = self.ids_input.text
-        trigger = self.trigger_input.text
-        entry = f"Mapping IDs {ids} to column '{column}' for patient '{patient}'"
-        if trigger:
-            entry += f" with trigger '{trigger}'"
-        self.log.text += entry + "\n"
+    def _update_text_size(self, instance, value):
+        instance.text_size = value
+
+    def set_status(self, message):
+        self.status.text = message
+
+    def create_overlay_page(self, page_width, page_height, row):
+        packet = BytesIO()
+        can = canvas.Canvas(packet, pagesize=(page_width, page_height))
+
+        can.setFont("Helvetica", 10)
+        can.setFillColorRGB(0, 0, 1)
+
+        # Example fixed drawing logic
+        # Replace these with your real coordinates later
+        name = str(row.get("NAME", "Unknown"))
+        ref = str(row.get("REF", ""))
+
+        # Sample marks/text
+        can.drawString(80, page_height - 100, f"NAME: {name}")
+        if ref:
+            can.drawString(80, page_height - 120, f"REF: {ref}")
+
+        # Sample blue filled box
+        can.rect(100, 500, 20, 20, fill=1, stroke=0)
+
+        can.save()
+        packet.seek(0)
+        return PdfReader(packet).pages[0]
+
+    def process_pdf(self, pdf_path, excel_path):
+        df = pd.read_excel(excel_path)
+
+        generated_files = []
+        for _, row in df.iterrows():
+            name = str(row.get("NAME", "Unknown")).strip() or "Unknown"
+
+            reader = PdfReader(pdf_path)
+            writer = PdfWriter()
+
+            for page in reader.pages:
+                page_width = float(page.mediabox.width)
+                page_height = float(page.mediabox.height)
+
+                overlay = self.create_overlay_page(page_width, page_height, row)
+                page.merge_page(overlay)
+                writer.add_page(page)
+
+            safe_name = "".join(c if c.isalnum() or c in (" ", "-", "_") else "_" for c in name).strip()
+            if not safe_name:
+                safe_name = "Unknown"
+
+            output_path = os.path.join(
+                os.path.dirname(pdf_path),
+                f"Filled_{safe_name}.pdf"
+            )
+
+            with open(output_path, "wb") as f:
+                writer.write(f)
+
+            generated_files.append(output_path)
+
+        return generated_files
+
+    def execute_logic(self, instance):
+        try:
+            if not self.pdf_chooser.selection:
+                self.set_status("Error: Please select a PDF form")
+                return
+
+            pdf_path = self.pdf_chooser.selection[0]
+            base_dir = os.path.dirname(pdf_path)
+            excel_path = os.path.join(base_dir, "data.xlsx")
+
+            if not os.path.exists(excel_path):
+                self.set_status("Error: 'data.xlsx' missing in folder")
+                return
+
+            self.set_status("Processing... Please wait.")
+            generated = self.process_pdf(pdf_path, excel_path)
+
+            self.set_status(
+                "SUCCESS!\n\nGenerated files:\n" + "\n".join(os.path.basename(x) for x in generated[:10])
+            )
+
+        except Exception as e:
+            traceback.print_exc()
+            self.set_status(f"Process Error:\n{str(e)}")
 
 
-if __name__ == '__main__':
-    MediMapProApp().run()
+if __name__ == "__main__":
+    MediMapProAutomator().run()
