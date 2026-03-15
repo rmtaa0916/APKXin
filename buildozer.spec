@@ -5,6 +5,7 @@ package.domain = org.medimap
 
 source.dir = .
 source.include_exts = py,png,jpg,jpeg,kv,atlas,xlsx,pdf
+
 version = 1.5.0
 
 requirements = python3==3.10.11,hostpython3==3.10.11,kivy,pandas,numpy,openpyxl,pypdf,typing_extensions,reportlab,pillow
@@ -20,7 +21,6 @@ android.accept_sdk_license = True
 android.allow_backup = True
 
 android.permissions = READ_EXTERNAL_STORAGE,WRITE_EXTERNAL_STORAGE,MANAGE_EXTERNAL_STORAGE
-
 
 [buildozer]
 log_level = 2
