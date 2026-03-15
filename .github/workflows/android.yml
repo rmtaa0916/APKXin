@@ -5,61 +5,46 @@ on:
   push:
     branches:
       - main
+      - master
 
 jobs:
   build:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Check out repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
 
-      - name: Install Buildozer
+      - name: Install system dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install buildozer Cython==0.29.33
+          sudo apt-get update
+          sudo apt-get install -y \
+            git zip unzip openjdk-17-jdk python3-pip autoconf libtool \
+            pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev \
+            libtinfo5 cmake libffi-dev libssl-dev automake autopoint gettext \
+            build-essential ccache libltdl-dev
 
-      - name: Prepare Android SDK for Buildozer
+      - name: Install Python tools
         run: |
-          BUILD_SDK="$HOME/.buildozer/android/platform/android-sdk"
-          RUNNER_SDK="/usr/local/lib/android/sdk"
-          SDKMANAGER="$RUNNER_SDK/cmdline-tools/latest/bin/sdkmanager"
+          python -m pip install --upgrade pip setuptools wheel
+          pip install buildozer cython==0.29.34
 
-          mkdir -p "$BUILD_SDK"
-          rm -rf "$BUILD_SDK/tools"
-          ln -s "$RUNNER_SDK/cmdline-tools/latest" "$BUILD_SDK/tools"
-
-          yes | "$SDKMANAGER" --sdk_root="$BUILD_SDK" --licenses
-
-          "$SDKMANAGER" --sdk_root="$BUILD_SDK" --channel=0 --install \
-            "platform-tools" \
-            "platforms;android-34" \
-            "build-tools;34.0.0"
+      - name: Accept SDK licenses automatically
+        run: |
+          mkdir -p ~/.buildozer/android/platform/android-sdk/licenses
+          echo "8933bad161af4178b1185d1a37fbf41ea5269c55" > ~/.buildozer/android/platform/android-sdk/licenses/android-sdk-license || true
 
       - name: Build APK
         run: |
-          export ANDROIDSDK="$HOME/.buildozer/android/platform/android-sdk"
-          export ANDROID_HOME="$HOME/.buildozer/android/platform/android-sdk"
-          export ANDROID_SDK_ROOT="$HOME/.buildozer/android/platform/android-sdk"
-          export ANDROIDAPI="34"
-          export ANDROIDMINAPI="21"
+          buildozer android debug
 
-          echo "ANDROIDAPI=$ANDROIDAPI"
-          echo "ANDROIDMINAPI=$ANDROIDMINAPI"
-
-          buildozer -v android debug
-
-      - name: Show APK files
-        run: ls -R bin || true
-
-      - name: Upload APK
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: medimap-pro-apk
+          name: MediMapPro-APK
           path: bin/*.apk
-          if-no-files-found: error
