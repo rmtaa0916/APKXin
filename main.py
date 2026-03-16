@@ -221,17 +221,16 @@ class MediMapEngine:
             return 1
 
     def on_load_pdf(self, instance):
-            # This is the specific method the error is complaining about
-            content = FileChooserListView(filters=['*.pdf'])
-            popup = Popup(title="Select PDF File", content=content, size_hint=(0.9, 0.9))
-            content.bind(on_submit=lambda obj, sel, touch: self._handle_pdf_selection(sel, popup))
-            popup.open()
+        content = FileChooserListView(filters=['*.pdf'])
+        popup = Popup(title="Select PDF Template", content=content, size_hint=(0.9, 0.9))
+        content.bind(on_submit=lambda obj, sel, touch: self._handle_pdf_selection(sel, popup))
+        popup.open()
 
     def _handle_pdf_selection(self, selection, popup):
-            if selection:
-                self.engine.load_pdf(selection[0])
-                self.set_status(f"Loaded: {os.path.basename(selection[0])}")
-            popup.dismiss()
+        if selection:
+            self.engine.load_pdf(selection[0])
+            self.set_status(f"PDF Loaded: {os.path.basename(selection[0])}")
+        popup.dismiss()
 
     # --------------------------------------------------------
     # Box append helpers
