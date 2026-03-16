@@ -1897,28 +1897,13 @@ class MediMapProApp(App):
     
             self.engine.load_dataframe(path)
             self.refresh_patient_and_column_lists()
-            self.set_status(f"Data loaded:\n{os.path.basename(path)}\nRows: {len(self.engine.df)}")
+            self.set_status(
+                f"Data loaded:\n{os.path.basename(path)}\nRows: {len(self.engine.df)}"
+            )
+    
         except Exception as e:
             self.set_status(f"Load data error:\n{e}")
 
-    def on_load_csv(self, instance):
-        try:
-            path = self.get_selected_file()
-            if not path:
-                self.set_status("Please select a CSV/XLSX file.")
-                return
-
-            self.engine.load_dataframe(path)
-            self.engine.all_boxes = []
-            self.engine.box_types = []
-            self.refresh_patient_and_column_lists()
-            self.set_status(f"Data loaded:\n{os.path.basename(path)}\nRows: {len(self.engine.df)}")self.engine.load_dataframe(path)
-            self.engine.all_boxes = []
-            self.engine.box_types = []
-            self.refresh_patient_and_column_lists()
-            self.set_status(f"Data loaded:\n{os.path.basename(path)}\nRows: {len(self.engine.df)}")
-        except Exception as e:
-            self.set_status(f"Load data error:\n{e}")
 
     def on_load_config(self, instance):
         try:
