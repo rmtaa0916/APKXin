@@ -221,28 +221,17 @@ class MediMapEngine:
             return 1
 
     def on_load_pdf(self, instance):
-            # Create a file chooser popup
+            # This is the specific method the error is complaining about
             content = FileChooserListView(filters=['*.pdf'])
             popup = Popup(title="Select PDF File", content=content, size_hint=(0.9, 0.9))
-            
-            # Bind the selection to a handler
             content.bind(on_submit=lambda obj, sel, touch: self._handle_pdf_selection(sel, popup))
-            
             popup.open()
 
     def _handle_pdf_selection(self, selection, popup):
-        if selection:
-            pdf_path = selection[0]
-            try:
-                # This assumes your 'engine' has a load_pdf method
-                self.engine.load_pdf(pdf_path)
-                self.set_status(f"Loaded PDF: {os.path.basename(pdf_path)}")
-                # Trigger initial render
-                if hasattr(self, 'render_current_page'):
-                    self.render_current_page()
-            except Exception as e:
-                self.set_status(f"Error loading PDF: {e}")
-        popup.dismiss()
+            if selection:
+                self.engine.load_pdf(selection[0])
+                self.set_status(f"Loaded: {os.path.basename(selection[0])}")
+            popup.dismiss()
 
     # --------------------------------------------------------
     # Box append helpers
