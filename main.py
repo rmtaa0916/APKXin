@@ -1888,24 +1888,18 @@ class MediMapProApp(App):
     # --------------------------------------------------------
     # File loading
     # --------------------------------------------------------
-    def on_load_pdf(self, instance):
+    def on_load_csv(self, instance):
         try:
             path = self.get_selected_file()
-            if not path or not path.lower().endswith(".pdf"):
-                self.set_status("Please select a PDF file.")
+            if not path:
+                self.set_status("Please select a CSV/XLSX file.")
                 return
-
-            self.engine.pdf_path = path
-
-            with fitz.open(path) as doc:
-                total_pages = len(doc)
-
-            self.page_input.text = "0"
-            self.engine.all_boxes = []
-            self.engine.box_types = []
-            self.set_status(f"PDF loaded:\n{os.path.basename(path)}\nPages: {total_pages}")
+    
+            self.engine.load_dataframe(path)
+            self.refresh_patient_and_column_lists()
+            self.set_status(f"Data loaded:\n{os.path.basename(path)}\nRows: {len(self.engine.df)}")
         except Exception as e:
-            self.set_status(f"Load PDF error:\n{e}")
+            self.set_status(f"Load data error:\n{e}")
 
     def on_load_csv(self, instance):
         try:
