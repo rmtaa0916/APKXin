@@ -220,17 +220,7 @@ class MediMapEngine:
         except Exception:
             return 1
 
-    def on_load_pdf(self, instance):
-        content = FileChooserListView(filters=['*.pdf'])
-        popup = Popup(title="Select PDF Template", content=content, size_hint=(0.9, 0.9))
-        content.bind(on_submit=lambda obj, sel, touch: self._handle_pdf_selection(sel, popup))
-        popup.open()
 
-    def _handle_pdf_selection(self, selection, popup):
-        if selection:
-            self.engine.load_pdf(selection[0])
-            self.set_status(f"PDF Loaded: {os.path.basename(selection[0])}")
-        popup.dismiss()
 
     # --------------------------------------------------------
     # Box append helpers
@@ -2168,6 +2158,18 @@ class MediMapProApp(App):
             traceback.print_exc()
             self.set_status(f"Generate single error:\n{e}")
 
+    def on_load_pdf(self, instance):
+        content = FileChooserListView(filters=['*.pdf'])
+        popup = Popup(title="Select PDF Template", content=content, size_hint=(0.9, 0.9))
+        content.bind(on_submit=lambda obj, sel, touch: self._handle_pdf_selection(sel, popup))
+        popup.open()
+
+    def _handle_pdf_selection(self, selection, popup):
+        if selection:
+            self.engine.load_pdf(selection[0])
+            self.set_status(f"PDF Loaded: {os.path.basename(selection[0])}")
+        popup.dismiss()
+    
     def on_generate_batch(self, instance):
         try:
             if self.engine.df is None or self.engine.df.empty:
