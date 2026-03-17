@@ -2159,18 +2159,26 @@ class MediMapProApp(App):
             self.set_status(f"Generate single error:\n{e}")
 
     def on_load_pdf(self, instance):
-        content = FileChooserListView(filters=['*.pdf'])
+        """Opens a popup to select the PDF template."""
+        content = FileChooserListView(
+            filters=['*.pdf'], 
+            path=self.file_chooser.path
+        )
         popup = Popup(title="Select PDF Template", content=content, size_hint=(0.9, 0.9))
         content.bind(on_submit=lambda obj, sel, touch: self._handle_pdf_selection(sel, popup))
         popup.open()
 
     def _handle_pdf_selection(self, selection, popup):
         if selection:
-            self.engine.load_pdf(selection[0])
-            self.set_status(f"PDF Loaded: {os.path.basename(selection[0])}")
+            try:
+                self.engine.load_pdf(selection[0])
+                self.set_status(f"PDF Loaded: {os.path.basename(selection[0])}")
+            except Exception as e:
+                self.set_status(f"PDF Error: {e}")
         popup.dismiss()
-    
+
     def on_generate_batch(self, instance):
+        """Processes all rows in the data file and generates PDFs."""
         try:
             if self.engine.df is None or self.engine.df.empty:
                 self.set_status("Load CSV/XLSX first.")
@@ -2190,30 +2198,19 @@ class MediMapProApp(App):
             for patient_name in names:
                 try:
                     doc = self.engine.process_doc(patient_name, page_idx=self.current_page_idx())
-
-                    safe_name = "".join(
-                        c if c.isalnum() or c in (" ", "-", "_") else "_"
-                        for c in patient_name
-                    ).strip()
-                    if not safe_name:
-                        safe_name = "Unknown"
-
-                    out_path = os.path.join(out_dir, f"Filled_{safe_name}.pdf")
+                    safe_p_name = "".join(c if c.isalnum() or c in (" ", "-", "_") else "_" for c in patient_name).strip()
+                    
+                    out_path = os.path.join(out_dir, f"Filled_{safe_p_name or 'Unknown'}.pdf")
                     doc.save(out_path)
                     doc.close()
                     success += 1
                 except Exception:
                     skipped += 1
 
-            self.set_status(
-                f"Batch done.\n"
-                f"Folder: {out_dir}\n"
-                f"Success: {success}\n"
-                f"Skipped: {skipped}"
-            )
+            self.set_status(f"Batch done.\nFolder: {out_dir}\nSuccess: {success} | Skipped: {skipped}")
         except Exception as e:
             traceback.print_exc()
-            self.set_status(f"Generate batch error:\n{e}")
+            self.set_status(f"Batch Error: {e}")
 
 
 if __name__ == "__main__":
