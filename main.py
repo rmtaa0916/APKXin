@@ -211,6 +211,15 @@ class MediMapEngine:
             if str(x).strip()
         ])
 
+    def load_pdf(self, path):
+        """Sets the PDF path for the engine."""
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"PDF file not found: {path}")
+        self.pdf_path = path
+        # Verify it can be opened
+        with fitz.open(path) as doc:
+            return len(doc)
+    
     def total_pages(self):
         if not self.pdf_path or not os.path.exists(self.pdf_path):
             return 1
