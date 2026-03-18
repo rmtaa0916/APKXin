@@ -10,6 +10,8 @@ import math
 import base64
 import zipfile
 import traceback
+import re
+from urllib.parse import urlparse, parse_qs
 from functools import partial
 
 # -------------------------------------------------------------------
@@ -153,6 +155,64 @@ def find_col_safe(df, *keywords):
             return c
     return None
 
+def extract_gsheet_id(url):
+    """
+    Extract Google Sheet ID from common Google Sheets URLs.
+    """
+    if not url:
+        return None
+
+    url = str(url).strip()
+
+    m = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", url)
+    if m:
+        return m.group(1)
+
+    parsed = urlparse(url)
+    qs = parse_qs(parsed.query)
+    if "id" in qs and qs["id"]:
+        return qs["id"][0]
+
+    return None
+
+
+def extract_gsheet_gid(url):
+    """
+    Extract gid from Google Sheet URL. Defaults to 0 if missing.
+    """
+    if not url:
+        return "0"
+
+    parsed = urlparse(str(url).strip())
+    qs = parse_qs(parsed.query)
+
+    if "gid" in qs and qs["gid"]:
+        return str(qs["gid"][0])
+
+    if parsed.fragment:
+        frag_qs = parse_qs(parsed.fragment)
+        if "gid" in frag_qs and frag_qs["gid"]:
+            return str(frag_qs["gid"][0])
+
+        m = re.search(r"gid=([0-9]+)", parsed.fragment)
+        if m:
+            return m.group(1)
+
+    return "0"
+
+
+def gsheet_url_to_csv_export(url):
+    """
+    Convert a Google Sheet URL into a direct CSV export URL.
+    Works for sheets that are accessible without OAuth
+    (public/shared appropriately).
+    """
+    sheet_id = extract_gsheet_id(url)
+    if not sheet_id:
+        raise ValueError("Could not extract Google Sheet ID from URL.")
+
+    gid = extract_gsheet_gid(url)
+    return f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
 
 # ============================================================
 # Detection / mapping engine
@@ -185,13 +245,41 @@ class MediMapEngine:
     # --------------------------------------------------------
     # Data loading
     # --------------------------------------------------------
-    def load_dataframe(self, path):
-        ext = os.path.splitext(path)[1].lower()
-        if ext == ".csv":
-            df = pd.read_csv(path, dtype=str).fillna("")
+    def load_dataframe(self, path_or_url):
+        src = str(path_or_url).strip()
+    
+        if not src:
+            raise ValueError("No data source provided.")
+    
+        # ---------------------------------------------
+        # Google Sheet URL support (CSV export endpoint)
+        # ---------------------------------------------
+        if src.startswith("http://") or src.startswith("https://"):
+            if "docs.google.com/spreadsheets" in src:
+                csv_url = gsheet_url_to_csv_export(src)
+                try:
+                    df = pd.read_csv(csv_url, dtype=str).fillna("")
+                except Exception as e:
+                    raise ValueError(
+                        "Failed to load Google Sheet from URL. "
+                        "Make sure the sheet/tab is accessible. "
+                        f"Details: {e}"
+                    )
+            else:
+                raise ValueError("Only Google Sheets URLs are supported for URL loading.")
+    
+        # ---------------------------------------------
+        # Local file support
+        # ---------------------------------------------
         else:
-            df = pd.read_excel(path, dtype=str).fillna("")
-
+            ext = os.path.splitext(src)[1].lower()
+            if ext == ".csv":
+                df = pd.read_csv(src, dtype=str).fillna("")
+            elif ext in [".xlsx", ".xls"]:
+                df = pd.read_excel(src, dtype=str).fillna("")
+            else:
+                raise ValueError("Unsupported file type. Use CSV, XLSX, XLS, or a Google Sheet URL.")
+    
         self.df = df
         self.first_col = find_col_safe(df, "first", "name")
         self.last_col = find_col_safe(df, "surname") or find_col_safe(df, "last", "name")
@@ -199,15 +287,15 @@ class MediMapEngine:
         self.suf_col = find_col_safe(df, "suffix")
         self.dob_col = find_col_safe(df, "birth", "date") or find_col_safe(df, "birthdate")
         self.phil_col = find_col_safe(df, "philhealth")
-
+    
         f_col_safe = self.first_col if self.first_col else df.columns[0]
         l_col_safe = self.last_col if self.last_col else df.columns[0]
-
+    
         self.df["_DISPLAY_NAME"] = (
             df[f_col_safe].fillna("").astype(str) + " " +
             df[l_col_safe].fillna("").astype(str)
         ).str.strip()
-
+    
         self.patient_names = sorted([
             str(x).strip()
             for x in self.df["_DISPLAY_NAME"].dropna().tolist()
@@ -1626,7 +1714,7 @@ class MediMapProApp(App):
         # =========================================
         left_wrap = BoxLayout(
             orientation="vertical",
-            size_hint_x=0.40
+            size_hint_x=0.42
         )
     
         left_scroll = ScrollView(
@@ -1639,7 +1727,8 @@ class MediMapProApp(App):
         left = GridLayout(
             cols=1,
             spacing=8,
-            size_hint_y=None
+            size_hint_y=None,
+            padding=(0, 0, 4, 0)
         )
         left.bind(minimum_height=left.setter("height"))
     
@@ -1649,7 +1738,7 @@ class MediMapProApp(App):
         status_box = BoxLayout(
             orientation="vertical",
             size_hint_y=None,
-            height=78,
+            height=82,
             spacing=2
         )
     
@@ -1657,7 +1746,7 @@ class MediMapProApp(App):
             text="[b]MediMap Pro[/b]",
             markup=True,
             size_hint_y=None,
-            height=28,
+            height=30,
             halign="left",
             valign="middle"
         )
@@ -1665,9 +1754,9 @@ class MediMapProApp(App):
         status_box.add_widget(status_title)
     
         self.status_lbl = Label(
-            text="Load CSV + PDF to begin",
+            text="Load CSV/XLSX, Google Sheet URL, and PDF to begin",
             size_hint_y=None,
-            height=46,
+            height=50,
             halign="left",
             valign="top"
         )
@@ -1680,7 +1769,8 @@ class MediMapProApp(App):
         # Files title
         # -----------------------------
         files_title = Label(
-            text="Files",
+            text="[b]Files[/b]",
+            markup=True,
             size_hint_y=None,
             height=24,
             halign="left",
@@ -1695,12 +1785,12 @@ class MediMapProApp(App):
         self.file_chooser = FileChooserListView(
             path="/sdcard/Download" if platform == "android" else os.path.expanduser("~"),
             size_hint_y=None,
-            height=260
+            height=240
         )
         left.add_widget(self.file_chooser)
     
         # -----------------------------
-        # File action buttons
+        # File action buttons row 1
         # -----------------------------
         file_btn_row_1 = GridLayout(
             cols=3,
@@ -1717,12 +1807,15 @@ class MediMapProApp(App):
         self.btn_load_csv.bind(on_release=self.on_load_csv)
         file_btn_row_1.add_widget(self.btn_load_csv)
     
-        self.btn_preview = Button(text="Preview")
-        self.btn_preview.bind(on_release=self.on_preview)
-        file_btn_row_1.add_widget(self.btn_preview)
+        self.btn_load_gsheet = Button(text="Load Google Sheet URL")
+        self.btn_load_gsheet.bind(on_release=self.on_load_gsheet_url)
+        file_btn_row_1.add_widget(self.btn_load_gsheet)
     
         left.add_widget(file_btn_row_1)
     
+        # -----------------------------
+        # File action buttons row 2
+        # -----------------------------
         file_btn_row_2 = GridLayout(
             cols=3,
             size_hint_y=None,
@@ -1748,7 +1841,8 @@ class MediMapProApp(App):
         # Navigation title
         # -----------------------------
         nav_title = Label(
-            text="Navigation",
+            text="[b]Navigation[/b]",
+            markup=True,
             size_hint_y=None,
             height=24,
             halign="left",
@@ -1765,7 +1859,7 @@ class MediMapProApp(App):
         self.patient_spinner = Spinner(
             text="Select Patient",
             values=[],
-            size_hint_x=0.62
+            size_hint_x=0.56
         )
         self.patient_spinner.bind(text=self.on_patient_change)
         nav_row_1.add_widget(self.patient_spinner)
@@ -1774,15 +1868,15 @@ class MediMapProApp(App):
             text="0",
             multiline=False,
             hint_text="Page",
-            size_hint_x=0.14
+            size_hint_x=0.12
         )
         nav_row_1.add_widget(self.page_input)
     
-        self.btn_prev = Button(text="Prev", size_hint_x=0.12)
+        self.btn_prev = Button(text="Prev", size_hint_x=0.16)
         self.btn_prev.bind(on_release=self.on_prev_page)
         nav_row_1.add_widget(self.btn_prev)
     
-        self.btn_next = Button(text="Next", size_hint_x=0.12)
+        self.btn_next = Button(text="Next", size_hint_x=0.16)
         self.btn_next.bind(on_release=self.on_next_page)
         nav_row_1.add_widget(self.btn_next)
     
@@ -1807,7 +1901,8 @@ class MediMapProApp(App):
         # Detection Settings title
         # -----------------------------
         settings_title = Label(
-            text="Detection Settings",
+            text="[b]Detection Settings[/b]",
+            markup=True,
             size_hint_y=None,
             height=24,
             halign="left",
@@ -1816,99 +1911,71 @@ class MediMapProApp(App):
         settings_title.bind(size=self._sync_label_text_size)
         left.add_widget(settings_title)
     
-        # -----------------------------
-        # Detection Settings row A
-        # -----------------------------
+        # A
         ctl2 = GridLayout(cols=3, size_hint_y=None, height=44, spacing=6)
-    
         self.f_area = TextInput(text=str(DEFAULTS["F_Area"]), multiline=False, hint_text="F_Area")
         self.f_minw = TextInput(text=str(DEFAULTS["F_MinW"]), multiline=False, hint_text="F_MinW")
         self.f_minh = TextInput(text=str(DEFAULTS["F_MinH"]), multiline=False, hint_text="F_MinH")
-    
         ctl2.add_widget(self.f_area)
         ctl2.add_widget(self.f_minw)
         ctl2.add_widget(self.f_minh)
         left.add_widget(ctl2)
     
-        # -----------------------------
-        # Detection Settings row B
-        # -----------------------------
+        # B
         ctl2b = GridLayout(cols=3, size_hint_y=None, height=44, spacing=6)
-    
         self.f_close = TextInput(text=str(DEFAULTS["F_Close"]), multiline=False, hint_text="F_Close")
         self.line_minw = TextInput(text=str(DEFAULTS["Line_MinW"]), multiline=False, hint_text="Line_MinW")
         self.line_maxw = TextInput(text=str(DEFAULTS["Line_MaxW"]), multiline=False, hint_text="Line_MaxW")
-    
         ctl2b.add_widget(self.f_close)
         ctl2b.add_widget(self.line_minw)
         ctl2b.add_widget(self.line_maxw)
         left.add_widget(ctl2b)
     
-        # -----------------------------
-        # Checkbox settings row A
-        # -----------------------------
+        # C
         ctl3 = GridLayout(cols=3, size_hint_y=None, height=44, spacing=6)
-    
         self.c_strict = TextInput(text=str(DEFAULTS["C_Strict"]), multiline=False, hint_text="C_Strict")
         self.c_size_min = TextInput(text=str(DEFAULTS["C_Size"][0]), multiline=False, hint_text="C_Size_Min")
         self.c_size_max = TextInput(text=str(DEFAULTS["C_Size"][1]), multiline=False, hint_text="C_Size_Max")
-    
         ctl3.add_widget(self.c_strict)
         ctl3.add_widget(self.c_size_min)
         ctl3.add_widget(self.c_size_max)
         left.add_widget(ctl3)
     
-        # -----------------------------
-        # Checkbox settings row B
-        # -----------------------------
+        # D
         ctl3b = GridLayout(cols=3, size_hint_y=None, height=44, spacing=6)
-    
         self.c_border = TextInput(text=str(DEFAULTS["C_Border"]), multiline=False, hint_text="C_Border")
         self.c_inner = TextInput(text=str(DEFAULTS["C_Inner"]), multiline=False, hint_text="C_Inner")
         self.roi_max = TextInput(text=str(DEFAULTS["ROI_Max"]), multiline=False, hint_text="ROI_Max")
-    
         ctl3b.add_widget(self.c_border)
         ctl3b.add_widget(self.c_inner)
         ctl3b.add_widget(self.roi_max)
         left.add_widget(ctl3b)
     
-        # -----------------------------
-        # Checkbox settings row C
-        # -----------------------------
+        # E
         ctl4 = GridLayout(cols=3, size_hint_y=None, height=44, spacing=6)
-    
         self.c_open = TextInput(text=str(DEFAULTS["C_Open"]), multiline=False, hint_text="C_Open")
         self.c_close = TextInput(text=str(DEFAULTS["C_Close"]), multiline=False, hint_text="C_Close")
         self.c_band = TextInput(text=str(DEFAULTS["C_BandPct"]), multiline=False, hint_text="C_BandPct")
-    
         ctl4.add_widget(self.c_open)
         ctl4.add_widget(self.c_close)
         ctl4.add_widget(self.c_band)
         left.add_widget(ctl4)
     
-        # -----------------------------
-        # Checkbox settings row D
-        # -----------------------------
+        # F
         ctl4b = GridLayout(cols=3, size_hint_y=None, height=44, spacing=6)
-    
         self.c_aspect = TextInput(text=str(DEFAULTS["C_AspectTol"]), multiline=False, hint_text="C_AspectTol")
         self.ext_low = TextInput(text=str(DEFAULTS["Ext_Low"]), multiline=False, hint_text="Ext_Low")
         self.ext_high = TextInput(text=str(DEFAULTS["Ext_High"]), multiline=False, hint_text="Ext_High")
-    
         ctl4b.add_widget(self.c_aspect)
         ctl4b.add_widget(self.ext_low)
         ctl4b.add_widget(self.ext_high)
         left.add_widget(ctl4b)
     
-        # -----------------------------
-        # Checkbox settings row E
-        # -----------------------------
+        # G
         ctl4c = GridLayout(cols=3, size_hint_y=None, height=44, spacing=6)
-    
         self.c_fill = TextInput(text=str(DEFAULTS["C_FillMin"]), multiline=False, hint_text="C_FillMin")
         self.c_eps = TextInput(text=str(DEFAULTS["C_Eps"]), multiline=False, hint_text="C_Eps")
         self.use_extent = TextInput(text="0", multiline=False, hint_text="Use_Extent 0/1")
-    
         ctl4c.add_widget(self.c_fill)
         ctl4c.add_widget(self.c_eps)
         ctl4c.add_widget(self.use_extent)
@@ -1918,7 +1985,8 @@ class MediMapProApp(App):
         # Mapping title
         # -----------------------------
         mapping_title = Label(
-            text="Mapping",
+            text="[b]Mapping[/b]",
+            markup=True,
             size_hint_y=None,
             height=24,
             halign="left",
@@ -1927,22 +1995,19 @@ class MediMapProApp(App):
         mapping_title.bind(size=self._sync_label_text_size)
         left.add_widget(mapping_title)
     
-        # -----------------------------
-        # Mapping row 1
-        # -----------------------------
         map_row_1 = BoxLayout(size_hint_y=None, height=44, spacing=6)
     
         self.box_ids_input = TextInput(
             multiline=False,
             hint_text="Box IDs",
-            size_hint_x=0.26
+            size_hint_x=0.24
         )
         map_row_1.add_widget(self.box_ids_input)
     
         self.column_spinner = Spinner(
             text="Select Column",
             values=[],
-            size_hint_x=0.44
+            size_hint_x=0.46
         )
         map_row_1.add_widget(self.column_spinner)
     
@@ -1955,9 +2020,6 @@ class MediMapProApp(App):
     
         left.add_widget(map_row_1)
     
-        # -----------------------------
-        # Mapping row 2
-        # -----------------------------
         map_row_2 = BoxLayout(size_hint_y=None, height=44, spacing=6)
     
         self.grid_flag_input = TextInput(
@@ -1989,7 +2051,8 @@ class MediMapProApp(App):
         # Output title
         # -----------------------------
         output_title = Label(
-            text="Output",
+            text="[b]Output[/b]",
+            markup=True,
             size_hint_y=None,
             height=24,
             halign="left",
@@ -1998,9 +2061,6 @@ class MediMapProApp(App):
         output_title.bind(size=self._sync_label_text_size)
         left.add_widget(output_title)
     
-        # -----------------------------
-        # Output row
-        # -----------------------------
         out_row = GridLayout(cols=2, size_hint_y=None, height=46, spacing=6)
     
         self.btn_generate_one = Button(text="Generate Single PDF")
@@ -2021,12 +2081,13 @@ class MediMapProApp(App):
         # =========================================
         right = BoxLayout(
             orientation="vertical",
-            size_hint_x=0.60,
+            size_hint_x=0.58,
             spacing=6
         )
     
         preview_title = Label(
-            text="Preview",
+            text="[b]Preview[/b]",
+            markup=True,
             size_hint_y=None,
             height=24,
             halign="left",
@@ -2193,6 +2254,7 @@ class MediMapProApp(App):
     
             self.engine.load_dataframe(path)
             self.refresh_patient_and_column_lists()
+    
             self.set_status(
                 f"Data loaded:\n{os.path.basename(path)}\nRows: {len(self.engine.df)}"
             )
@@ -2201,6 +2263,7 @@ class MediMapProApp(App):
                 Clock.schedule_once(lambda dt: self.on_preview(None), 0.1)
     
         except Exception as e:
+            traceback.print_exc()
             self.set_status(f"Load data error:\n{e}")
 
 
@@ -2525,6 +2588,73 @@ class MediMapProApp(App):
                 self.set_status(f"PDF Error: {e}")
         popup.dismiss()
 
+    def open_text_input_popup(self, title, hint_text, on_submit_callback, default_text=""):
+        wrap = BoxLayout(orientation="vertical", spacing=8, padding=8)
+    
+        txt = TextInput(
+            text=default_text,
+            hint_text=hint_text,
+            multiline=False,
+            size_hint_y=None,
+            height=42
+        )
+        wrap.add_widget(txt)
+    
+        btn_row = GridLayout(cols=2, size_hint_y=None, height=42, spacing=6)
+    
+        btn_cancel = Button(text="Cancel")
+        btn_ok = Button(text="OK")
+    
+        btn_row.add_widget(btn_cancel)
+        btn_row.add_widget(btn_ok)
+        wrap.add_widget(btn_row)
+    
+        popup = Popup(title=title, content=wrap, size_hint=(0.82, 0.32))
+    
+        btn_cancel.bind(on_release=lambda *_: popup.dismiss())
+    
+        def _submit(*_):
+            try:
+                on_submit_callback(txt.text.strip())
+            finally:
+                popup.dismiss()
+    
+        btn_ok.bind(on_release=_submit)
+        txt.bind(on_text_validate=lambda *_: _submit())
+    
+        popup.open()
+    
+    
+    def on_load_gsheet_url(self, instance):
+        self.open_text_input_popup(
+            title="Load Google Sheet URL",
+            hint_text="Paste Google Sheet URL here",
+            on_submit_callback=self._handle_gsheet_url_submit
+        )
+    
+    
+    def _handle_gsheet_url_submit(self, url):
+        try:
+            if not url:
+                self.set_status("No Google Sheet URL provided.")
+                return
+    
+            self.engine.load_dataframe(url)
+            self.refresh_patient_and_column_lists()
+    
+            self.set_status(
+                f"Google Sheet loaded.\n"
+                f"Rows: {len(self.engine.df)}\n"
+                f"Patients: {len(self.engine.patient_names)}"
+            )
+    
+            if self.engine.pdf_path:
+                Clock.schedule_once(lambda dt: self.on_preview(None), 0.1)
+    
+        except Exception as e:
+            traceback.print_exc()
+            self.set_status(f"Google Sheet load error:\n{e}")
+    
     def on_generate_batch(self, instance):
         """Processes all rows in the data file and generates PDFs."""
         try:
