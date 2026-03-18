@@ -219,7 +219,7 @@ class MediMapEngine:
         # Verify it can be opened
         with fitz.open(path) as doc:
             return len(doc)
-    
+
     def total_pages(self):
         if not self.pdf_path or not os.path.exists(self.pdf_path):
             return 1
@@ -2170,7 +2170,7 @@ class MediMapProApp(App):
     def on_load_pdf(self, instance):
         """Opens a popup to select the PDF template."""
         content = FileChooserListView(
-            filters=['*.pdf'], 
+            filters=['*.pdf'],
             path=self.file_chooser.path
         )
         popup = Popup(title="Select PDF Template", content=content, size_hint=(0.9, 0.9))
@@ -2180,9 +2180,21 @@ class MediMapProApp(App):
     def _handle_pdf_selection(self, selection, popup):
         if selection:
             try:
+                print("ENGINE TYPE:", type(self.engine))
+                print("HAS load_pdf:", hasattr(self.engine, "load_pdf"))
+                print("ENGINE METHODS:", [m for m in dir(self.engine) if "pdf" in m.lower()])
+    
+                if not hasattr(self.engine, "load_pdf"):
+                    raise AttributeError(
+                        "Running MediMapEngine does not contain load_pdf(). "
+                        "This usually means the app is using an older build or a different source file."
+                    )
+    
                 self.engine.load_pdf(selection[0])
                 self.set_status(f"PDF Loaded: {os.path.basename(selection[0])}")
+    
             except Exception as e:
+                traceback.print_exc()
                 self.set_status(f"PDF Error: {e}")
         popup.dismiss()
 
