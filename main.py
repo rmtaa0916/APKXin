@@ -1618,231 +1618,338 @@ class MediMapProApp(App):
     def build(self):
         self.title = "MediMap Pro"
         self.engine = MediMapEngine()
-
-        root = BoxLayout(orientation="horizontal", spacing=8, padding=8)
-
+    
+        root = BoxLayout(orientation="horizontal", spacing=10, padding=10)
+    
         # =========================================
         # LEFT PANEL
         # =========================================
         left = BoxLayout(
             orientation="vertical",
-            spacing=6,
+            spacing=8,
             size_hint_x=0.34
         )
-
+    
         # -----------------------------
-        # Header / status
+        # Status section
         # -----------------------------
-        self.status_lbl = Label(
-            text="MediMap Pro\nLoad CSV + PDF to begin",
+        status_box = BoxLayout(
+            orientation="vertical",
             size_hint_y=None,
-            height=64,
+            height=78,
+            spacing=4
+        )
+    
+        status_title = Label(
+            text="[b]MediMap Pro[/b]",
+            markup=True,
+            size_hint_y=None,
+            height=26,
             halign="left",
             valign="middle"
         )
-        self.status_lbl.bind(size=self._sync_label_text_size)
-        left.add_widget(self.status_lbl)
-
-        # -----------------------------
-        # File chooser
-        # -----------------------------
-        chooser_wrap = BoxLayout(
-            orientation="vertical",
-            size_hint_y=0.34,
-            spacing=6
+        status_title.bind(size=self._sync_label_text_size)
+        status_box.add_widget(status_title)
+    
+        self.status_lbl = Label(
+            text="Load CSV + PDF to begin",
+            size_hint_y=None,
+            height=48,
+            halign="left",
+            valign="top"
         )
-
+        self.status_lbl.bind(size=self._sync_label_text_size)
+        status_box.add_widget(self.status_lbl)
+    
+        left.add_widget(status_box)
+    
+        # -----------------------------
+        # File chooser section
+        # -----------------------------
+        file_section = BoxLayout(
+            orientation="vertical",
+            spacing=6,
+            size_hint_y=0.36
+        )
+    
+        file_section.add_widget(Label(
+            text="Files",
+            size_hint_y=None,
+            height=22,
+            halign="left",
+            valign="middle"
+        ))
+    
         self.file_chooser = FileChooserListView(
             path="/sdcard/Download" if platform == "android" else os.path.expanduser("~")
         )
-        chooser_wrap.add_widget(self.file_chooser)
-
-        file_btn_row = GridLayout(
-            cols=5,
+        file_section.add_widget(self.file_chooser)
+    
+        file_btn_row_1 = GridLayout(
+            cols=3,
             size_hint_y=None,
-            height=48,
+            height=42,
             spacing=6
         )
-
+    
         self.btn_load_pdf = Button(text="Load PDF")
         self.btn_load_pdf.bind(on_release=self.on_load_pdf)
-        file_btn_row.add_widget(self.btn_load_pdf)
-
+        file_btn_row_1.add_widget(self.btn_load_pdf)
+    
         self.btn_load_csv = Button(text="Load CSV/XLSX")
         self.btn_load_csv.bind(on_release=self.on_load_csv)
-        file_btn_row.add_widget(self.btn_load_csv)
-
+        file_btn_row_1.add_widget(self.btn_load_csv)
+    
+        self.btn_preview = Button(text="Preview")
+        self.btn_preview.bind(on_release=self.on_preview)
+        file_btn_row_1.add_widget(self.btn_preview)
+    
+        file_section.add_widget(file_btn_row_1)
+    
+        file_btn_row_2 = GridLayout(
+            cols=3,
+            size_hint_y=None,
+            height=42,
+            spacing=6
+        )
+    
         self.btn_load_cfg = Button(text="Load Config")
         self.btn_load_cfg.bind(on_release=self.on_load_config)
-        file_btn_row.add_widget(self.btn_load_cfg)
-
+        file_btn_row_2.add_widget(self.btn_load_cfg)
+    
         self.btn_merge_cfg = Button(text="Merge Config")
         self.btn_merge_cfg.bind(on_release=self.on_merge_config)
-        file_btn_row.add_widget(self.btn_merge_cfg)
-
+        file_btn_row_2.add_widget(self.btn_merge_cfg)
+    
         self.btn_save_cfg = Button(text="Save Config")
         self.btn_save_cfg.bind(on_release=self.on_save_config)
-        file_btn_row.add_widget(self.btn_save_cfg)
-
-        chooser_wrap.add_widget(file_btn_row)
-        left.add_widget(chooser_wrap)
-
+        file_btn_row_2.add_widget(self.btn_save_cfg)
+    
+        file_section.add_widget(file_btn_row_2)
+        left.add_widget(file_section)
+    
         # -----------------------------
-        # Main controls
+        # Navigation section
         # -----------------------------
-        ctl1 = BoxLayout(size_hint_y=None, height=46, spacing=6)
-
+        nav_section = BoxLayout(
+            orientation="vertical",
+            spacing=6,
+            size_hint_y=None,
+            height=78
+        )
+    
+        nav_section.add_widget(Label(
+            text="Navigation",
+            size_hint_y=None,
+            height=22,
+            halign="left",
+            valign="middle"
+        ))
+    
+        nav_row = BoxLayout(size_hint_y=None, height=48, spacing=6)
+    
         self.patient_spinner = Spinner(
             text="Select Patient",
             values=[],
-            size_hint_x=0.40
+            size_hint_x=0.42
         )
         self.patient_spinner.bind(text=self.on_patient_change)
-        ctl1.add_widget(self.patient_spinner)
-
+        nav_row.add_widget(self.patient_spinner)
+    
         self.page_input = TextInput(
             text="0",
             multiline=False,
             hint_text="Page",
             size_hint_x=0.10
         )
-        ctl1.add_widget(self.page_input)
-
-        self.btn_prev = Button(text="Prev", size_hint_x=0.11)
+        nav_row.add_widget(self.page_input)
+    
+        self.btn_prev = Button(text="Prev", size_hint_x=0.12)
         self.btn_prev.bind(on_release=self.on_prev_page)
-        ctl1.add_widget(self.btn_prev)
-
-        self.btn_next = Button(text="Next", size_hint_x=0.11)
+        nav_row.add_widget(self.btn_prev)
+    
+        self.btn_next = Button(text="Next", size_hint_x=0.12)
         self.btn_next.bind(on_release=self.on_next_page)
-        ctl1.add_widget(self.btn_next)
-
-        self.btn_detect = Button(text="Run Detect", size_hint_x=0.14)
+        nav_row.add_widget(self.btn_next)
+    
+        self.btn_detect = Button(text="Run Detect", size_hint_x=0.18)
         self.btn_detect.bind(on_release=self.on_run_detect)
-        ctl1.add_widget(self.btn_detect)
-
-        self.btn_preview = Button(text="Preview", size_hint_x=0.14)
-        self.btn_preview.bind(on_release=self.on_preview)
-        ctl1.add_widget(self.btn_preview)
-
-        left.add_widget(ctl1)
-
+        nav_row.add_widget(self.btn_detect)
+    
+        nav_section.add_widget(nav_row)
+        left.add_widget(nav_section)
+    
         # -----------------------------
-        # Settings row A
+        # Detection settings section
         # -----------------------------
+        settings_section = BoxLayout(
+            orientation="vertical",
+            spacing=6,
+            size_hint_y=None,
+            height=178
+        )
+    
+        settings_section.add_widget(Label(
+            text="Detection Settings",
+            size_hint_y=None,
+            height=22,
+            halign="left",
+            valign="middle"
+        ))
+    
         ctl2 = GridLayout(cols=6, size_hint_y=None, height=42, spacing=4)
-
         self.f_area = TextInput(text=str(DEFAULTS["F_Area"]), multiline=False, hint_text="F_Area")
         self.f_minw = TextInput(text=str(DEFAULTS["F_MinW"]), multiline=False, hint_text="F_MinW")
         self.f_minh = TextInput(text=str(DEFAULTS["F_MinH"]), multiline=False, hint_text="F_MinH")
         self.f_close = TextInput(text=str(DEFAULTS["F_Close"]), multiline=False, hint_text="F_Close")
         self.line_minw = TextInput(text=str(DEFAULTS["Line_MinW"]), multiline=False, hint_text="Line_MinW")
         self.line_maxw = TextInput(text=str(DEFAULTS["Line_MaxW"]), multiline=False, hint_text="Line_MaxW")
-
         for w in [self.f_area, self.f_minw, self.f_minh, self.f_close, self.line_minw, self.line_maxw]:
             ctl2.add_widget(w)
-
-        left.add_widget(ctl2)
-
-        # -----------------------------
-        # Settings row B
-        # -----------------------------
+        settings_section.add_widget(ctl2)
+    
         ctl3 = GridLayout(cols=6, size_hint_y=None, height=42, spacing=4)
-
         self.c_strict = TextInput(text=str(DEFAULTS["C_Strict"]), multiline=False, hint_text="C_Strict")
         self.c_size_min = TextInput(text=str(DEFAULTS["C_Size"][0]), multiline=False, hint_text="C_Size_Min")
         self.c_size_max = TextInput(text=str(DEFAULTS["C_Size"][1]), multiline=False, hint_text="C_Size_Max")
         self.c_border = TextInput(text=str(DEFAULTS["C_Border"]), multiline=False, hint_text="C_Border")
         self.c_inner = TextInput(text=str(DEFAULTS["C_Inner"]), multiline=False, hint_text="C_Inner")
         self.roi_max = TextInput(text=str(DEFAULTS["ROI_Max"]), multiline=False, hint_text="ROI_Max")
-
         for w in [self.c_strict, self.c_size_min, self.c_size_max, self.c_border, self.c_inner, self.roi_max]:
             ctl3.add_widget(w)
-
-        left.add_widget(ctl3)
-
-        # -----------------------------
-        # Settings row C
-        # -----------------------------
-        ctl4 = GridLayout(cols=9, size_hint_y=None, height=42, spacing=4)
-
+        settings_section.add_widget(ctl3)
+    
+        ctl4 = GridLayout(cols=5, size_hint_y=None, height=42, spacing=4)
         self.c_open = TextInput(text=str(DEFAULTS["C_Open"]), multiline=False, hint_text="C_Open")
         self.c_close = TextInput(text=str(DEFAULTS["C_Close"]), multiline=False, hint_text="C_Close")
         self.c_band = TextInput(text=str(DEFAULTS["C_BandPct"]), multiline=False, hint_text="C_BandPct")
         self.c_aspect = TextInput(text=str(DEFAULTS["C_AspectTol"]), multiline=False, hint_text="C_AspectTol")
         self.ext_low = TextInput(text=str(DEFAULTS["Ext_Low"]), multiline=False, hint_text="Ext_Low")
+        ctl4.add_widget(self.c_open)
+        ctl4.add_widget(self.c_close)
+        ctl4.add_widget(self.c_band)
+        ctl4.add_widget(self.c_aspect)
+        ctl4.add_widget(self.ext_low)
+        settings_section.add_widget(ctl4)
+    
+        ctl5 = GridLayout(cols=4, size_hint_y=None, height=42, spacing=4)
         self.ext_high = TextInput(text=str(DEFAULTS["Ext_High"]), multiline=False, hint_text="Ext_High")
         self.c_fill = TextInput(text=str(DEFAULTS["C_FillMin"]), multiline=False, hint_text="C_FillMin")
         self.c_eps = TextInput(text=str(DEFAULTS["C_Eps"]), multiline=False, hint_text="C_Eps")
         self.use_extent = TextInput(text="0", multiline=False, hint_text="Use_Extent 0/1")
-
-        for w in [self.c_open, self.c_close, self.c_band, self.c_aspect, self.ext_low, self.ext_high, self.c_fill, self.c_eps, self.use_extent]:
-            ctl4.add_widget(w)
-
-        left.add_widget(ctl4)
-
+        ctl5.add_widget(self.ext_high)
+        ctl5.add_widget(self.c_fill)
+        ctl5.add_widget(self.c_eps)
+        ctl5.add_widget(self.use_extent)
+        settings_section.add_widget(ctl5)
+    
+        left.add_widget(settings_section)
+    
         # -----------------------------
-        # Mapping controls
+        # Mapping section
         # -----------------------------
-        map_row = BoxLayout(size_hint_y=None, height=42, spacing=6)
-
-        self.box_ids_input = TextInput(multiline=False, hint_text="Box IDs e.g. 15 or 15,16", size_hint_x=0.23)
-        self.column_spinner = Spinner(text="Select Column", values=[], size_hint_x=0.26)
-        self.trigger_input = TextInput(multiline=False, hint_text="Trigger", size_hint_x=0.17)
-        self.grid_flag_input = TextInput(text="0", multiline=False, hint_text="Grid 0/1", size_hint_x=0.10)
-        self.grid_n_input = TextInput(text="1", multiline=False, hint_text="Grid N", size_hint_x=0.10)
-
-        self.btn_assign = Button(text="Assign Mapping", size_hint_x=0.14)
+        mapping_section = BoxLayout(
+            orientation="vertical",
+            spacing=6,
+            size_hint_y=None,
+            height=78
+        )
+    
+        mapping_section.add_widget(Label(
+            text="Mapping",
+            size_hint_y=None,
+            height=22,
+            halign="left",
+            valign="middle"
+        ))
+    
+        map_row = BoxLayout(size_hint_y=None, height=48, spacing=6)
+    
+        self.box_ids_input = TextInput(multiline=False, hint_text="Box IDs", size_hint_x=0.20)
+        self.column_spinner = Spinner(text="Select Column", values=[], size_hint_x=0.28)
+        self.trigger_input = TextInput(multiline=False, hint_text="Trigger", size_hint_x=0.16)
+        self.grid_flag_input = TextInput(text="0", multiline=False, hint_text="Grid", size_hint_x=0.08)
+        self.grid_n_input = TextInput(text="1", multiline=False, hint_text="N", size_hint_x=0.08)
+    
+        self.btn_assign = Button(text="Assign", size_hint_x=0.20)
         self.btn_assign.bind(on_release=self.on_assign_mapping)
-
+    
         map_row.add_widget(self.box_ids_input)
         map_row.add_widget(self.column_spinner)
         map_row.add_widget(self.trigger_input)
         map_row.add_widget(self.grid_flag_input)
         map_row.add_widget(self.grid_n_input)
         map_row.add_widget(self.btn_assign)
-
-        left.add_widget(map_row)
-
+    
+        mapping_section.add_widget(map_row)
+        left.add_widget(mapping_section)
+    
         # -----------------------------
-        # Output controls
+        # Output section
         # -----------------------------
-        out_row = BoxLayout(size_hint_y=None, height=48, spacing=6)
-
+        output_section = BoxLayout(
+            orientation="vertical",
+            spacing=6,
+            size_hint_y=None,
+            height=72
+        )
+    
+        output_section.add_widget(Label(
+            text="Output",
+            size_hint_y=None,
+            height=22,
+            halign="left",
+            valign="middle"
+        ))
+    
+        out_row = GridLayout(cols=2, size_hint_y=None, height=44, spacing=6)
+    
         self.btn_generate_one = Button(text="Generate Single PDF")
         self.btn_generate_one.bind(on_release=self.on_generate_single)
         out_row.add_widget(self.btn_generate_one)
-
+    
         self.btn_generate_batch = Button(text="Generate Batch PDFs")
         self.btn_generate_batch.bind(on_release=self.on_generate_batch)
         out_row.add_widget(self.btn_generate_batch)
-
-        left.add_widget(out_row)
-
+    
+        output_section.add_widget(out_row)
+        left.add_widget(output_section)
+    
         # =========================================
         # RIGHT PANEL
         # =========================================
-        right = BoxLayout(orientation="vertical", size_hint_x=0.66, padding=(4, 0, 0, 0))
-
+        right = BoxLayout(orientation="vertical", size_hint_x=0.66, spacing=6)
+    
+        preview_title = Label(
+            text="Preview",
+            size_hint_y=None,
+            height=24,
+            halign="left",
+            valign="middle"
+        )
+        preview_title.bind(size=self._sync_label_text_size)
+        right.add_widget(preview_title)
+    
         preview_wrap = ScrollView(
             do_scroll_x=True,
             do_scroll_y=True,
             bar_width=10,
             scroll_type=["bars", "content"]
         )
-
+    
         self.preview = Image(
             size_hint=(None, None),
             allow_stretch=False,
             keep_ratio=True
         )
         self.preview.bind(texture=self._update_preview_size)
-
+    
         preview_wrap.add_widget(self.preview)
         right.add_widget(preview_wrap)
-
+    
         root.add_widget(left)
         root.add_widget(right)
-
+    
         return root
 
     # --------------------------------------------------------
