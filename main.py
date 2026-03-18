@@ -57,7 +57,7 @@ from kivy.utils import platform
 APP_TITLE = "MediMap Pro: Intelligent Form Automator"
 CONFIG_FILENAME = "medimap_config.json"
 ZOOM = 4.0
-PREVIEW_SCALE = 1.25
+PREVIEW_SCALE = 2.2
 
 DEFAULTS = {
     "F_Area": 500,
@@ -1619,7 +1619,16 @@ class MediMapProApp(App):
         self.title = "MediMap Pro"
         self.engine = MediMapEngine()
 
-        root = BoxLayout(orientation="vertical", spacing=8, padding=8)
+        root = BoxLayout(orientation="horizontal", spacing=8, padding=8)
+
+        # =========================================
+        # LEFT PANEL
+        # =========================================
+        left = BoxLayout(
+            orientation="vertical",
+            spacing=6,
+            size_hint_x=0.34
+        )
 
         # -----------------------------
         # Header / status
@@ -1627,24 +1636,33 @@ class MediMapProApp(App):
         self.status_lbl = Label(
             text="MediMap Pro\nLoad CSV + PDF to begin",
             size_hint_y=None,
-            height=70,
+            height=64,
             halign="left",
             valign="middle"
         )
         self.status_lbl.bind(size=self._sync_label_text_size)
-        root.add_widget(self.status_lbl)
+        left.add_widget(self.status_lbl)
 
         # -----------------------------
         # File chooser
         # -----------------------------
-        chooser_wrap = BoxLayout(orientation="vertical", size_hint_y=0.38, spacing=6)
+        chooser_wrap = BoxLayout(
+            orientation="vertical",
+            size_hint_y=0.34,
+            spacing=6
+        )
 
         self.file_chooser = FileChooserListView(
             path="/sdcard/Download" if platform == "android" else os.path.expanduser("~")
         )
         chooser_wrap.add_widget(self.file_chooser)
 
-        file_btn_row = BoxLayout(size_hint_y=None, height=48, spacing=6)
+        file_btn_row = GridLayout(
+            cols=5,
+            size_hint_y=None,
+            height=48,
+            spacing=6
+        )
 
         self.btn_load_pdf = Button(text="Load PDF")
         self.btn_load_pdf.bind(on_release=self.on_load_pdf)
@@ -1667,7 +1685,7 @@ class MediMapProApp(App):
         file_btn_row.add_widget(self.btn_save_cfg)
 
         chooser_wrap.add_widget(file_btn_row)
-        root.add_widget(chooser_wrap)
+        left.add_widget(chooser_wrap)
 
         # -----------------------------
         # Main controls
@@ -1677,7 +1695,7 @@ class MediMapProApp(App):
         self.patient_spinner = Spinner(
             text="Select Patient",
             values=[],
-            size_hint_x=0.42
+            size_hint_x=0.40
         )
         self.patient_spinner.bind(text=self.on_patient_change)
         ctl1.add_widget(self.patient_spinner)
@@ -1685,33 +1703,33 @@ class MediMapProApp(App):
         self.page_input = TextInput(
             text="0",
             multiline=False,
-            hint_text="Page Index",
-            size_hint_x=0.12
+            hint_text="Page",
+            size_hint_x=0.10
         )
         ctl1.add_widget(self.page_input)
 
-        self.btn_prev = Button(text="Prev", size_hint_x=0.10)
+        self.btn_prev = Button(text="Prev", size_hint_x=0.11)
         self.btn_prev.bind(on_release=self.on_prev_page)
         ctl1.add_widget(self.btn_prev)
 
-        self.btn_next = Button(text="Next", size_hint_x=0.10)
+        self.btn_next = Button(text="Next", size_hint_x=0.11)
         self.btn_next.bind(on_release=self.on_next_page)
         ctl1.add_widget(self.btn_next)
 
-        self.btn_detect = Button(text="Run Detect", size_hint_x=0.13)
+        self.btn_detect = Button(text="Run Detect", size_hint_x=0.14)
         self.btn_detect.bind(on_release=self.on_run_detect)
         ctl1.add_widget(self.btn_detect)
 
-        self.btn_preview = Button(text="Preview", size_hint_x=0.13)
+        self.btn_preview = Button(text="Preview", size_hint_x=0.14)
         self.btn_preview.bind(on_release=self.on_preview)
         ctl1.add_widget(self.btn_preview)
 
-        root.add_widget(ctl1)
+        left.add_widget(ctl1)
 
         # -----------------------------
         # Settings row A
         # -----------------------------
-        ctl2 = BoxLayout(size_hint_y=None, height=42, spacing=4)
+        ctl2 = GridLayout(cols=6, size_hint_y=None, height=42, spacing=4)
 
         self.f_area = TextInput(text=str(DEFAULTS["F_Area"]), multiline=False, hint_text="F_Area")
         self.f_minw = TextInput(text=str(DEFAULTS["F_MinW"]), multiline=False, hint_text="F_MinW")
@@ -1723,12 +1741,12 @@ class MediMapProApp(App):
         for w in [self.f_area, self.f_minw, self.f_minh, self.f_close, self.line_minw, self.line_maxw]:
             ctl2.add_widget(w)
 
-        root.add_widget(ctl2)
+        left.add_widget(ctl2)
 
         # -----------------------------
         # Settings row B
         # -----------------------------
-        ctl3 = BoxLayout(size_hint_y=None, height=42, spacing=4)
+        ctl3 = GridLayout(cols=6, size_hint_y=None, height=42, spacing=4)
 
         self.c_strict = TextInput(text=str(DEFAULTS["C_Strict"]), multiline=False, hint_text="C_Strict")
         self.c_size_min = TextInput(text=str(DEFAULTS["C_Size"][0]), multiline=False, hint_text="C_Size_Min")
@@ -1740,12 +1758,12 @@ class MediMapProApp(App):
         for w in [self.c_strict, self.c_size_min, self.c_size_max, self.c_border, self.c_inner, self.roi_max]:
             ctl3.add_widget(w)
 
-        root.add_widget(ctl3)
+        left.add_widget(ctl3)
 
         # -----------------------------
         # Settings row C
         # -----------------------------
-        ctl4 = BoxLayout(size_hint_y=None, height=42, spacing=4)
+        ctl4 = GridLayout(cols=9, size_hint_y=None, height=42, spacing=4)
 
         self.c_open = TextInput(text=str(DEFAULTS["C_Open"]), multiline=False, hint_text="C_Open")
         self.c_close = TextInput(text=str(DEFAULTS["C_Close"]), multiline=False, hint_text="C_Close")
@@ -1760,7 +1778,7 @@ class MediMapProApp(App):
         for w in [self.c_open, self.c_close, self.c_band, self.c_aspect, self.ext_low, self.ext_high, self.c_fill, self.c_eps, self.use_extent]:
             ctl4.add_widget(w)
 
-        root.add_widget(ctl4)
+        left.add_widget(ctl4)
 
         # -----------------------------
         # Mapping controls
@@ -1783,7 +1801,7 @@ class MediMapProApp(App):
         map_row.add_widget(self.grid_n_input)
         map_row.add_widget(self.btn_assign)
 
-        root.add_widget(map_row)
+        left.add_widget(map_row)
 
         # -----------------------------
         # Output controls
@@ -1798,16 +1816,32 @@ class MediMapProApp(App):
         self.btn_generate_batch.bind(on_release=self.on_generate_batch)
         out_row.add_widget(self.btn_generate_batch)
 
-        root.add_widget(out_row)
+        left.add_widget(out_row)
 
-        # -----------------------------
-        # Preview image
-        # -----------------------------
+        # =========================================
+        # RIGHT PANEL
+        # =========================================
+        right = BoxLayout(orientation="vertical", size_hint_x=0.66, padding=(4, 0, 0, 0))
+
+        preview_wrap = ScrollView(
+            do_scroll_x=True,
+            do_scroll_y=True,
+            bar_width=10,
+            scroll_type=["bars", "content"]
+        )
+
         self.preview = Image(
-            allow_stretch=True,
+            size_hint=(None, None),
+            allow_stretch=False,
             keep_ratio=True
         )
-        root.add_widget(self.preview)
+        self.preview.bind(texture=self._update_preview_size)
+
+        preview_wrap.add_widget(self.preview)
+        right.add_widget(preview_wrap)
+
+        root.add_widget(left)
+        root.add_widget(right)
 
         return root
 
@@ -1816,6 +1850,10 @@ class MediMapProApp(App):
     # --------------------------------------------------------
     def _sync_label_text_size(self, instance, value):
         instance.text_size = value
+
+    def _update_preview_size(self, instance, texture):
+        if texture:
+            self.preview.size = texture.size
 
     def set_status(self, text):
         self.status_lbl.text = text
@@ -1830,7 +1868,7 @@ class MediMapProApp(App):
             idx = max(0, int(self.page_input.text.strip()))
         except Exception:
             idx = 0
-    
+
         total = self.engine.total_pages()
         if total <= 0:
             return 0
@@ -1947,6 +1985,9 @@ class MediMapProApp(App):
                 f"Data loaded:\n{os.path.basename(path)}\nRows: {len(self.engine.df)}"
             )
     
+            if self.engine.pdf_path:
+                Clock.schedule_once(lambda dt: self.on_preview(None), 0.1)
+    
         except Exception as e:
             self.set_status(f"Load data error:\n{e}")
 
@@ -2012,20 +2053,44 @@ class MediMapProApp(App):
         try:
             idx = max(0, self.current_page_idx() - 1)
             self.page_input.text = str(idx)
-            self.on_preview(None)
+    
+            if self.engine.pdf_path:
+                patient = self.selected_patient()
+                if patient and self.engine.df is not None and not self.engine.df.empty:
+                    self.on_preview(None)
+                else:
+                    raw_img = self.engine.get_raw_preview_pixmap(
+                        page_idx=idx,
+                        preview_zoom=PREVIEW_SCALE
+                    )
+                    self.render_preview_image(raw_img)
+                    self.set_status(f"Raw PDF preview.\nPage: {idx}")
         except Exception as e:
             self.set_status(f"Prev page error:\n{e}")
-
+    
     def on_next_page(self, instance):
         try:
             total = self.engine.total_pages()
             idx = min(self.current_page_idx() + 1, max(total - 1, 0))
             self.page_input.text = str(idx)
-            self.on_preview(None)
+    
+            if self.engine.pdf_path:
+                patient = self.selected_patient()
+                if patient and self.engine.df is not None and not self.engine.df.empty:
+                    self.on_preview(None)
+                else:
+                    raw_img = self.engine.get_raw_preview_pixmap(
+                        page_idx=idx,
+                        preview_zoom=PREVIEW_SCALE
+                    )
+                    self.render_preview_image(raw_img)
+                    self.set_status(f"Raw PDF preview.\nPage: {idx}")
         except Exception as e:
             self.set_status(f"Next page error:\n{e}")
-
+    
     def on_patient_change(self, spinner, text):
+        if not self.engine.pdf_path:
+            return
         if text and text != "Select Patient":
             Clock.schedule_once(lambda dt: self.on_preview(None), 0.1)
 
