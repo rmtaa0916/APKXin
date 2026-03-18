@@ -157,6 +157,9 @@ def find_col_safe(df, *keywords):
 # ============================================================
 # Detection / mapping engine
 # ============================================================
+# ============================================================
+# Detection / mapping engine
+# ============================================================
 class MediMapEngine:
     def __init__(self):
         self.pdf_path = ""
@@ -212,13 +215,25 @@ class MediMapEngine:
         ])
 
     def load_pdf(self, path):
-        """Sets the PDF path for the engine."""
+        """Set PDF path, validate file, and return page count."""
+        if not path:
+            raise ValueError("No PDF path provided.")
         if not os.path.exists(path):
             raise FileNotFoundError(f"PDF file not found: {path}")
+
+        try:
+            with fitz.open(path) as doc:
+                total = len(doc)
+                if total <= 0:
+                    raise ValueError("PDF has no pages.")
+        except Exception as e:
+            raise ValueError(f"Failed to open PDF: {e}")
+
         self.pdf_path = path
-        # Verify it can be opened
-        with fitz.open(path) as doc:
-            return len(doc)
+        self.all_boxes = []
+        self.box_types = []
+        self.geom = {"names": [], "dob": [], "phil": []}
+        return total
 
     def total_pages(self):
         if not self.pdf_path or not os.path.exists(self.pdf_path):
@@ -228,6 +243,25 @@ class MediMapEngine:
                 return max(len(doc), 1)
         except Exception:
             return 1
+
+    def get_raw_preview_pixmap(self, page_idx=0, preview_zoom=1.5):
+        """Render the raw loaded PDF page without filling or boxes."""
+        if not self.pdf_path or not os.path.exists(self.pdf_path):
+            raise FileNotFoundError("PDF path is missing or invalid.")
+
+        with fitz.open(self.pdf_path) as doc:
+            total = len(doc)
+            if total <= 0:
+                raise ValueError("PDF has no pages.")
+            page_idx = max(0, min(int(page_idx), total - 1))
+            page = doc[page_idx]
+            pix = page.get_pixmap(matrix=fitz.Matrix(preview_zoom, preview_zoom))
+            img = cv2.imdecode(np.frombuffer(pix.tobytes("png"), np.uint8), cv2.IMREAD_COLOR)
+
+        if img is None:
+            raise ValueError("Failed to render raw PDF preview image.")
+
+        return img
 
 
 
@@ -2022,22 +2056,32 @@ class MediMapProApp(App):
             if not self.engine.pdf_path:
                 self.set_status("Load PDF first.")
                 return
-
-            patient = self.selected_patient()
-            if not patient:
-                self.set_status("Load data and select a patient first.")
-                return
-
-            self.apply_ui_settings_to_engine()
+    
             page_idx = self.current_page_idx()
-
+            patient = self.selected_patient()
+    
+            if not patient or self.engine.df is None or self.engine.df.empty:
+                raw_img = self.engine.get_raw_preview_pixmap(
+                    page_idx=page_idx,
+                    preview_zoom=PREVIEW_SCALE
+                )
+                self.render_preview_image(raw_img)
+                self.set_status(
+                    f"Raw PDF preview.\n"
+                    f"Page: {page_idx}\n"
+                    f"No patient selected yet."
+                )
+                return
+    
+            self.apply_ui_settings_to_engine()
+    
             img = self.engine.get_preview_pixmap_with_boxes(
                 patient_name=patient,
                 page_idx=page_idx,
-                preview_zoom=1.5
+                preview_zoom=PREVIEW_SCALE
             )
             self.render_preview_image(img)
-
+    
             self.set_status(
                 f"Preview rendered.\n"
                 f"Patient: {patient}\n"
@@ -2170,29 +2214,35 @@ class MediMapProApp(App):
     def on_load_pdf(self, instance):
         """Opens a popup to select the PDF template."""
         content = FileChooserListView(
-            filters=['*.pdf'],
+            filters=["*.pdf"],
             path=self.file_chooser.path
         )
         popup = Popup(title="Select PDF Template", content=content, size_hint=(0.9, 0.9))
         content.bind(on_submit=lambda obj, sel, touch: self._handle_pdf_selection(sel, popup))
         popup.open()
-
+    
     def _handle_pdf_selection(self, selection, popup):
         if selection:
             try:
-                print("ENGINE TYPE:", type(self.engine))
-                print("HAS load_pdf:", hasattr(self.engine, "load_pdf"))
-                print("ENGINE METHODS:", [m for m in dir(self.engine) if "pdf" in m.lower()])
+                path = selection[0]
+                total = self.engine.load_pdf(path)
     
-                if not hasattr(self.engine, "load_pdf"):
-                    raise AttributeError(
-                        "Running MediMapEngine does not contain load_pdf(). "
-                        "This usually means the app is using an older build or a different source file."
-                    )
+                cur_idx = self.current_page_idx()
+                max_idx = max(total - 1, 0)
+                if cur_idx > max_idx:
+                    self.page_input.text = "0"
     
-                self.engine.load_pdf(selection[0])
-                self.set_status(f"PDF Loaded: {os.path.basename(selection[0])}")
+                raw_img = self.engine.get_raw_preview_pixmap(
+                    page_idx=self.current_page_idx(),
+                    preview_zoom=PREVIEW_SCALE
+                )
+                self.render_preview_image(raw_img)
     
+                self.set_status(
+                    f"PDF Loaded: {os.path.basename(path)}\n"
+                    f"Pages: {total}\n"
+                    f"Showing raw template page: {self.current_page_idx()}"
+                )
             except Exception as e:
                 traceback.print_exc()
                 self.set_status(f"PDF Error: {e}")
