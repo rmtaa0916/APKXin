@@ -1706,24 +1706,24 @@ class MediMapProApp(App):
     def build(self):
         self.title = "MediMap Pro"
         self.engine = MediMapEngine()
-    
+
         root = BoxLayout(orientation="horizontal", spacing=10, padding=10)
-    
+
         # =========================================
         # LEFT PANEL WRAP
         # =========================================
         left_wrap = BoxLayout(
             orientation="vertical",
-            size_hint_x=0.42
+            size_hint_x=0.40
         )
-    
+
         left_scroll = ScrollView(
             do_scroll_x=False,
             do_scroll_y=True,
             bar_width=10,
             scroll_type=["bars", "content"]
         )
-    
+
         left = GridLayout(
             cols=1,
             spacing=8,
@@ -1731,7 +1731,7 @@ class MediMapProApp(App):
             padding=(0, 0, 4, 0)
         )
         left.bind(minimum_height=left.setter("height"))
-    
+
         # -----------------------------
         # Status section
         # -----------------------------
@@ -1741,7 +1741,7 @@ class MediMapProApp(App):
             height=82,
             spacing=2
         )
-    
+
         status_title = Label(
             text="[b]MediMap Pro[/b]",
             markup=True,
@@ -1752,7 +1752,7 @@ class MediMapProApp(App):
         )
         status_title.bind(size=self._sync_label_text_size)
         status_box.add_widget(status_title)
-    
+
         self.status_lbl = Label(
             text="Load CSV/XLSX, Google Sheet URL, and PDF to begin",
             size_hint_y=None,
@@ -1762,14 +1762,14 @@ class MediMapProApp(App):
         )
         self.status_lbl.bind(size=self._sync_label_text_size)
         status_box.add_widget(self.status_lbl)
-    
+
         left.add_widget(status_box)
-    
+
         # -----------------------------
-        # Files title
+        # Data / files title
         # -----------------------------
         files_title = Label(
-            text="[b]Files[/b]",
+            text="[b]Data & Files[/b]",
             markup=True,
             size_hint_y=None,
             height=24,
@@ -1778,17 +1778,7 @@ class MediMapProApp(App):
         )
         files_title.bind(size=self._sync_label_text_size)
         left.add_widget(files_title)
-    
-        # -----------------------------
-        # File chooser
-        # -----------------------------
-        self.file_chooser = FileChooserListView(
-            path="/sdcard/Download" if platform == "android" else os.path.expanduser("~"),
-            size_hint_y=None,
-            height=240
-        )
-        left.add_widget(self.file_chooser)
-    
+
         # -----------------------------
         # File action buttons row 1
         # -----------------------------
@@ -1798,21 +1788,21 @@ class MediMapProApp(App):
             height=44,
             spacing=6
         )
-    
+
         self.btn_load_pdf = Button(text="Load PDF")
         self.btn_load_pdf.bind(on_release=self.on_load_pdf)
         file_btn_row_1.add_widget(self.btn_load_pdf)
-    
+
         self.btn_load_csv = Button(text="Load CSV/XLSX")
         self.btn_load_csv.bind(on_release=self.on_load_csv)
         file_btn_row_1.add_widget(self.btn_load_csv)
-    
+
         self.btn_load_gsheet = Button(text="Load Google Sheet URL")
         self.btn_load_gsheet.bind(on_release=self.on_load_gsheet_url)
         file_btn_row_1.add_widget(self.btn_load_gsheet)
-    
+
         left.add_widget(file_btn_row_1)
-    
+
         # -----------------------------
         # File action buttons row 2
         # -----------------------------
@@ -1822,21 +1812,21 @@ class MediMapProApp(App):
             height=44,
             spacing=6
         )
-    
+
         self.btn_load_cfg = Button(text="Load Config")
         self.btn_load_cfg.bind(on_release=self.on_load_config)
         file_btn_row_2.add_widget(self.btn_load_cfg)
-    
+
         self.btn_merge_cfg = Button(text="Merge Config")
         self.btn_merge_cfg.bind(on_release=self.on_merge_config)
         file_btn_row_2.add_widget(self.btn_merge_cfg)
-    
+
         self.btn_save_cfg = Button(text="Save Config")
         self.btn_save_cfg.bind(on_release=self.on_save_config)
         file_btn_row_2.add_widget(self.btn_save_cfg)
-    
+
         left.add_widget(file_btn_row_2)
-    
+
         # -----------------------------
         # Navigation title
         # -----------------------------
@@ -1850,12 +1840,9 @@ class MediMapProApp(App):
         )
         nav_title.bind(size=self._sync_label_text_size)
         left.add_widget(nav_title)
-    
-        # -----------------------------
-        # Navigation row 1
-        # -----------------------------
+
         nav_row_1 = BoxLayout(size_hint_y=None, height=44, spacing=6)
-    
+
         self.patient_spinner = Spinner(
             text="Select Patient",
             values=[],
@@ -1863,7 +1850,7 @@ class MediMapProApp(App):
         )
         self.patient_spinner.bind(text=self.on_patient_change)
         nav_row_1.add_widget(self.patient_spinner)
-    
+
         self.page_input = TextInput(
             text="0",
             multiline=False,
@@ -1871,34 +1858,31 @@ class MediMapProApp(App):
             size_hint_x=0.12
         )
         nav_row_1.add_widget(self.page_input)
-    
+
         self.btn_prev = Button(text="Prev", size_hint_x=0.16)
         self.btn_prev.bind(on_release=self.on_prev_page)
         nav_row_1.add_widget(self.btn_prev)
-    
+
         self.btn_next = Button(text="Next", size_hint_x=0.16)
         self.btn_next.bind(on_release=self.on_next_page)
         nav_row_1.add_widget(self.btn_next)
-    
+
         left.add_widget(nav_row_1)
-    
-        # -----------------------------
-        # Navigation row 2
-        # -----------------------------
+
         nav_row_2 = GridLayout(cols=2, size_hint_y=None, height=44, spacing=6)
-    
+
         self.btn_detect = Button(text="Run Detect")
         self.btn_detect.bind(on_release=self.on_run_detect)
         nav_row_2.add_widget(self.btn_detect)
-    
+
         self.btn_preview = Button(text="Refresh Preview")
         self.btn_preview.bind(on_release=self.on_preview)
         nav_row_2.add_widget(self.btn_preview)
-    
+
         left.add_widget(nav_row_2)
-    
+
         # -----------------------------
-        # Detection Settings title
+        # Detection settings
         # -----------------------------
         settings_title = Label(
             text="[b]Detection Settings[/b]",
@@ -1910,8 +1894,7 @@ class MediMapProApp(App):
         )
         settings_title.bind(size=self._sync_label_text_size)
         left.add_widget(settings_title)
-    
-        # A
+
         ctl2 = GridLayout(cols=3, size_hint_y=None, height=44, spacing=6)
         self.f_area = TextInput(text=str(DEFAULTS["F_Area"]), multiline=False, hint_text="F_Area")
         self.f_minw = TextInput(text=str(DEFAULTS["F_MinW"]), multiline=False, hint_text="F_MinW")
@@ -1920,8 +1903,7 @@ class MediMapProApp(App):
         ctl2.add_widget(self.f_minw)
         ctl2.add_widget(self.f_minh)
         left.add_widget(ctl2)
-    
-        # B
+
         ctl2b = GridLayout(cols=3, size_hint_y=None, height=44, spacing=6)
         self.f_close = TextInput(text=str(DEFAULTS["F_Close"]), multiline=False, hint_text="F_Close")
         self.line_minw = TextInput(text=str(DEFAULTS["Line_MinW"]), multiline=False, hint_text="Line_MinW")
@@ -1930,8 +1912,7 @@ class MediMapProApp(App):
         ctl2b.add_widget(self.line_minw)
         ctl2b.add_widget(self.line_maxw)
         left.add_widget(ctl2b)
-    
-        # C
+
         ctl3 = GridLayout(cols=3, size_hint_y=None, height=44, spacing=6)
         self.c_strict = TextInput(text=str(DEFAULTS["C_Strict"]), multiline=False, hint_text="C_Strict")
         self.c_size_min = TextInput(text=str(DEFAULTS["C_Size"][0]), multiline=False, hint_text="C_Size_Min")
@@ -1940,8 +1921,7 @@ class MediMapProApp(App):
         ctl3.add_widget(self.c_size_min)
         ctl3.add_widget(self.c_size_max)
         left.add_widget(ctl3)
-    
-        # D
+
         ctl3b = GridLayout(cols=3, size_hint_y=None, height=44, spacing=6)
         self.c_border = TextInput(text=str(DEFAULTS["C_Border"]), multiline=False, hint_text="C_Border")
         self.c_inner = TextInput(text=str(DEFAULTS["C_Inner"]), multiline=False, hint_text="C_Inner")
@@ -1950,8 +1930,7 @@ class MediMapProApp(App):
         ctl3b.add_widget(self.c_inner)
         ctl3b.add_widget(self.roi_max)
         left.add_widget(ctl3b)
-    
-        # E
+
         ctl4 = GridLayout(cols=3, size_hint_y=None, height=44, spacing=6)
         self.c_open = TextInput(text=str(DEFAULTS["C_Open"]), multiline=False, hint_text="C_Open")
         self.c_close = TextInput(text=str(DEFAULTS["C_Close"]), multiline=False, hint_text="C_Close")
@@ -1960,8 +1939,7 @@ class MediMapProApp(App):
         ctl4.add_widget(self.c_close)
         ctl4.add_widget(self.c_band)
         left.add_widget(ctl4)
-    
-        # F
+
         ctl4b = GridLayout(cols=3, size_hint_y=None, height=44, spacing=6)
         self.c_aspect = TextInput(text=str(DEFAULTS["C_AspectTol"]), multiline=False, hint_text="C_AspectTol")
         self.ext_low = TextInput(text=str(DEFAULTS["Ext_Low"]), multiline=False, hint_text="Ext_Low")
@@ -1970,8 +1948,7 @@ class MediMapProApp(App):
         ctl4b.add_widget(self.ext_low)
         ctl4b.add_widget(self.ext_high)
         left.add_widget(ctl4b)
-    
-        # G
+
         ctl4c = GridLayout(cols=3, size_hint_y=None, height=44, spacing=6)
         self.c_fill = TextInput(text=str(DEFAULTS["C_FillMin"]), multiline=False, hint_text="C_FillMin")
         self.c_eps = TextInput(text=str(DEFAULTS["C_Eps"]), multiline=False, hint_text="C_Eps")
@@ -1980,9 +1957,9 @@ class MediMapProApp(App):
         ctl4c.add_widget(self.c_eps)
         ctl4c.add_widget(self.use_extent)
         left.add_widget(ctl4c)
-    
+
         # -----------------------------
-        # Mapping title
+        # Mapping
         # -----------------------------
         mapping_title = Label(
             text="[b]Mapping[/b]",
@@ -1994,34 +1971,34 @@ class MediMapProApp(App):
         )
         mapping_title.bind(size=self._sync_label_text_size)
         left.add_widget(mapping_title)
-    
+
         map_row_1 = BoxLayout(size_hint_y=None, height=44, spacing=6)
-    
+
         self.box_ids_input = TextInput(
             multiline=False,
             hint_text="Box IDs",
             size_hint_x=0.24
         )
         map_row_1.add_widget(self.box_ids_input)
-    
+
         self.column_spinner = Spinner(
             text="Select Column",
             values=[],
             size_hint_x=0.46
         )
         map_row_1.add_widget(self.column_spinner)
-    
+
         self.trigger_input = TextInput(
             multiline=False,
             hint_text="Trigger",
             size_hint_x=0.30
         )
         map_row_1.add_widget(self.trigger_input)
-    
+
         left.add_widget(map_row_1)
-    
+
         map_row_2 = BoxLayout(size_hint_y=None, height=44, spacing=6)
-    
+
         self.grid_flag_input = TextInput(
             text="0",
             multiline=False,
@@ -2029,7 +2006,7 @@ class MediMapProApp(App):
             size_hint_x=0.18
         )
         map_row_2.add_widget(self.grid_flag_input)
-    
+
         self.grid_n_input = TextInput(
             text="1",
             multiline=False,
@@ -2037,18 +2014,18 @@ class MediMapProApp(App):
             size_hint_x=0.18
         )
         map_row_2.add_widget(self.grid_n_input)
-    
+
         self.btn_assign = Button(
             text="Assign Mapping",
             size_hint_x=0.64
         )
         self.btn_assign.bind(on_release=self.on_assign_mapping)
         map_row_2.add_widget(self.btn_assign)
-    
+
         left.add_widget(map_row_2)
-    
+
         # -----------------------------
-        # Output title
+        # Output
         # -----------------------------
         output_title = Label(
             text="[b]Output[/b]",
@@ -2060,31 +2037,31 @@ class MediMapProApp(App):
         )
         output_title.bind(size=self._sync_label_text_size)
         left.add_widget(output_title)
-    
+
         out_row = GridLayout(cols=2, size_hint_y=None, height=46, spacing=6)
-    
+
         self.btn_generate_one = Button(text="Generate Single PDF")
         self.btn_generate_one.bind(on_release=self.on_generate_single)
         out_row.add_widget(self.btn_generate_one)
-    
+
         self.btn_generate_batch = Button(text="Generate Batch PDFs")
         self.btn_generate_batch.bind(on_release=self.on_generate_batch)
         out_row.add_widget(self.btn_generate_batch)
-    
+
         left.add_widget(out_row)
-    
+
         left_scroll.add_widget(left)
         left_wrap.add_widget(left_scroll)
-    
+
         # =========================================
         # RIGHT PANEL
         # =========================================
         right = BoxLayout(
             orientation="vertical",
-            size_hint_x=0.58,
+            size_hint_x=0.60,
             spacing=6
         )
-    
+
         preview_title = Label(
             text="[b]Preview[/b]",
             markup=True,
@@ -2095,28 +2072,656 @@ class MediMapProApp(App):
         )
         preview_title.bind(size=self._sync_label_text_size)
         right.add_widget(preview_title)
-    
+
         preview_wrap = ScrollView(
             do_scroll_x=True,
             do_scroll_y=True,
             bar_width=10,
             scroll_type=["bars", "content"]
         )
-    
+
         self.preview = Image(
             size_hint=(None, None),
             allow_stretch=False,
             keep_ratio=True
         )
         self.preview.bind(texture=self._update_preview_size)
-    
+
         preview_wrap.add_widget(self.preview)
         right.add_widget(preview_wrap)
-    
+
         root.add_widget(left_wrap)
         root.add_widget(right)
-    
+
         return root
+
+    # --------------------------------------------------------
+    # UI helpers
+    # --------------------------------------------------------
+    def _sync_label_text_size(self, instance, value):
+        instance.text_size = value
+
+    def _update_preview_size(self, instance, texture):
+        if texture:
+            self.preview.size = texture.size
+
+    def set_status(self, text):
+        self.status_lbl.text = text
+
+    def get_default_file_path(self):
+        return "/sdcard/Download" if platform == "android" else os.path.expanduser("~")
+
+    def current_page_idx(self):
+        try:
+            idx = max(0, int(self.page_input.text.strip()))
+        except Exception:
+            idx = 0
+
+        total = self.engine.total_pages()
+        if total <= 0:
+            return 0
+        return min(idx, total - 1)
+
+    def apply_ui_settings_to_engine(self):
+        try:
+            self.engine.settings["F_Area"] = int(self.f_area.text)
+            self.engine.settings["F_MinW"] = int(self.f_minw.text)
+            self.engine.settings["F_MinH"] = int(self.f_minh.text)
+            self.engine.settings["F_Close"] = int(self.f_close.text)
+
+            self.engine.settings["Line_MinW"] = int(self.line_minw.text)
+            self.engine.settings["Line_MaxW"] = int(self.line_maxw.text)
+
+            self.engine.settings["C_Strict"] = int(self.c_strict.text)
+            self.engine.settings["C_Size"] = (
+                int(self.c_size_min.text),
+                int(self.c_size_max.text)
+            )
+
+            self.engine.settings["C_Border"] = float(self.c_border.text)
+            self.engine.settings["C_Inner"] = float(self.c_inner.text)
+            self.engine.settings["ROI_Max"] = int(self.roi_max.text)
+
+            self.engine.settings["C_Open"] = int(self.c_open.text)
+            self.engine.settings["C_Close"] = int(self.c_close.text)
+            self.engine.settings["C_BandPct"] = float(self.c_band.text)
+            self.engine.settings["C_AspectTol"] = float(self.c_aspect.text)
+            self.engine.settings["Ext_Low"] = float(self.ext_low.text)
+            self.engine.settings["Ext_High"] = float(self.ext_high.text)
+            self.engine.settings["C_FillMin"] = float(self.c_fill.text)
+            self.engine.settings["C_Eps"] = float(self.c_eps.text)
+            self.engine.settings["Use_Extent"] = bool(int(self.use_extent.text.strip() or "0"))
+        except Exception as e:
+            raise ValueError(f"Invalid settings input: {e}")
+
+    def push_engine_settings_to_ui(self):
+        s = self.engine.settings
+        self.f_area.text = str(s["F_Area"])
+        self.f_minw.text = str(s["F_MinW"])
+        self.f_minh.text = str(s["F_MinH"])
+        self.f_close.text = str(s["F_Close"])
+        self.line_minw.text = str(s["Line_MinW"])
+        self.line_maxw.text = str(s["Line_MaxW"])
+
+        self.c_strict.text = str(s["C_Strict"])
+        self.c_size_min.text = str(s["C_Size"][0])
+        self.c_size_max.text = str(s["C_Size"][1])
+        self.c_border.text = str(s["C_Border"])
+        self.c_inner.text = str(s["C_Inner"])
+        self.roi_max.text = str(s["ROI_Max"])
+
+        self.c_open.text = str(s["C_Open"])
+        self.c_close.text = str(s["C_Close"])
+        self.c_band.text = str(s["C_BandPct"])
+        self.c_aspect.text = str(s["C_AspectTol"])
+        self.ext_low.text = str(s["Ext_Low"])
+        self.ext_high.text = str(s["Ext_High"])
+        self.c_fill.text = str(s["C_FillMin"])
+        self.c_eps.text = str(s["C_Eps"])
+        self.use_extent.text = "1" if s["Use_Extent"] else "0"
+
+    def refresh_patient_and_column_lists(self):
+        if self.engine.df is None or self.engine.df.empty:
+            self.patient_spinner.values = []
+            self.column_spinner.values = []
+            self.patient_spinner.text = "Select Patient"
+            self.column_spinner.text = "Select Column"
+            return
+
+        patient_names = sorted([
+            str(x).strip()
+            for x in self.engine.df["_DISPLAY_NAME"].dropna().tolist()
+            if str(x).strip()
+        ])
+        self.patient_spinner.values = patient_names
+        self.patient_spinner.text = patient_names[0] if patient_names else "Select Patient"
+
+        cols = sorted([str(c) for c in self.engine.df.columns.tolist()])
+        self.column_spinner.values = cols
+        self.column_spinner.text = cols[0] if cols else "Select Column"
+
+    def selected_patient(self):
+        val = self.patient_spinner.text.strip()
+        if not val or val == "Select Patient":
+            return None
+        return val
+
+    def render_preview_image(self, img_bgr):
+        if img_bgr is None:
+            return
+
+        rgba = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGBA)
+        buf = rgba.tobytes()
+        texture = Texture.create(size=(rgba.shape[1], rgba.shape[0]), colorfmt="rgba")
+        texture.blit_buffer(buf, colorfmt="rgba", bufferfmt="ubyte")
+        texture.flip_vertical()
+        self.preview.texture = texture
+
+    def open_text_input_popup(self, title, hint_text, on_submit_callback, default_text=""):
+        wrap = BoxLayout(orientation="vertical", spacing=8, padding=8)
+
+        txt = TextInput(
+            text=default_text,
+            hint_text=hint_text,
+            multiline=False,
+            size_hint_y=None,
+            height=42
+        )
+        wrap.add_widget(txt)
+
+        btn_row = GridLayout(cols=2, size_hint_y=None, height=42, spacing=6)
+
+        btn_cancel = Button(text="Cancel")
+        btn_ok = Button(text="OK")
+
+        btn_row.add_widget(btn_cancel)
+        btn_row.add_widget(btn_ok)
+        wrap.add_widget(btn_row)
+
+        popup = Popup(title=title, content=wrap, size_hint=(0.82, 0.32))
+
+        btn_cancel.bind(on_release=lambda *_: popup.dismiss())
+
+        def _submit(*_):
+            try:
+                on_submit_callback(txt.text.strip())
+            finally:
+                popup.dismiss()
+
+        btn_ok.bind(on_release=_submit)
+        txt.bind(on_text_validate=lambda *_: _submit())
+
+        popup.open()
+
+    # --------------------------------------------------------
+    # File loading
+    # --------------------------------------------------------
+    def on_load_gsheet_url(self, instance):
+        self.open_text_input_popup(
+            title="Load Google Sheet URL",
+            hint_text="Paste Google Sheet URL here",
+            on_submit_callback=self._handle_gsheet_url_submit
+        )
+
+    def _handle_gsheet_url_submit(self, url):
+        try:
+            if not url:
+                self.set_status("No Google Sheet URL provided.")
+                return
+
+            self.engine.load_dataframe(url)
+            self.refresh_patient_and_column_lists()
+
+            self.set_status(
+                f"Google Sheet loaded.\n"
+                f"Rows: {len(self.engine.df)}\n"
+                f"Patients: {len(self.engine.patient_names)}"
+            )
+
+            if self.engine.pdf_path:
+                Clock.schedule_once(lambda dt: self.on_preview(None), 0.1)
+
+        except Exception as e:
+            traceback.print_exc()
+            self.set_status(f"Google Sheet load error:\n{e}")
+
+    def on_load_csv(self, instance):
+        content = FileChooserListView(
+            filters=["*.csv", "*.xlsx", "*.xls"],
+            path=self.get_default_file_path()
+        )
+        popup = Popup(title="Select CSV/XLSX File", content=content, size_hint=(0.9, 0.9))
+        content.bind(on_submit=lambda obj, sel, touch: self._handle_csv_selection(sel, popup))
+        popup.open()
+
+    def _handle_csv_selection(self, selection, popup):
+        if selection:
+            try:
+                path = selection[0]
+                self.engine.load_dataframe(path)
+                self.refresh_patient_and_column_lists()
+
+                self.set_status(
+                    f"Data loaded:\n{os.path.basename(path)}\nRows: {len(self.engine.df)}"
+                )
+
+                if self.engine.pdf_path:
+                    Clock.schedule_once(lambda dt: self.on_preview(None), 0.1)
+
+            except Exception as e:
+                traceback.print_exc()
+                self.set_status(f"Load data error:\n{e}")
+        popup.dismiss()
+
+    def on_load_config(self, instance):
+        content = FileChooserListView(
+            filters=["*.json"],
+            path=self.get_default_file_path()
+        )
+        popup = Popup(title="Select Config File", content=content, size_hint=(0.9, 0.9))
+        content.bind(on_submit=lambda obj, sel, touch: self._handle_load_config_selection(sel, popup))
+        popup.open()
+
+    def _handle_load_config_selection(self, selection, popup):
+        if selection:
+            try:
+                path = selection[0]
+                if not path.lower().endswith(".json"):
+                    self.set_status("Please select a JSON config file.")
+                    return
+
+                self.engine.load_config(path)
+                self.engine.all_boxes = []
+                self.engine.box_types = []
+                self.push_engine_settings_to_ui()
+                self.set_status(f"Config loaded:\n{os.path.basename(path)}")
+            except Exception as e:
+                traceback.print_exc()
+                self.set_status(f"Load config error:\n{e}")
+        popup.dismiss()
+
+    def on_merge_config(self, instance):
+        content = FileChooserListView(
+            filters=["*.json"],
+            path=self.get_default_file_path()
+        )
+        popup = Popup(title="Select Config File to Merge", content=content, size_hint=(0.9, 0.9))
+        content.bind(on_submit=lambda obj, sel, touch: self._handle_merge_config_selection(sel, popup))
+        popup.open()
+
+    def _handle_merge_config_selection(self, selection, popup):
+        if selection:
+            try:
+                path = selection[0]
+                if not path.lower().endswith(".json"):
+                    self.set_status("Please select a JSON config file.")
+                    return
+
+                with open(path, "r", encoding="utf-8") as f:
+                    incoming = json.load(f)
+
+                self.apply_ui_settings_to_engine()
+                self.engine.merge_config_into_current(
+                    incoming_cfg=incoming,
+                    keep_current_detection=True,
+                    prefer="incoming"
+                )
+                self.engine.all_boxes = []
+                self.engine.box_types = []
+                self.push_engine_settings_to_ui()
+                self.set_status(f"Config merged:\n{os.path.basename(path)}")
+            except Exception as e:
+                traceback.print_exc()
+                self.set_status(f"Merge config error:\n{e}")
+        popup.dismiss()
+
+    def on_save_config(self, instance):
+        try:
+            if not self.engine.pdf_path:
+                self.set_status("Load a PDF first before saving config.")
+                return
+
+            self.apply_ui_settings_to_engine()
+            out_path = os.path.join(
+                os.path.dirname(self.engine.pdf_path),
+                "medimap_config.json"
+            )
+            self.engine.save_config(out_path)
+            self.set_status(f"Config saved:\n{out_path}")
+        except Exception as e:
+            self.set_status(f"Save config error:\n{e}")
+
+    def on_load_pdf(self, instance):
+        content = FileChooserListView(
+            filters=["*.pdf"],
+            path=self.get_default_file_path()
+        )
+        popup = Popup(title="Select PDF Template", content=content, size_hint=(0.9, 0.9))
+        content.bind(on_submit=lambda obj, sel, touch: self._handle_pdf_selection(sel, popup))
+        popup.open()
+
+    def _handle_pdf_selection(self, selection, popup):
+        if selection:
+            try:
+                path = selection[0]
+                total = self.engine.load_pdf(path)
+
+                cur_idx = self.current_page_idx()
+                max_idx = max(total - 1, 0)
+                if cur_idx > max_idx:
+                    self.page_input.text = "0"
+
+                raw_img = self.engine.get_raw_preview_pixmap(
+                    page_idx=self.current_page_idx(),
+                    preview_zoom=PREVIEW_SCALE
+                )
+                self.render_preview_image(raw_img)
+
+                self.set_status(
+                    f"PDF Loaded: {os.path.basename(path)}\n"
+                    f"Pages: {total}\n"
+                    f"Showing raw template page: {self.current_page_idx()}"
+                )
+            except Exception as e:
+                traceback.print_exc()
+                self.set_status(f"PDF Error: {e}")
+        popup.dismiss()
+
+    # --------------------------------------------------------
+    # Navigation
+    # --------------------------------------------------------
+    def on_prev_page(self, instance):
+        try:
+            idx = max(0, self.current_page_idx() - 1)
+            self.page_input.text = str(idx)
+
+            if self.engine.pdf_path:
+                patient = self.selected_patient()
+                if patient and self.engine.df is not None and not self.engine.df.empty:
+                    self.on_preview(None)
+                else:
+                    raw_img = self.engine.get_raw_preview_pixmap(
+                        page_idx=idx,
+                        preview_zoom=PREVIEW_SCALE
+                    )
+                    self.render_preview_image(raw_img)
+                    self.set_status(f"Raw PDF preview.\nPage: {idx}")
+        except Exception as e:
+            self.set_status(f"Prev page error:\n{e}")
+
+    def on_next_page(self, instance):
+        try:
+            total = self.engine.total_pages()
+            idx = min(self.current_page_idx() + 1, max(total - 1, 0))
+            self.page_input.text = str(idx)
+
+            if self.engine.pdf_path:
+                patient = self.selected_patient()
+                if patient and self.engine.df is not None and not self.engine.df.empty:
+                    self.on_preview(None)
+                else:
+                    raw_img = self.engine.get_raw_preview_pixmap(
+                        page_idx=idx,
+                        preview_zoom=PREVIEW_SCALE
+                    )
+                    self.render_preview_image(raw_img)
+                    self.set_status(f"Raw PDF preview.\nPage: {idx}")
+        except Exception as e:
+            self.set_status(f"Next page error:\n{e}")
+
+    def on_patient_change(self, spinner, text):
+        if not self.engine.pdf_path:
+            return
+        if text and text != "Select Patient":
+            Clock.schedule_once(lambda dt: self.on_preview(None), 0.1)
+
+    # --------------------------------------------------------
+    # Detection / preview
+    # --------------------------------------------------------
+    def on_run_detect(self, instance):
+        try:
+            if not self.engine.pdf_path:
+                self.set_status("Load PDF first.")
+                return
+
+            self.apply_ui_settings_to_engine()
+            page_idx = self.current_page_idx()
+
+            self.engine.run_detection(page_idx=page_idx)
+
+            patient = self.selected_patient()
+            if patient and self.engine.df is not None and not self.engine.df.empty:
+                self.on_preview(None)
+            else:
+                raw_img = self.engine.get_raw_preview_pixmap(
+                    page_idx=page_idx,
+                    preview_zoom=PREVIEW_SCALE
+                )
+                boxed_img = self.engine.draw_boxes_on_image(
+                    raw_img,
+                    preview_zoom=PREVIEW_SCALE,
+                    show_labels=True
+                )
+                self.render_preview_image(boxed_img)
+
+                type_counts = {}
+                for t in self.engine.box_types:
+                    type_counts[t] = type_counts.get(t, 0) + 1
+
+                self.set_status(
+                    f"Detection done.\n"
+                    f"Page: {page_idx}\n"
+                    f"Boxes: {len(self.engine.all_boxes)}\n"
+                    f"Types: {type_counts}"
+                )
+
+        except Exception as e:
+            traceback.print_exc()
+            self.set_status(f"Detect error:\n{e}")
+
+    def on_preview(self, instance):
+        try:
+            if not self.engine.pdf_path:
+                self.set_status("Load PDF first.")
+                return
+
+            page_idx = self.current_page_idx()
+            patient = self.selected_patient()
+
+            if not patient or self.engine.df is None or self.engine.df.empty:
+                raw_img = self.engine.get_raw_preview_pixmap(
+                    page_idx=page_idx,
+                    preview_zoom=PREVIEW_SCALE
+                )
+
+                if self.engine.all_boxes:
+                    raw_img = self.engine.draw_boxes_on_image(
+                        raw_img,
+                        preview_zoom=PREVIEW_SCALE,
+                        show_labels=True
+                    )
+                    status_tail = f"Boxes: {len(self.engine.all_boxes)}"
+                else:
+                    status_tail = "No detection yet."
+
+                self.render_preview_image(raw_img)
+                self.set_status(
+                    f"Raw PDF preview.\n"
+                    f"Page: {page_idx}\n"
+                    f"{status_tail}"
+                )
+                return
+
+            self.apply_ui_settings_to_engine()
+
+            img = self.engine.get_preview_pixmap_with_boxes(
+                patient_name=patient,
+                page_idx=page_idx,
+                preview_zoom=PREVIEW_SCALE
+            )
+            self.render_preview_image(img)
+
+            self.set_status(
+                f"Preview rendered.\n"
+                f"Patient: {patient}\n"
+                f"Page: {page_idx}\n"
+                f"Boxes: {len(self.engine.all_boxes)}"
+            )
+        except Exception as e:
+            traceback.print_exc()
+            self.set_status(f"Preview error:\n{e}")
+
+    # --------------------------------------------------------
+    # Mapping
+    # --------------------------------------------------------
+    def on_assign_mapping(self, instance):
+        try:
+            column = self.column_spinner.text.strip()
+            if not column or column == "Select Column":
+                self.set_status("Please select a column.")
+                return
+
+            raw_ids = [x.strip() for x in self.box_ids_input.text.split(",") if x.strip()]
+            box_ids = []
+            for x in raw_ids:
+                if not x.isdigit():
+                    raise ValueError(f"Invalid Box ID: {x}")
+                box_ids.append(int(x))
+
+            if not box_ids:
+                raise ValueError("Please enter at least one Box ID.")
+
+            selected_rects = []
+            for b_id in box_ids:
+                if b_id < 0 or b_id >= len(self.engine.all_boxes):
+                    raise ValueError(f"Box ID {b_id} is out of range.")
+                selected_rects.append(self.engine.all_boxes[b_id])
+
+            selected_rects = sorted(selected_rects, key=lambda rr: (round(rr.y0, 3), rr.x0))
+            trigger = self.trigger_input.text.strip()
+            is_grid = bool(int(self.grid_flag_input.text.strip() or "0"))
+            grid_n = int(self.grid_n_input.text.strip() or "1")
+            page_idx = self.current_page_idx()
+
+            map_key = f"{column}_{trigger}"
+
+            def mapping_conflicts_with_selected(mapping_item, selected_rects):
+                existing_rects = self.engine._mapping_rect_list(mapping_item)
+                if not existing_rects:
+                    return False
+
+                for er in existing_rects:
+                    for sr in selected_rects:
+                        if self.engine._rects_refer_to_same_target(er, sr, tol=0.20):
+                            return True
+                return False
+
+            for k in list(self.engine.custom_mappings.keys()):
+                kept = []
+                for m in self.engine.custom_mappings[k]:
+                    if m.get("page", 0) != page_idx:
+                        kept.append(m)
+                        continue
+
+                    if mapping_conflicts_with_selected(m, selected_rects):
+                        continue
+
+                    kept.append(m)
+
+                if kept:
+                    self.engine.custom_mappings[k] = kept
+                else:
+                    del self.engine.custom_mappings[k]
+
+            if map_key not in self.engine.custom_mappings:
+                self.engine.custom_mappings[map_key] = []
+
+            self.engine.custom_mappings[map_key].append({
+                "column": column,
+                "trigger": trigger,
+                "rects": selected_rects,
+                "page": page_idx,
+                "g": is_grid,
+                "n": grid_n
+            })
+
+            self.set_status(
+                f"Mapping saved.\n"
+                f"Page: {page_idx}\n"
+                f"Column: {column}\n"
+                f"Boxes: {box_ids}"
+            )
+            self.on_preview(None)
+        except Exception as e:
+            self.set_status(f"Assign mapping error:\n{e}")
+
+    # --------------------------------------------------------
+    # Output generation
+    # --------------------------------------------------------
+    def on_generate_single(self, instance):
+        try:
+            if not self.engine.pdf_path:
+                self.set_status("Load PDF first.")
+                return
+
+            patient = self.selected_patient()
+            if not patient:
+                self.set_status("Select a patient first.")
+                return
+
+            page_idx = self.current_page_idx()
+            doc = self.engine.process_doc(patient, page_idx=page_idx)
+
+            safe_name = "".join(c if c.isalnum() or c in (" ", "-", "_") else "_" for c in patient).strip()
+            if not safe_name:
+                safe_name = "Unknown"
+
+            out_path = os.path.join(
+                os.path.dirname(self.engine.pdf_path),
+                f"Filled_{safe_name}_page_{page_idx + 1}.pdf"
+            )
+
+            doc.save(out_path)
+            doc.close()
+
+            self.set_status(f"Generated:\n{out_path}")
+        except Exception as e:
+            traceback.print_exc()
+            self.set_status(f"Generate single error:\n{e}")
+
+    def on_generate_batch(self, instance):
+        try:
+            if self.engine.df is None or self.engine.df.empty:
+                self.set_status("Load CSV/XLSX or Google Sheet first.")
+                return
+
+            if not self.engine.pdf_path:
+                self.set_status("Load PDF first.")
+                return
+
+            names = sorted(self.engine.df["_DISPLAY_NAME"].dropna().astype(str).unique())
+            out_dir = os.path.join(os.path.dirname(self.engine.pdf_path), "batch_output")
+            os.makedirs(out_dir, exist_ok=True)
+
+            success = 0
+            skipped = 0
+
+            for patient_name in names:
+                try:
+                    doc = self.engine.process_doc(patient_name, page_idx=self.current_page_idx())
+                    safe_p_name = "".join(c if c.isalnum() or c in (" ", "-", "_") else "_" for c in patient_name).strip()
+
+                    out_path = os.path.join(out_dir, f"Filled_{safe_p_name or 'Unknown'}.pdf")
+                    doc.save(out_path)
+                    doc.close()
+                    success += 1
+                except Exception:
+                    skipped += 1
+
+            self.set_status(f"Batch done.\nFolder: {out_dir}\nSuccess: {success} | Skipped: {skipped}")
+        except Exception as e:
+            traceback.print_exc()
+            self.set_status(f"Batch Error: {e}")
 
     # --------------------------------------------------------
     # UI helpers
