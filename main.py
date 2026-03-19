@@ -2268,42 +2268,67 @@ class MediMapProApp(App):
 
 
     def on_load_config(self, instance):
-        try:
-            path = self.get_selected_file()
-            if not path or not path.lower().endswith(".json"):
-                self.set_status("Please select a JSON config file.")
-                return
-
-            self.engine.load_config(path)
-            self.engine.all_boxes = []
-            self.engine.box_types = []
-            self.push_engine_settings_to_ui()
-            self.set_status(f"Config loaded:\n{os.path.basename(path)}")
-        except Exception as e:
-            self.set_status(f"Load config error:\n{e}")
-
+        content = FileChooserListView(
+            filters=["*.json"],
+            path=self.file_chooser.path
+        )
+        popup = Popup(title="Select Config File", content=content, size_hint=(0.9, 0.9))
+        content.bind(on_submit=lambda obj, sel, touch: self._handle_load_config_selection(sel, popup))
+        popup.open()
+    
+    def _handle_load_config_selection(self, selection, popup):
+        if selection:
+            try:
+                path = selection[0]
+                if not path.lower().endswith(".json"):
+                    self.set_status("Please select a JSON config file.")
+                    return
+    
+                self.engine.load_config(path)
+                self.engine.all_boxes = []
+                self.engine.box_types = []
+                self.push_engine_settings_to_ui()
+                self.set_status(f"Config loaded:\n{os.path.basename(path)}")
+            except Exception as e:
+                traceback.print_exc()
+                self.set_status(f"Load config error:\n{e}")
+        popup.dismiss()
+    
+    
     def on_merge_config(self, instance):
-        try:
-            path = self.get_selected_file()
-            if not path or not path.lower().endswith(".json"):
-                self.set_status("Please select a JSON config file.")
-                return
-
-            with open(path, "r", encoding="utf-8") as f:
-                incoming = json.load(f)
-
-            self.apply_ui_settings_to_engine()
-            self.engine.merge_config_into_current(
-                incoming_cfg=incoming,
-                keep_current_detection=True,
-                prefer="incoming"
-            )
-            self.engine.all_boxes = []
-            self.engine.box_types = []
-            self.push_engine_settings_to_ui()
-            self.set_status(f"Config merged:\n{os.path.basename(path)}")
-        except Exception as e:
-            self.set_status(f"Merge config error:\n{e}")
+        content = FileChooserListView(
+            filters=["*.json"],
+            path=self.file_chooser.path
+        )
+        popup = Popup(title="Select Config File to Merge", content=content, size_hint=(0.9, 0.9))
+        content.bind(on_submit=lambda obj, sel, touch: self._handle_merge_config_selection(sel, popup))
+        popup.open()
+    
+    def _handle_merge_config_selection(self, selection, popup):
+        if selection:
+            try:
+                path = selection[0]
+                if not path.lower().endswith(".json"):
+                    self.set_status("Please select a JSON config file.")
+                    return
+    
+                with open(path, "r", encoding="utf-8") as f:
+                    incoming = json.load(f)
+    
+                self.apply_ui_settings_to_engine()
+                self.engine.merge_config_into_current(
+                    incoming_cfg=incoming,
+                    keep_current_detection=True,
+                    prefer="incoming"
+                )
+                self.engine.all_boxes = []
+                self.engine.box_types = []
+                self.push_engine_settings_to_ui()
+                self.set_status(f"Config merged:\n{os.path.basename(path)}")
+            except Exception as e:
+                traceback.print_exc()
+                self.set_status(f"Merge config error:\n{e}")
+        popup.dismiss()
 
     def on_save_config(self, instance):
         try:
