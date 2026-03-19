@@ -25,7 +25,13 @@ if not hasattr(base64, "encodestring"):
     base64.encodestring = base64.encodebytes
 
 import cv2
-import fitz
+try:
+    import fitz
+    FITZ_AVAILABLE = True
+except Exception as e:
+    print(f"PyMuPDF import failed: {e}")
+    fitz = None
+    FITZ_AVAILABLE = False
 import numpy as np
 import pandas as pd
 
