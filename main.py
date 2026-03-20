@@ -25,13 +25,23 @@ if not hasattr(base64, "encodestring"):
     base64.encodestring = base64.encodebytes
 
 import cv2
+FITZ_AVAILABLE = False
+FITZ_BACKEND = None
+FITZ_IMPORT_ERROR = None
 try:
-    import fitz
+    import fitz as _fitz
+    fitz = _fitz
     FITZ_AVAILABLE = True
-except Exception as e:
-    print(f"PyMuPDF import failed: {e}")
-    fitz = None
-    FITZ_AVAILABLE = False
+    FITZ_BACKEND = "fitz"
+except Exception as e_fitzz:
+    try:
+        import pymupdf as _fitz
+        fitz = _fitz
+        FITZ_AVAILABLE = True
+        FITZ_BACKEND = "pymupdf"
+    except Exception as e_pymupdf:
+        fitz = None
+        FITZ_IMPORT_ERROR = f"fitz import error: {e_fitzz}; pymupdf import error: {e_pymupdf}"
 import numpy as np
 import pandas as pd
 
@@ -58,28 +68,12 @@ from kivy.uix.spinner import Spinner
 from kivy.uix.textinput import TextInput
 from kivy.utils import platform
 
-if platform == "android":
-    try:
-        from android.permissions import Permission, check_permission, request_permissions
-    except Exception:
-        Permission = None
-        check_permission = None
-        request_permissions = None
-else:
-    Permission = None
-    check_permission = None
-    request_permissions = None
-
 
 # ============================================================
 # Defaults
 # ============================================================
 APP_TITLE = "MediMap Pro: Intelligent Form Automator"
 CONFIG_FILENAME = "medimap_config.json"
-ANDROID_PERMISSION_LIST = [
-    "android.permission.READ_EXTERNAL_STORAGE",
-    "android.permission.WRITE_EXTERNAL_STORAGE",
-]
 if platform == "android":
     ZOOM = 2.4
     PREVIEW_SCALE = 1.35
@@ -268,6 +262,16 @@ class MediMapEngine:
         self.settings = dict(DEFAULTS)
         self.settings["C_Size"] = list(DEFAULTS["C_Size"])
 
+    def ensure_pdf_backend(self):
+        if fitz is None or not FITZ_AVAILABLE:
+            detail = FITZ_IMPORT_ERROR or "Unknown PyMuPDF import error."
+            raise RuntimeError(
+                "PDF engine is unavailable in this build. "
+                "PyMuPDF could not be imported on this device. "
+                f"Details: {detail}"
+            )
+        return fitz
+
     # --------------------------------------------------------
     # Data loading
     # --------------------------------------------------------
@@ -287,12 +291,8 @@ class MediMapEngine:
                     df = pd.read_csv(csv_url, dtype=str).fillna("")
                 except Exception as e:
                     raise ValueError(
-                        "Failed to load Google Sheet from URL.\n"
-                        "Check that:\n"
-                        "1. the sheet link is correct,\n"
-                        "2. the selected tab/gid is valid,\n"
-                        "3. the sheet is accessible for CSV export,\n"
-                        "4. the device has internet access.\n"
+                        "Failed to load Google Sheet from URL. "
+                        "Make sure the sheet/tab is accessible. "
                         f"Details: {e}"
                     )
             else:
@@ -334,6 +334,8 @@ class MediMapEngine:
 
     def load_pdf(self, path):
         """Set PDF path, validate file, and return page count."""
+        self.ensure_pdf_backend()
+
         if not path:
             raise ValueError("No PDF path provided.")
         if not os.path.exists(path):
@@ -354,6 +356,8 @@ class MediMapEngine:
         return total
 
     def total_pages(self):
+        if fitz is None or not FITZ_AVAILABLE:
+            return 1
         if not self.pdf_path or not os.path.exists(self.pdf_path):
             return 1
         try:
@@ -364,6 +368,7 @@ class MediMapEngine:
 
     def get_raw_preview_pixmap(self, page_idx=0, preview_zoom=1.5):
         """Render the raw loaded PDF page without filling or boxes."""
+        self.ensure_pdf_backend()
         if not self.pdf_path or not os.path.exists(self.pdf_path):
             raise FileNotFoundError("PDF path is missing or invalid.")
 
@@ -799,6 +804,7 @@ class MediMapEngine:
     # Main detection entry
     # --------------------------------------------------------
     def run_detection(self, page_idx=0):
+        self.ensure_pdf_backend()
         if not self.pdf_path or not os.path.exists(self.pdf_path):
             raise FileNotFoundError("PDF path is missing or invalid.")
 
@@ -968,19 +974,17 @@ class MediMapEngine:
                 0.60 <= aspect <= 1.60
             ):
                 for fx, fy, fw, fh in self.find_checkbox_rects_in_roi(bin_checks, x, y, w, h):
-                    self._append_box_unique(
-                        fitz.Rect(fx / ZOOM, fy / ZOOM, (fx + fw) / ZOOM, (fy + fh) / ZOOM),
-                        "check",
-                        iou_thresh=0.45
+                    self.all_boxes.append(
+                        fitz.Rect(fx / ZOOM, fy / ZOOM, (fx + fw) / ZOOM, (fy + fh) / ZOOM)
                     )
+                    self.box_types.append("check")
 
             elif max(w, h) <= int(red_roi_max_val) and min(w, h) >= checkbox_min_sz:
                 for fx, fy, fw, fh in self.find_checkbox_rects_in_roi(bin_checks, x, y, w, h):
-                    self._append_box_unique(
-                        fitz.Rect(fx / ZOOM, fy / ZOOM, (fx + fw) / ZOOM, (fy + fh) / ZOOM),
-                        "check",
-                        iou_thresh=0.45
+                    self.all_boxes.append(
+                        fitz.Rect(fx / ZOOM, fy / ZOOM, (fx + fw) / ZOOM, (fy + fh) / ZOOM)
                     )
+                    self.box_types.append("check")
 
         # --- field detection
         nf2, _, sf2, _ = cv2.connectedComponentsWithStats(bin_fields)
@@ -1318,17 +1322,16 @@ class MediMapEngine:
     # Document processing
     # --------------------------------------------------------
     def process_doc(self, patient_name, page_idx=0):
+        self.ensure_pdf_backend()
         if self.df is None or self.df.empty:
             raise ValueError("DataFrame is empty.")
 
         matches = self.df[self.df["_DISPLAY_NAME"] == patient_name]
         if matches.empty:
             raise ValueError(f"Patient not found: {patient_name}")
-
         if len(matches) > 1:
             raise ValueError(
-                f"Multiple records found for '{patient_name}'. "
-                "Please make the display name unique or use a unique identifier."
+                f"Multiple records found for '{patient_name}'. Please make the display name unique or use a unique identifier."
             )
 
         row = matches.iloc[0]
@@ -1680,6 +1683,7 @@ class MediMapEngine:
         return cfg
 
     def get_preview_pixmap_with_boxes(self, patient_name, page_idx=0, preview_zoom=1.5):
+        self.ensure_pdf_backend()
         if not self.all_boxes:
             self.run_detection(page_idx=page_idx)
 
@@ -1745,329 +1749,389 @@ class MediMapProApp(App):
         self.title = "MediMap Pro"
         self.engine = MediMapEngine()
 
-        is_mobile = (platform == "android")
-        pad = dp(10) if is_mobile else dp(10)
-        gap = dp(8) if is_mobile else dp(8)
-        section_gap = dp(10) if is_mobile else dp(8)
-        row_h = dp(48) if is_mobile else dp(44)
-        title_h = dp(28) if is_mobile else dp(24)
-        status_h = dp(110) if is_mobile else dp(82)
-        preview_title_h = dp(30) if is_mobile else dp(24)
-        preview_hint_h = dp(30) if is_mobile else dp(24)
+        root = BoxLayout(orientation="horizontal", spacing=10, padding=10)
 
-        root = BoxLayout(
-            orientation="vertical" if is_mobile else "horizontal",
-            spacing=gap,
-            padding=pad
-        )
-
-        controls_wrap = BoxLayout(
+        # =========================================
+        # LEFT PANEL WRAP
+        # =========================================
+        left_wrap = BoxLayout(
             orientation="vertical",
-            size_hint=(1, 0.58) if is_mobile else (0.42, 1)
+            size_hint_x=0.40
         )
 
-        controls_scroll = ScrollView(
+        left_scroll = ScrollView(
             do_scroll_x=False,
             do_scroll_y=True,
-            bar_width=dp(8),
+            bar_width=10,
             scroll_type=["bars", "content"]
         )
 
-        controls = GridLayout(
+        left = GridLayout(
             cols=1,
-            spacing=section_gap,
+            spacing=8,
             size_hint_y=None,
-            padding=(0, 0, dp(4), 0)
+            padding=(0, 0, 4, 0)
         )
-        controls.bind(minimum_height=controls.setter("height"))
+        left.bind(minimum_height=left.setter("height"))
 
-        def make_title(text):
-            lbl = Label(
-                text=f"[b]{text}[/b]",
-                markup=True,
-                size_hint_y=None,
-                height=title_h,
-                halign="left",
-                valign="middle",
-                font_size=dp(16) if is_mobile else dp(14)
-            )
-            lbl.bind(size=self._sync_label_text_size)
-            return lbl
-
-        def make_button(text):
-            return Button(
-                text=text,
-                size_hint_y=None,
-                height=row_h,
-                font_size=dp(15) if is_mobile else dp(13)
-            )
-
-        def make_input(default="", hint="", multiline=False, input_filter=None):
-            kwargs = dict(
-                text=str(default),
-                hint_text=hint,
-                multiline=multiline,
-                size_hint_y=None,
-                height=row_h,
-                font_size=dp(15) if is_mobile else dp(13),
-                write_tab=False
-            )
-            if input_filter is not None:
-                kwargs["input_filter"] = input_filter
-            return TextInput(**kwargs)
-
-        def make_spinner(text, values=()):
-            return Spinner(
-                text=text,
-                values=list(values),
-                size_hint_y=None,
-                height=row_h,
-                font_size=dp(15) if is_mobile else dp(13)
-            )
-
-        # Status
+        # -----------------------------
+        # Status section
+        # -----------------------------
         status_box = BoxLayout(
             orientation="vertical",
             size_hint_y=None,
-            height=status_h,
-            spacing=dp(4)
+            height=82,
+            spacing=2
         )
+
         status_title = Label(
             text="[b]MediMap Pro[/b]",
             markup=True,
             size_hint_y=None,
-            height=dp(34) if is_mobile else dp(30),
+            height=30,
             halign="left",
-            valign="middle",
-            font_size=dp(18) if is_mobile else dp(16)
+            valign="middle"
         )
         status_title.bind(size=self._sync_label_text_size)
         status_box.add_widget(status_title)
 
         self.status_lbl = Label(
-            text=("Tap Grant File Access first, then load CSV/XLSX, Google Sheet URL, and PDF." if is_mobile else "Load CSV/XLSX, Google Sheet URL, and PDF to begin"),
+            text="Load CSV/XLSX, Google Sheet URL, and PDF to begin",
             size_hint_y=None,
-            height=status_h - (dp(38) if is_mobile else dp(32)),
+            height=50,
             halign="left",
-            valign="top",
-            font_size=dp(14) if is_mobile else dp(13)
+            valign="top"
         )
         self.status_lbl.bind(size=self._sync_label_text_size)
         status_box.add_widget(self.status_lbl)
-        controls.add_widget(status_box)
 
-        # Data & files
-        controls.add_widget(make_title("Data & Files"))
-        file_cols = 2 if is_mobile else 3
-        file_rows = 3 if is_mobile else 2
-        file_grid = GridLayout(cols=file_cols, size_hint_y=None, height=file_rows * row_h + (file_rows - 1) * gap, spacing=gap)
+        left.add_widget(status_box)
 
-        self.btn_load_pdf = make_button("Load PDF")
+        # -----------------------------
+        # Data / files title
+        # -----------------------------
+        files_title = Label(
+            text="[b]Data & Files[/b]",
+            markup=True,
+            size_hint_y=None,
+            height=24,
+            halign="left",
+            valign="middle"
+        )
+        files_title.bind(size=self._sync_label_text_size)
+        left.add_widget(files_title)
+
+        # -----------------------------
+        # File action buttons row 1
+        # -----------------------------
+        file_btn_row_1 = GridLayout(
+            cols=3,
+            size_hint_y=None,
+            height=44,
+            spacing=6
+        )
+
+        self.btn_load_pdf = Button(text="Load PDF")
         self.btn_load_pdf.bind(on_release=self.on_load_pdf)
-        file_grid.add_widget(self.btn_load_pdf)
+        file_btn_row_1.add_widget(self.btn_load_pdf)
 
-        self.btn_load_csv = make_button("Load CSV/XLSX")
+        self.btn_load_csv = Button(text="Load CSV/XLSX")
         self.btn_load_csv.bind(on_release=self.on_load_csv)
-        file_grid.add_widget(self.btn_load_csv)
+        file_btn_row_1.add_widget(self.btn_load_csv)
 
-        self.btn_load_gsheet = make_button("Load GSheet URL")
+        self.btn_load_gsheet = Button(text="Load Google Sheet URL")
         self.btn_load_gsheet.bind(on_release=self.on_load_gsheet_url)
-        file_grid.add_widget(self.btn_load_gsheet)
+        file_btn_row_1.add_widget(self.btn_load_gsheet)
 
-        self.btn_load_cfg = make_button("Load Config")
+        left.add_widget(file_btn_row_1)
+
+        # -----------------------------
+        # File action buttons row 2
+        # -----------------------------
+        file_btn_row_2 = GridLayout(
+            cols=3,
+            size_hint_y=None,
+            height=44,
+            spacing=6
+        )
+
+        self.btn_load_cfg = Button(text="Load Config")
         self.btn_load_cfg.bind(on_release=self.on_load_config)
-        file_grid.add_widget(self.btn_load_cfg)
+        file_btn_row_2.add_widget(self.btn_load_cfg)
 
-        self.btn_merge_cfg = make_button("Merge Mappings")
+        self.btn_merge_cfg = Button(text="Merge Config")
         self.btn_merge_cfg.bind(on_release=self.on_merge_config)
-        file_grid.add_widget(self.btn_merge_cfg)
+        file_btn_row_2.add_widget(self.btn_merge_cfg)
 
-        self.btn_save_cfg = make_button("Save Config")
+        self.btn_save_cfg = Button(text="Save Config")
         self.btn_save_cfg.bind(on_release=self.on_save_config)
-        file_grid.add_widget(self.btn_save_cfg)
+        file_btn_row_2.add_widget(self.btn_save_cfg)
 
-        controls.add_widget(file_grid)
+        left.add_widget(file_btn_row_2)
 
-        # Navigation
-        controls.add_widget(make_title("Navigation"))
+        # -----------------------------
+        # Navigation title
+        # -----------------------------
+        nav_title = Label(
+            text="[b]Navigation[/b]",
+            markup=True,
+            size_hint_y=None,
+            height=24,
+            halign="left",
+            valign="middle"
+        )
+        nav_title.bind(size=self._sync_label_text_size)
+        left.add_widget(nav_title)
 
-        self.patient_spinner = make_spinner("Select Patient")
+        # -----------------------------
+        # Navigation row 1
+        # -----------------------------
+        nav_row_1 = BoxLayout(size_hint_y=None, height=44, spacing=6)
+
+        self.patient_spinner = Spinner(
+            text="Select Patient",
+            values=[],
+            size_hint_x=0.56
+        )
         self.patient_spinner.bind(text=self.on_patient_change)
-        controls.add_widget(self.patient_spinner)
+        nav_row_1.add_widget(self.patient_spinner)
 
-        if is_mobile:
-            nav_row_mobile = GridLayout(cols=3, size_hint_y=None, height=row_h, spacing=gap)
-            self.page_input = make_input("0", "Page", multiline=False, input_filter="int")
-            self.btn_prev = make_button("Prev")
-            self.btn_next = make_button("Next")
-            self.btn_prev.bind(on_release=self.on_prev_page)
-            self.btn_next.bind(on_release=self.on_next_page)
-            nav_row_mobile.add_widget(self.page_input)
-            nav_row_mobile.add_widget(self.btn_prev)
-            nav_row_mobile.add_widget(self.btn_next)
-            controls.add_widget(nav_row_mobile)
-        else:
-            nav_row = BoxLayout(size_hint_y=None, height=row_h, spacing=gap)
-            self.page_input = make_input("0", "Page", multiline=False, input_filter="int")
-            self.page_input.size_hint_x = 0.18
-            self.btn_prev = make_button("Prev")
-            self.btn_prev.size_hint_x = 0.20
-            self.btn_next = make_button("Next")
-            self.btn_next.size_hint_x = 0.20
-            self.btn_prev.bind(on_release=self.on_prev_page)
-            self.btn_next.bind(on_release=self.on_next_page)
-            nav_row.add_widget(self.page_input)
-            nav_row.add_widget(self.btn_prev)
-            nav_row.add_widget(self.btn_next)
-            controls.add_widget(nav_row)
+        self.page_input = TextInput(
+            text="0",
+            multiline=False,
+            hint_text="Page",
+            size_hint_x=0.12
+        )
+        nav_row_1.add_widget(self.page_input)
 
-        nav_actions = GridLayout(cols=2, size_hint_y=None, height=row_h, spacing=gap)
-        self.btn_detect = make_button("Run Detect")
+        self.btn_prev = Button(text="Prev", size_hint_x=0.16)
+        self.btn_prev.bind(on_release=self.on_prev_page)
+        nav_row_1.add_widget(self.btn_prev)
+
+        self.btn_next = Button(text="Next", size_hint_x=0.16)
+        self.btn_next.bind(on_release=self.on_next_page)
+        nav_row_1.add_widget(self.btn_next)
+
+        left.add_widget(nav_row_1)
+
+        # -----------------------------
+        # Navigation row 2
+        # -----------------------------
+        nav_row_2 = GridLayout(cols=2, size_hint_y=None, height=44, spacing=6)
+
+        self.btn_detect = Button(text="Run Detect")
         self.btn_detect.bind(on_release=self.on_run_detect)
-        nav_actions.add_widget(self.btn_detect)
+        nav_row_2.add_widget(self.btn_detect)
 
-        self.btn_preview = make_button("Refresh Preview")
+        self.btn_preview = Button(text="Refresh Preview")
         self.btn_preview.bind(on_release=self.on_preview)
-        nav_actions.add_widget(self.btn_preview)
-        controls.add_widget(nav_actions)
+        nav_row_2.add_widget(self.btn_preview)
 
-        # Detection settings
-        controls.add_widget(make_title("Detection Settings"))
-        settings_cols = 2 if is_mobile else 3
-        settings_items = []
+        left.add_widget(nav_row_2)
 
-        self.f_area = make_input(DEFAULTS["F_Area"], "F_Area", input_filter="int")
-        self.f_minw = make_input(DEFAULTS["F_MinW"], "F_MinW", input_filter="int")
-        self.f_minh = make_input(DEFAULTS["F_MinH"], "F_MinH", input_filter="int")
-        self.f_close = make_input(DEFAULTS["F_Close"], "F_Close", input_filter="int")
-        self.line_minw = make_input(DEFAULTS["Line_MinW"], "Line_MinW", input_filter="int")
-        self.line_maxw = make_input(DEFAULTS["Line_MaxW"], "Line_MaxW", input_filter="int")
-        self.c_strict = make_input(DEFAULTS["C_Strict"], "C_Strict", input_filter="int")
-        self.c_size_min = make_input(DEFAULTS["C_Size"][0], "C_Size_Min", input_filter="int")
-        self.c_size_max = make_input(DEFAULTS["C_Size"][1], "C_Size_Max", input_filter="int")
-        self.c_border = make_input(DEFAULTS["C_Border"], "C_Border")
-        self.c_inner = make_input(DEFAULTS["C_Inner"], "C_Inner")
-        self.roi_max = make_input(DEFAULTS["ROI_Max"], "ROI_Max", input_filter="int")
-        self.c_open = make_input(DEFAULTS["C_Open"], "C_Open", input_filter="int")
-        self.c_close = make_input(DEFAULTS["C_Close"], "C_Close", input_filter="int")
-        self.c_band = make_input(DEFAULTS["C_BandPct"], "C_BandPct")
-        self.c_aspect = make_input(DEFAULTS["C_AspectTol"], "C_AspectTol")
-        self.ext_low = make_input(DEFAULTS["Ext_Low"], "Ext_Low")
-        self.ext_high = make_input(DEFAULTS["Ext_High"], "Ext_High")
-        self.c_fill = make_input(DEFAULTS["C_FillMin"], "C_FillMin")
-        self.c_eps = make_input(DEFAULTS["C_Eps"], "C_Eps")
-        self.use_extent = make_input("0", "Use_Extent 0/1", input_filter="int")
+        # -----------------------------
+        # Detection Settings title
+        # -----------------------------
+        settings_title = Label(
+            text="[b]Detection Settings[/b]",
+            markup=True,
+            size_hint_y=None,
+            height=24,
+            halign="left",
+            valign="middle"
+        )
+        settings_title.bind(size=self._sync_label_text_size)
+        left.add_widget(settings_title)
 
-        settings_items.extend([
-            self.f_area, self.f_minw, self.f_minh,
-            self.f_close, self.line_minw, self.line_maxw,
-            self.c_strict, self.c_size_min, self.c_size_max,
-            self.c_border, self.c_inner, self.roi_max,
-            self.c_open, self.c_close, self.c_band,
-            self.c_aspect, self.ext_low, self.ext_high,
-            self.c_fill, self.c_eps, self.use_extent,
-        ])
+        # A
+        ctl2 = GridLayout(cols=3, size_hint_y=None, height=44, spacing=6)
+        self.f_area = TextInput(text=str(DEFAULTS["F_Area"]), multiline=False, hint_text="F_Area")
+        self.f_minw = TextInput(text=str(DEFAULTS["F_MinW"]), multiline=False, hint_text="F_MinW")
+        self.f_minh = TextInput(text=str(DEFAULTS["F_MinH"]), multiline=False, hint_text="F_MinH")
+        ctl2.add_widget(self.f_area)
+        ctl2.add_widget(self.f_minw)
+        ctl2.add_widget(self.f_minh)
+        left.add_widget(ctl2)
 
-        settings_rows = (len(settings_items) + settings_cols - 1) // settings_cols
-        settings_grid = GridLayout(cols=settings_cols, size_hint_y=None, height=settings_rows * row_h + max(settings_rows - 1, 0) * gap, spacing=gap)
-        for widget in settings_items:
-            settings_grid.add_widget(widget)
-        controls.add_widget(settings_grid)
+        # B
+        ctl2b = GridLayout(cols=3, size_hint_y=None, height=44, spacing=6)
+        self.f_close = TextInput(text=str(DEFAULTS["F_Close"]), multiline=False, hint_text="F_Close")
+        self.line_minw = TextInput(text=str(DEFAULTS["Line_MinW"]), multiline=False, hint_text="Line_MinW")
+        self.line_maxw = TextInput(text=str(DEFAULTS["Line_MaxW"]), multiline=False, hint_text="Line_MaxW")
+        ctl2b.add_widget(self.f_close)
+        ctl2b.add_widget(self.line_minw)
+        ctl2b.add_widget(self.line_maxw)
+        left.add_widget(ctl2b)
 
-        # Mapping
-        controls.add_widget(make_title("Mapping"))
-        if is_mobile:
-            self.box_ids_input = make_input("", "Box IDs")
-            controls.add_widget(self.box_ids_input)
-            self.column_spinner = make_spinner("Select Column")
-            controls.add_widget(self.column_spinner)
-            self.trigger_input = make_input("", "Trigger")
-            controls.add_widget(self.trigger_input)
-            map_grid = GridLayout(cols=3, size_hint_y=None, height=row_h, spacing=gap)
-            self.grid_flag_input = make_input("0", "Grid", input_filter="int")
-            self.grid_n_input = make_input("1", "Grid N", input_filter="int")
-            self.btn_assign = make_button("Assign")
-            self.btn_assign.bind(on_release=self.on_assign_mapping)
-            map_grid.add_widget(self.grid_flag_input)
-            map_grid.add_widget(self.grid_n_input)
-            map_grid.add_widget(self.btn_assign)
-            controls.add_widget(map_grid)
-        else:
-            map_row_1 = BoxLayout(size_hint_y=None, height=row_h, spacing=gap)
-            self.box_ids_input = make_input("", "Box IDs")
-            self.box_ids_input.size_hint_x = 0.24
-            map_row_1.add_widget(self.box_ids_input)
-            self.column_spinner = make_spinner("Select Column")
-            self.column_spinner.size_hint_x = 0.46
-            map_row_1.add_widget(self.column_spinner)
-            self.trigger_input = make_input("", "Trigger")
-            self.trigger_input.size_hint_x = 0.30
-            map_row_1.add_widget(self.trigger_input)
-            controls.add_widget(map_row_1)
-            map_row_2 = BoxLayout(size_hint_y=None, height=row_h, spacing=gap)
-            self.grid_flag_input = make_input("0", "Grid 0/1", input_filter="int")
-            self.grid_flag_input.size_hint_x = 0.18
-            map_row_2.add_widget(self.grid_flag_input)
-            self.grid_n_input = make_input("1", "Grid N", input_filter="int")
-            self.grid_n_input.size_hint_x = 0.18
-            map_row_2.add_widget(self.grid_n_input)
-            self.btn_assign = make_button("Assign Mapping")
-            self.btn_assign.size_hint_x = 0.64
-            self.btn_assign.bind(on_release=self.on_assign_mapping)
-            map_row_2.add_widget(self.btn_assign)
-            controls.add_widget(map_row_2)
+        # C
+        ctl3 = GridLayout(cols=3, size_hint_y=None, height=44, spacing=6)
+        self.c_strict = TextInput(text=str(DEFAULTS["C_Strict"]), multiline=False, hint_text="C_Strict")
+        self.c_size_min = TextInput(text=str(DEFAULTS["C_Size"][0]), multiline=False, hint_text="C_Size_Min")
+        self.c_size_max = TextInput(text=str(DEFAULTS["C_Size"][1]), multiline=False, hint_text="C_Size_Max")
+        ctl3.add_widget(self.c_strict)
+        ctl3.add_widget(self.c_size_min)
+        ctl3.add_widget(self.c_size_max)
+        left.add_widget(ctl3)
 
-        if is_mobile:
-            self.btn_assign.text = "Assign Mapping"
+        # D
+        ctl3b = GridLayout(cols=3, size_hint_y=None, height=44, spacing=6)
+        self.c_border = TextInput(text=str(DEFAULTS["C_Border"]), multiline=False, hint_text="C_Border")
+        self.c_inner = TextInput(text=str(DEFAULTS["C_Inner"]), multiline=False, hint_text="C_Inner")
+        self.roi_max = TextInput(text=str(DEFAULTS["ROI_Max"]), multiline=False, hint_text="ROI_Max")
+        ctl3b.add_widget(self.c_border)
+        ctl3b.add_widget(self.c_inner)
+        ctl3b.add_widget(self.roi_max)
+        left.add_widget(ctl3b)
 
-        # Output
-        controls.add_widget(make_title("Output"))
-        output_grid = GridLayout(cols=1 if is_mobile else 2, size_hint_y=None, height=(2 * row_h + gap) if is_mobile else row_h, spacing=gap)
-        self.btn_generate_one = make_button("Generate Single PDF")
+        # E
+        ctl4 = GridLayout(cols=3, size_hint_y=None, height=44, spacing=6)
+        self.c_open = TextInput(text=str(DEFAULTS["C_Open"]), multiline=False, hint_text="C_Open")
+        self.c_close = TextInput(text=str(DEFAULTS["C_Close"]), multiline=False, hint_text="C_Close")
+        self.c_band = TextInput(text=str(DEFAULTS["C_BandPct"]), multiline=False, hint_text="C_BandPct")
+        ctl4.add_widget(self.c_open)
+        ctl4.add_widget(self.c_close)
+        ctl4.add_widget(self.c_band)
+        left.add_widget(ctl4)
+
+        # F
+        ctl4b = GridLayout(cols=3, size_hint_y=None, height=44, spacing=6)
+        self.c_aspect = TextInput(text=str(DEFAULTS["C_AspectTol"]), multiline=False, hint_text="C_AspectTol")
+        self.ext_low = TextInput(text=str(DEFAULTS["Ext_Low"]), multiline=False, hint_text="Ext_Low")
+        self.ext_high = TextInput(text=str(DEFAULTS["Ext_High"]), multiline=False, hint_text="Ext_High")
+        ctl4b.add_widget(self.c_aspect)
+        ctl4b.add_widget(self.ext_low)
+        ctl4b.add_widget(self.ext_high)
+        left.add_widget(ctl4b)
+
+        # G
+        ctl4c = GridLayout(cols=3, size_hint_y=None, height=44, spacing=6)
+        self.c_fill = TextInput(text=str(DEFAULTS["C_FillMin"]), multiline=False, hint_text="C_FillMin")
+        self.c_eps = TextInput(text=str(DEFAULTS["C_Eps"]), multiline=False, hint_text="C_Eps")
+        self.use_extent = TextInput(text="0", multiline=False, hint_text="Use_Extent 0/1")
+        ctl4c.add_widget(self.c_fill)
+        ctl4c.add_widget(self.c_eps)
+        ctl4c.add_widget(self.use_extent)
+        left.add_widget(ctl4c)
+
+        # -----------------------------
+        # Mapping title
+        # -----------------------------
+        mapping_title = Label(
+            text="[b]Mapping[/b]",
+            markup=True,
+            size_hint_y=None,
+            height=24,
+            halign="left",
+            valign="middle"
+        )
+        mapping_title.bind(size=self._sync_label_text_size)
+        left.add_widget(mapping_title)
+
+        map_row_1 = BoxLayout(size_hint_y=None, height=44, spacing=6)
+
+        self.box_ids_input = TextInput(
+            multiline=False,
+            hint_text="Box IDs",
+            size_hint_x=0.24
+        )
+        map_row_1.add_widget(self.box_ids_input)
+
+        self.column_spinner = Spinner(
+            text="Select Column",
+            values=[],
+            size_hint_x=0.46
+        )
+        map_row_1.add_widget(self.column_spinner)
+
+        self.trigger_input = TextInput(
+            multiline=False,
+            hint_text="Trigger",
+            size_hint_x=0.30
+        )
+        map_row_1.add_widget(self.trigger_input)
+
+        left.add_widget(map_row_1)
+
+        map_row_2 = BoxLayout(size_hint_y=None, height=44, spacing=6)
+
+        self.grid_flag_input = TextInput(
+            text="0",
+            multiline=False,
+            hint_text="Grid 0/1",
+            size_hint_x=0.18
+        )
+        map_row_2.add_widget(self.grid_flag_input)
+
+        self.grid_n_input = TextInput(
+            text="1",
+            multiline=False,
+            hint_text="Grid N",
+            size_hint_x=0.18
+        )
+        map_row_2.add_widget(self.grid_n_input)
+
+        self.btn_assign = Button(
+            text="Assign Mapping",
+            size_hint_x=0.64
+        )
+        self.btn_assign.bind(on_release=self.on_assign_mapping)
+        map_row_2.add_widget(self.btn_assign)
+
+        left.add_widget(map_row_2)
+
+        # -----------------------------
+        # Output title
+        # -----------------------------
+        output_title = Label(
+            text="[b]Output[/b]",
+            markup=True,
+            size_hint_y=None,
+            height=24,
+            halign="left",
+            valign="middle"
+        )
+        output_title.bind(size=self._sync_label_text_size)
+        left.add_widget(output_title)
+
+        out_row = GridLayout(cols=2, size_hint_y=None, height=46, spacing=6)
+
+        self.btn_generate_one = Button(text="Generate Single PDF")
         self.btn_generate_one.bind(on_release=self.on_generate_single)
-        output_grid.add_widget(self.btn_generate_one)
-        self.btn_generate_batch = make_button("Generate Batch PDFs")
+        out_row.add_widget(self.btn_generate_one)
+
+        self.btn_generate_batch = Button(text="Generate Batch PDFs")
         self.btn_generate_batch.bind(on_release=self.on_generate_batch)
-        output_grid.add_widget(self.btn_generate_batch)
-        controls.add_widget(output_grid)
+        out_row.add_widget(self.btn_generate_batch)
 
-        controls_scroll.add_widget(controls)
-        controls_wrap.add_widget(controls_scroll)
+        left.add_widget(out_row)
 
-        # Preview panel
-        preview_panel = BoxLayout(
+        left_scroll.add_widget(left)
+        left_wrap.add_widget(left_scroll)
+
+        # =========================================
+        # RIGHT PANEL
+        # =========================================
+        right = BoxLayout(
             orientation="vertical",
-            size_hint=(1, 0.42) if is_mobile else (0.58, 1),
-            spacing=gap
+            size_hint_x=0.60,
+            spacing=6
         )
 
         preview_title = Label(
             text="[b]Preview[/b]",
             markup=True,
             size_hint_y=None,
-            height=preview_title_h,
+            height=24,
             halign="left",
-            valign="middle",
-            font_size=dp(16) if is_mobile else dp(14)
+            valign="middle"
         )
         preview_title.bind(size=self._sync_label_text_size)
-        preview_panel.add_widget(preview_title)
-
-        preview_hint = Label(
-            text="Pinch/scroll to inspect template and detected boxes" if is_mobile else "Scroll to inspect the preview",
-            size_hint_y=None,
-            height=preview_hint_h,
-            halign="left",
-            valign="middle",
-            font_size=dp(13) if is_mobile else dp(12)
-        )
-        preview_hint.bind(size=self._sync_label_text_size)
-        preview_panel.add_widget(preview_hint)
+        right.add_widget(preview_title)
 
         preview_wrap = ScrollView(
             do_scroll_x=True,
             do_scroll_y=True,
-            bar_width=dp(8),
+            bar_width=10,
             scroll_type=["bars", "content"]
         )
 
@@ -2077,105 +2141,17 @@ class MediMapProApp(App):
             keep_ratio=True
         )
         self.preview.bind(texture=self._update_preview_size)
-        preview_wrap.add_widget(self.preview)
-        preview_panel.add_widget(preview_wrap)
 
-        root.add_widget(controls_wrap)
-        root.add_widget(preview_panel)
+        preview_wrap.add_widget(self.preview)
+        right.add_widget(preview_wrap)
+
+        root.add_widget(left_wrap)
+        root.add_widget(right)
 
         return root
     # --------------------------------------------------------
     # UI helpers
     # --------------------------------------------------------
-    def on_start(self):
-        if platform == "android":
-            Clock.schedule_once(lambda dt: self.ensure_android_permissions(show_status=False), 0.2)
-
-    def ensure_android_permissions(self, show_status=True):
-        if platform != "android":
-            return True
-
-        if check_permission is None or request_permissions is None:
-            if show_status:
-                self.set_status(
-                    "Android permission helper unavailable.\n"
-                    "Try placing files in Download and reopen the app."
-                )
-            return False
-
-        missing = [p for p in ANDROID_PERMISSION_LIST if not check_permission(p)]
-        if not missing:
-            return True
-
-        def _callback(permissions, results):
-            granted = all(bool(x) for x in results)
-            if granted:
-                self.set_status(
-                    "Storage permissions granted.\n"
-                    "You can now load PDF, CSV/XLSX, and config files."
-                )
-            else:
-                self.set_status(
-                    "Storage permission was not fully granted.\n"
-                    "PDF browsing may fail on Android.\n"
-                    "Try allowing Files and media in Android app settings."
-                )
-
-        try:
-            request_permissions(missing, _callback)
-            if show_status:
-                self.set_status(
-                    "Requesting storage access...\n"
-                    "If prompted, allow file access to load PDFs."
-                )
-        except Exception as e:
-            if show_status:
-                self.set_status(f"Permission request failed:\n{e}")
-            return False
-
-        return False
-
-    def _candidate_file_paths(self):
-        out_dir = self.get_app_output_dir()
-        home_dir = os.path.expanduser("~")
-        paths = [
-            "/storage/emulated/0/Download",
-            "/sdcard/Download",
-            "/storage/self/primary/Download",
-            "/storage/emulated/0/Documents",
-            "/sdcard/Documents",
-            out_dir,
-            home_dir,
-        ]
-        found = []
-        for p in paths:
-            if p and os.path.isdir(p) and p not in found:
-                found.append(p)
-        return found
-
-    def get_default_file_path(self):
-        """Default browsing location for file pickers."""
-        if platform == "android":
-            candidates = self._candidate_file_paths()
-            if candidates:
-                return candidates[0]
-            return self.get_app_output_dir()
-
-        return os.path.expanduser("~")
-
-    def _open_filechooser_popup(self, title, filters, submit_callback):
-        if platform == "android":
-            self.ensure_android_permissions(show_status=True)
-
-        chooser = FileChooserListView(
-            filters=filters,
-            path=self.get_default_file_path()
-        )
-        popup = Popup(title=title, content=chooser, size_hint=(0.95, 0.95) if platform == "android" else (0.9, 0.9))
-        chooser.bind(on_submit=lambda obj, sel, touch: submit_callback(sel, popup))
-        popup.open()
-        return popup
-
     def _sync_label_text_size(self, instance, value):
         instance.text_size = value
 
@@ -2186,23 +2162,15 @@ class MediMapProApp(App):
     def set_status(self, text):
         self.status_lbl.text = text
 
+    def pdf_backend_status_text(self):
+        if FITZ_AVAILABLE:
+            return f"PDF backend ready: {FITZ_BACKEND}"
+        return f"PDF backend unavailable: {FITZ_IMPORT_ERROR or 'PyMuPDF import failed.'}"
+
     def get_selected_file(self):
-        """Legacy helper kept only for compatibility with older code paths."""
-        return None
-
-    def get_app_output_dir(self):
-        """Return a writable app-controlled directory for generated files/configs."""
-        base_dir = getattr(self, "user_data_dir", None)
-
-        if not base_dir:
-            if platform == "android":
-                base_dir = "/sdcard/Download/MediMapPro"
-            else:
-                base_dir = os.path.join(os.path.expanduser("~"), "MediMapPro")
-
-        out_dir = os.path.join(base_dir, "output")
-        os.makedirs(out_dir, exist_ok=True)
-        return out_dir
+        if not self.file_chooser.selection:
+            return None
+        return self.file_chooser.selection[0]
 
     def current_page_idx(self):
         try:
@@ -2247,7 +2215,9 @@ class MediMapProApp(App):
         except Exception as e:
             raise ValueError(f"Invalid settings input: {e}")
 
-
+    def get_default_file_path(self):
+        return "/sdcard/Download" if platform == "android" else os.path.expanduser("~")    
+        
     def push_engine_settings_to_ui(self):
         s = self.engine.settings
         self.f_area.text = str(s["F_Area"])
@@ -2315,11 +2285,13 @@ class MediMapProApp(App):
     # File loading
     # --------------------------------------------------------
     def on_load_csv(self, instance):
-        self._open_filechooser_popup(
-            title="Select CSV/XLSX File",
+        content = FileChooserListView(
             filters=["*.csv", "*.xlsx", "*.xls"],
-            submit_callback=self._handle_csv_selection
+            path=self.get_default_file_path()
         )
+        popup = Popup(title="Select CSV/XLSX File", content=content, size_hint=(0.9, 0.9))
+        content.bind(on_submit=lambda obj, sel, touch: self._handle_csv_selection(sel, popup))
+        popup.open()
     
     def _handle_csv_selection(self, selection, popup):
         if selection:
@@ -2342,11 +2314,13 @@ class MediMapProApp(App):
 
 
     def on_load_config(self, instance):
-        self._open_filechooser_popup(
-            title="Select Config File",
+        content = FileChooserListView(
             filters=["*.json"],
-            submit_callback=self._handle_load_config_selection
+            path=self.get_default_file_path()
         )
+        popup = Popup(title="Select Config File", content=content, size_hint=(0.9, 0.9))
+        content.bind(on_submit=lambda obj, sel, touch: self._handle_load_config_selection(sel, popup))
+        popup.open()
     
     def _handle_load_config_selection(self, selection, popup):
         if selection:
@@ -2404,15 +2378,18 @@ class MediMapProApp(App):
 
     def on_save_config(self, instance):
         try:
+            if not self.engine.pdf_path:
+                self.set_status("Load a PDF first before saving config.")
+                return
+
             self.apply_ui_settings_to_engine()
-
-            out_dir = self.get_app_output_dir()
-            out_path = os.path.join(out_dir, CONFIG_FILENAME)
-
+            out_path = os.path.join(
+                os.path.dirname(self.engine.pdf_path),
+                "medimap_config.json"
+            )
             self.engine.save_config(out_path)
             self.set_status(f"Config saved:\n{out_path}")
         except Exception as e:
-            traceback.print_exc()
             self.set_status(f"Save config error:\n{e}")
 
     # --------------------------------------------------------
@@ -2627,9 +2604,15 @@ class MediMapProApp(App):
             page_idx = self.current_page_idx()
             doc = self.engine.process_doc(patient, page_idx=page_idx)
 
-            out_dir = self.get_app_output_dir()
-            filename = f"Filled_{safe_name(patient)}_page_{page_idx + 1}.pdf"
-            out_path = os.path.join(out_dir, filename)
+            safe_name = "".join(c if c.isalnum() or c in (" ", "-", "_") else "_" for c in patient).strip()
+            if not safe_name:
+                safe_name = "Unknown"
+
+            out_path = os.path.join(
+                os.path.dirname(self.engine.pdf_path),
+                f"Filled_{safe_name}_page_{page_idx + 1}.pdf"
+            )
+            
 
             doc.save(out_path)
             doc.close()
@@ -2640,11 +2623,13 @@ class MediMapProApp(App):
             self.set_status(f"Generate single error:\n{e}")
 
     def on_load_pdf(self, instance):
-        self._open_filechooser_popup(
-            title="Select PDF Template",
+        content = FileChooserListView(
             filters=["*.pdf"],
-            submit_callback=self._handle_pdf_selection
+            path=self.get_default_file_path()
         )
+        popup = Popup(title="Select PDF Template", content=content, size_hint=(0.9, 0.9))
+        content.bind(on_submit=lambda obj, sel, touch: self._handle_pdf_selection(sel, popup))
+        popup.open()
     
     def _handle_pdf_selection(self, selection, popup):
         if selection:
@@ -2670,12 +2655,8 @@ class MediMapProApp(App):
                 )
             except Exception as e:
                 traceback.print_exc()
-                self.set_status(
-                    "PDF Error:\n"
-                    f"{e}\n\n"
-                    "On Android, this usually means the file path is not directly readable, "
-                    "or storage permission was not granted. Try a PDF stored in Download."
-                )
+                backend_note = f"PDF backend: {FITZ_BACKEND}" if FITZ_AVAILABLE else f"PDF backend unavailable: {FITZ_IMPORT_ERROR}"
+                self.set_status(f"PDF Error: {e}\n{backend_note}")
         popup.dismiss()
 
     def open_text_input_popup(self, title, hint_text, on_submit_callback, default_text=""):
@@ -2757,7 +2738,7 @@ class MediMapProApp(App):
                 return
 
             names = sorted(self.engine.df["_DISPLAY_NAME"].dropna().astype(str).unique())
-            out_dir = os.path.join(self.get_app_output_dir(), "batch_output")
+            out_dir = os.path.join(os.path.dirname(self.engine.pdf_path), "batch_output")
             os.makedirs(out_dir, exist_ok=True)
 
             success = 0
