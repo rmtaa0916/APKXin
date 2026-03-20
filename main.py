@@ -2104,7 +2104,7 @@ class MediMapProApp(MDApp):
                     height=dp(24),
                     halign="left",
                     valign="middle",
-                    font_style="TitleMedium" if MDLabel is not None else None,
+                    font_style="Subtitle1" if MDLabel is not None else None,
                 )
                 if hasattr(ttl, "bind") and not MDLabel is ttl_cls:
                     ttl.bind(size=self._sync_label_text_size)
@@ -2118,7 +2118,7 @@ class MediMapProApp(MDApp):
                         height=dp(18),
                         halign="left",
                         valign="middle",
-                        font_style="BodySmall" if MDLabel is not None else None,
+                        font_style="Caption" if MDLabel is not None else None,
                     )
                     if hasattr(sub, "bind") and not MDLabel is ttl_cls:
                         sub.bind(size=self._sync_label_text_size)
@@ -2272,7 +2272,7 @@ class MediMapProApp(MDApp):
             if lbl_cls is Label:
                 lbl_kwargs.update(color=palette["text"], font_size=dp(13))
             else:
-                lbl_kwargs.update(theme_text_color="Custom", text_color=palette["text"], font_style="BodyMedium")
+                lbl_kwargs.update(theme_text_color="Custom", text_color=palette["text"], font_style="Body1")
             lbl = lbl_cls(**lbl_kwargs)
             if lbl_cls is Label:
                 lbl.bind(size=self._sync_label_text_size)
