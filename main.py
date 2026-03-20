@@ -3494,4 +3494,128 @@ class MediMapProApp(MDApp):
                 if cur_idx > max_idx:
                     self.page_input.text = "0"
     
-                raw_img = self.engine.get_raw_preview_
+                raw_img = self.engine.get_raw_preview_pixmap(
+                    page_idx=self.current_page_idx(),
+                    preview_zoom=PREVIEW_SCALE
+                )
+                self.render_preview_image(raw_img, boxes_payload=[], page_idx=self.current_page_idx(), preview_zoom=PREVIEW_SCALE)
+                self._sync_box_selection_ui()
+    
+                self.set_status(
+                    f"PDF Loaded: {os.path.basename(path)}\n"
+                    f"Pages: {total}\n"
+                    f"Showing raw template page: {self.current_page_idx()}"
+                )
+            except Exception as e:
+                traceback.print_exc()
+                self.set_status(f"PDF Error: {e}")
+        popup.dismiss()
+
+    def open_text_input_popup(self, title, hint_text, on_submit_callback, default_text=""):
+        wrap = BoxLayout(orientation="vertical", spacing=8, padding=8)
+    
+        txt = TextInput(
+            text=default_text,
+            hint_text=hint_text,
+            multiline=False,
+            size_hint_y=None,
+            height=42
+        )
+        wrap.add_widget(txt)
+    
+        btn_row = GridLayout(cols=2, size_hint_y=None, height=42, spacing=6)
+    
+        btn_cancel = Button(text="Cancel")
+        btn_ok = Button(text="OK")
+    
+        btn_row.add_widget(btn_cancel)
+        btn_row.add_widget(btn_ok)
+        wrap.add_widget(btn_row)
+    
+        popup = Popup(title=title, content=wrap, size_hint=(0.82, 0.32))
+    
+        btn_cancel.bind(on_release=lambda *_: popup.dismiss())
+    
+        def _submit(*_):
+            try:
+                on_submit_callback(txt.text.strip())
+            finally:
+                popup.dismiss()
+    
+        btn_ok.bind(on_release=_submit)
+        txt.bind(on_text_validate=lambda *_: _submit())
+    
+        popup.open()
+    
+    
+    def on_load_gsheet_url(self, instance):
+        self.open_text_input_popup(
+            title="Load Google Sheet URL",
+            hint_text="Paste Google Sheet URL here",
+            on_submit_callback=self._handle_gsheet_url_submit
+        )
+    
+    
+    def _handle_gsheet_url_submit(self, url):
+        try:
+            if not url:
+                self.set_status("No Google Sheet URL provided.")
+                return
+    
+            self.engine.load_dataframe(url)
+            self.refresh_patient_and_column_lists()
+    
+            self.set_status(
+                f"Google Sheet loaded.\n"
+                f"Rows: {len(self.engine.df)}\n"
+                f"Patients: {len(self.engine.patient_names)}"
+            )
+    
+            if self.engine.pdf_path:
+                Clock.schedule_once(lambda dt: self.on_preview(None), 0.1)
+    
+        except Exception as e:
+            traceback.print_exc()
+            self.set_status(f"Google Sheet load error:\n{e}")
+    
+    def on_generate_batch(self, instance):
+        """Processes all rows in the data file and generates PDFs."""
+        try:
+            if platform == "android" and not self.engine.supports_processing_backend():
+                self.set_status("Android native PDF preview works in this build, but batch filling/export still requires the PyMuPDF backend.")
+                return
+            if self.engine.df is None or self.engine.df.empty:
+                self.set_status("Load CSV/XLSX first.")
+                return
+
+            if not self.engine.pdf_path:
+                self.set_status("Load PDF first.")
+                return
+
+            names = sorted(self.engine.df["_DISPLAY_NAME"].dropna().astype(str).unique())
+            out_dir = os.path.join(self.get_app_output_dir(), "batch_output")
+            os.makedirs(out_dir, exist_ok=True)
+
+            success = 0
+            skipped = 0
+
+            for patient_name in names:
+                try:
+                    doc = self.engine.process_doc(patient_name, page_idx=self.current_page_idx())
+                    safe_p_name = "".join(c if c.isalnum() or c in (" ", "-", "_") else "_" for c in patient_name).strip()
+                    
+                    out_path = os.path.join(out_dir, f"Filled_{safe_p_name or 'Unknown'}.pdf")
+                    doc.save(out_path)
+                    doc.close()
+                    success += 1
+                except Exception:
+                    skipped += 1
+
+            self.set_status(f"Batch done.\nFolder: {out_dir}\nSuccess: {success} | Skipped: {skipped}")
+        except Exception as e:
+            traceback.print_exc()
+            self.set_status(f"Batch Error: {e}")
+
+
+if __name__ == "__main__":
+    MediMapProApp().run()
