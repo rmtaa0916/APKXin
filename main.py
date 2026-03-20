@@ -1864,6 +1864,7 @@ class InteractivePreview(Image):
         super().__init__(**kwargs)
         self.allow_stretch = False
         self.keep_ratio = True
+        self.size = (dp(1), dp(1))
         self.boxes_payload = []
         self.selected_ids = set()
         self.hovered_box_id = None
@@ -2290,11 +2291,11 @@ class MediMapProApp(MDApp):
         root = BoxLayout(orientation="vertical", spacing=gap, padding=pad)
 
         appbar = BoxLayout(
-            orientation="horizontal",
-            spacing=dp(14),
+            orientation="vertical" if is_mobile else "horizontal",
+            spacing=dp(10) if is_mobile else dp(14),
             size_hint_y=None,
-            height=dp(84) if is_mobile else dp(74),
-            padding=[dp(16), dp(12), dp(16), dp(12)],
+            height=dp(108) if is_mobile else dp(74),
+            padding=[dp(14), dp(10), dp(14), dp(10)],
         )
         style_card(appbar, palette["surface"], radius=dp(26))
 
@@ -2328,11 +2329,11 @@ class MediMapProApp(MDApp):
         status_chip = Label(
             text="Ready • Load CSV/XLSX, Google Sheet URL, and PDF to begin",
             color=palette["text"],
-            size_hint=(0.42 if not is_mobile else 0.52, None),
-            height=dp(42),
+            size_hint=(1 if is_mobile else 0.42, None),
+            height=dp(36) if is_mobile else dp(42),
             halign="center",
             valign="middle",
-            font_size=dp(11),
+            font_size=dp(10.5) if is_mobile else dp(11),
         )
         status_chip.bind(size=self._sync_label_text_size)
         style_card(status_chip, palette["chip"], radius=dp(18))
@@ -2340,7 +2341,71 @@ class MediMapProApp(MDApp):
         appbar.add_widget(status_chip)
         root.add_widget(appbar)
 
-        main = BoxLayout(orientation="vertical" if is_mobile else "horizontal", spacing=dp(14))
+        main = BoxLayout(orientation="vertical" if is_mobile else "horizontal", spacing=dp(10) if is_mobile else dp(14))
+
+        self._mobile_section_buttons = {}
+        self._mobile_section_cards = {}
+        self._mobile_section_host = None
+        self._mobile_active_section = None
+
+        def _style_mobile_section_button(btn, active=False):
+            bg = palette["primary"] if active else palette["surface_soft"]
+            fg = (1, 1, 1, 1) if active else palette["text"]
+            if hasattr(btn, "md_bg_color"):
+                try:
+                    btn.md_bg_color = bg
+                except Exception:
+                    pass
+                try:
+                    btn.text_color = fg
+                except Exception:
+                    pass
+            else:
+                btn.background_normal = ""
+                btn.background_down = ""
+                btn.background_color = bg
+                btn.color = fg
+
+        def _show_mobile_section(section_key):
+            if not is_mobile or self._mobile_section_host is None:
+                return
+            section_card = self._mobile_section_cards.get(section_key)
+            if section_card is None:
+                return
+            self._mobile_section_host.clear_widgets()
+            self._mobile_section_host.add_widget(section_card)
+            self._mobile_active_section = section_key
+            for key, btn in self._mobile_section_buttons.items():
+                _style_mobile_section_button(btn, active=(key == section_key))
+
+        def _make_mobile_section_tabs(section_names):
+            tabs_wrap = BoxLayout(orientation="vertical", spacing=dp(8), size_hint_y=None)
+            rows = []
+            if len(section_names) <= 3:
+                rows = [section_names]
+            else:
+                rows = [section_names[:3], section_names[3:]]
+            total_h = len(rows) * row_h + max(len(rows) - 1, 0) * dp(8)
+            tabs_wrap.height = total_h
+
+            for row_names in rows:
+                row = GridLayout(cols=max(1, len(row_names)), spacing=dp(8), size_hint_y=None, height=row_h)
+                for name in row_names:
+                    btn = Button(
+                        text=name,
+                        size_hint_y=None,
+                        height=row_h,
+                        background_normal="",
+                        background_down="",
+                        background_color=palette["surface_soft"],
+                        color=palette["text"],
+                        font_size=dp(13),
+                    )
+                    btn.bind(on_release=lambda inst, n=name: _show_mobile_section(n))
+                    self._mobile_section_buttons[name] = btn
+                    row.add_widget(btn)
+                tabs_wrap.add_widget(row)
+            return tabs_wrap
 
         controls_wrap = BoxLayout(orientation="vertical", size_hint=(1, 0.56) if is_mobile else (0.44, 1))
         controls_scroll = ScrollView(do_scroll_x=False, do_scroll_y=True, bar_width=dp(6), scroll_type=["bars", "content"])
@@ -2364,7 +2429,10 @@ class MediMapProApp(MDApp):
             btn.bind(on_release=cb)
             file_grid.add_widget(btn)
         files_body.add_widget(file_grid)
-        controls.add_widget(files_card)
+        if is_mobile:
+            self._mobile_section_cards["Files"] = files_card
+        else:
+            controls.add_widget(files_card)
 
         nav_card, nav_body = make_card("Session", "Choose a patient, move pages, detect, and refresh")
         self.patient_spinner = make_spinner("Select Patient")
@@ -2388,7 +2456,10 @@ class MediMapProApp(MDApp):
         action_grid.add_widget(self.btn_detect)
         action_grid.add_widget(self.btn_preview)
         nav_body.add_widget(action_grid)
-        controls.add_widget(nav_card)
+        if is_mobile:
+            self._mobile_section_cards["Session"] = nav_card
+        else:
+            controls.add_widget(nav_card)
 
         detect_card, detect_body = make_card("Detection", "Field, line, checkbox, and extent thresholds")
         explain = Label(text="F = field sizing  •  Line = answer lines  •  C = checkbox tuning  •  Ext = contour extent limits",
@@ -2448,7 +2519,10 @@ class MediMapProApp(MDApp):
         for w in detection_fields:
             det_grid.add_widget(w)
         detect_body.add_widget(det_grid)
-        controls.add_widget(detect_card)
+        if is_mobile:
+            self._mobile_section_cards["Detection"] = detect_card
+        else:
+            controls.add_widget(detect_card)
 
         map_card, map_body = make_card("Mapping", "Assign values to selected boxes directly from preview")
         self.box_ids_input = make_input("", "0,1,2")
@@ -2466,7 +2540,10 @@ class MediMapProApp(MDApp):
         self.btn_assign = make_button("Assign Mapping", tone="primary")
         self.btn_assign.bind(on_release=self.on_assign_mapping)
         map_body.add_widget(self.btn_assign)
-        controls.add_widget(map_card)
+        if is_mobile:
+            self._mobile_section_cards["Mapping"] = map_card
+        else:
+            controls.add_widget(map_card)
 
         export_card, export_body = make_card("Export", "Generate patient output files")
         out_grid = GridLayout(cols=1 if is_mobile else 2, spacing=dp(8), size_hint_y=None, height=(2*row_h+dp(8)) if is_mobile else row_h)
@@ -2477,8 +2554,20 @@ class MediMapProApp(MDApp):
         out_grid.add_widget(self.btn_generate_one)
         out_grid.add_widget(self.btn_generate_batch)
         export_body.add_widget(out_grid)
-        controls.add_widget(export_card)
+        if is_mobile:
+            self._mobile_section_cards["Export"] = export_card
+        else:
+            controls.add_widget(export_card)
 
+        if is_mobile:
+            mobile_controls_card, mobile_controls_body = make_card("Controls", "Switch sections to keep the screen lighter and easier to navigate")
+            tabs = _make_mobile_section_tabs(["Files", "Session", "Detection", "Mapping", "Export"])
+            mobile_controls_body.add_widget(tabs)
+            self._mobile_section_host = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
+            self._mobile_section_host.bind(minimum_height=self._mobile_section_host.setter("height"))
+            mobile_controls_body.add_widget(self._mobile_section_host)
+            controls.add_widget(mobile_controls_card)
+            Clock.schedule_once(lambda dt: _show_mobile_section("Files"), 0)
         controls_scroll.add_widget(controls)
         controls_wrap.add_widget(controls_scroll)
 
@@ -2499,7 +2588,7 @@ class MediMapProApp(MDApp):
         preview_body.add_widget(preview_toolbar)
 
         preview_shell = BoxLayout(orientation="vertical", spacing=dp(8), padding=dp(8), size_hint_y=None)
-        preview_shell.height = dp(720) if is_mobile else dp(860)
+        preview_shell.height = max(dp(320), Window.height * 0.42) if is_mobile else dp(860)
         style_card(preview_shell, palette["preview_bg"], radius=dp(24))
         preview_wrap = ScrollView(do_scroll_x=True, do_scroll_y=True, bar_width=dp(6), scroll_type=["bars", "content"])
         preview_stack = BoxLayout(orientation="vertical", spacing=dp(8), size_hint_y=None)
@@ -2509,18 +2598,22 @@ class MediMapProApp(MDApp):
         self.preview.box_tap_callback = self.on_preview_box_tap
         self.preview.hover_callback = self.on_preview_box_hover
         self.preview_info = Label(text="Interactive preview ready. Tap a box to select it.", color=palette["text"],
-                                  size_hint_y=None, height=dp(52), halign="left", valign="middle", font_size=dp(13))
+                                  size_hint_y=None, height=dp(44), halign="left", valign="middle", font_size=dp(12))
         self.preview_info.bind(size=self._sync_label_text_size)
         style_card(self.preview_info, palette["chip"], radius=dp(18))
-        preview_stack.add_widget(self.preview)
         preview_stack.add_widget(self.preview_info)
+        preview_stack.add_widget(self.preview)
         preview_wrap.add_widget(preview_stack)
         preview_shell.add_widget(preview_wrap)
         preview_body.add_widget(preview_shell)
         preview_outer.add_widget(preview_card)
 
-        main.add_widget(controls_wrap)
-        main.add_widget(preview_outer)
+        if is_mobile:
+            main.add_widget(preview_outer)
+            main.add_widget(controls_wrap)
+        else:
+            main.add_widget(controls_wrap)
+            main.add_widget(preview_outer)
         root.add_widget(main)
 
         return root
@@ -2533,7 +2626,12 @@ class MediMapProApp(MDApp):
 
     def _update_preview_size(self, instance, texture):
         if texture:
-            self.preview.size = texture.size
+            if platform == "android":
+                max_w = max(dp(220), Window.width - dp(56))
+                scale = min(1.0, max_w / float(texture.width))
+                self.preview.size = (texture.width * scale, texture.height * scale)
+            else:
+                self.preview.size = texture.size
 
     def set_status(self, text):
         self.status_lbl.text = text
@@ -3396,128 +3494,4 @@ class MediMapProApp(MDApp):
                 if cur_idx > max_idx:
                     self.page_input.text = "0"
     
-                raw_img = self.engine.get_raw_preview_pixmap(
-                    page_idx=self.current_page_idx(),
-                    preview_zoom=PREVIEW_SCALE
-                )
-                self.render_preview_image(raw_img, boxes_payload=[], page_idx=self.current_page_idx(), preview_zoom=PREVIEW_SCALE)
-                self._sync_box_selection_ui()
-    
-                self.set_status(
-                    f"PDF Loaded: {os.path.basename(path)}\n"
-                    f"Pages: {total}\n"
-                    f"Showing raw template page: {self.current_page_idx()}"
-                )
-            except Exception as e:
-                traceback.print_exc()
-                self.set_status(f"PDF Error: {e}")
-        popup.dismiss()
-
-    def open_text_input_popup(self, title, hint_text, on_submit_callback, default_text=""):
-        wrap = BoxLayout(orientation="vertical", spacing=8, padding=8)
-    
-        txt = TextInput(
-            text=default_text,
-            hint_text=hint_text,
-            multiline=False,
-            size_hint_y=None,
-            height=42
-        )
-        wrap.add_widget(txt)
-    
-        btn_row = GridLayout(cols=2, size_hint_y=None, height=42, spacing=6)
-    
-        btn_cancel = Button(text="Cancel")
-        btn_ok = Button(text="OK")
-    
-        btn_row.add_widget(btn_cancel)
-        btn_row.add_widget(btn_ok)
-        wrap.add_widget(btn_row)
-    
-        popup = Popup(title=title, content=wrap, size_hint=(0.82, 0.32))
-    
-        btn_cancel.bind(on_release=lambda *_: popup.dismiss())
-    
-        def _submit(*_):
-            try:
-                on_submit_callback(txt.text.strip())
-            finally:
-                popup.dismiss()
-    
-        btn_ok.bind(on_release=_submit)
-        txt.bind(on_text_validate=lambda *_: _submit())
-    
-        popup.open()
-    
-    
-    def on_load_gsheet_url(self, instance):
-        self.open_text_input_popup(
-            title="Load Google Sheet URL",
-            hint_text="Paste Google Sheet URL here",
-            on_submit_callback=self._handle_gsheet_url_submit
-        )
-    
-    
-    def _handle_gsheet_url_submit(self, url):
-        try:
-            if not url:
-                self.set_status("No Google Sheet URL provided.")
-                return
-    
-            self.engine.load_dataframe(url)
-            self.refresh_patient_and_column_lists()
-    
-            self.set_status(
-                f"Google Sheet loaded.\n"
-                f"Rows: {len(self.engine.df)}\n"
-                f"Patients: {len(self.engine.patient_names)}"
-            )
-    
-            if self.engine.pdf_path:
-                Clock.schedule_once(lambda dt: self.on_preview(None), 0.1)
-    
-        except Exception as e:
-            traceback.print_exc()
-            self.set_status(f"Google Sheet load error:\n{e}")
-    
-    def on_generate_batch(self, instance):
-        """Processes all rows in the data file and generates PDFs."""
-        try:
-            if platform == "android" and not self.engine.supports_processing_backend():
-                self.set_status("Android native PDF preview works in this build, but batch filling/export still requires the PyMuPDF backend.")
-                return
-            if self.engine.df is None or self.engine.df.empty:
-                self.set_status("Load CSV/XLSX first.")
-                return
-
-            if not self.engine.pdf_path:
-                self.set_status("Load PDF first.")
-                return
-
-            names = sorted(self.engine.df["_DISPLAY_NAME"].dropna().astype(str).unique())
-            out_dir = os.path.join(self.get_app_output_dir(), "batch_output")
-            os.makedirs(out_dir, exist_ok=True)
-
-            success = 0
-            skipped = 0
-
-            for patient_name in names:
-                try:
-                    doc = self.engine.process_doc(patient_name, page_idx=self.current_page_idx())
-                    safe_p_name = "".join(c if c.isalnum() or c in (" ", "-", "_") else "_" for c in patient_name).strip()
-                    
-                    out_path = os.path.join(out_dir, f"Filled_{safe_p_name or 'Unknown'}.pdf")
-                    doc.save(out_path)
-                    doc.close()
-                    success += 1
-                except Exception:
-                    skipped += 1
-
-            self.set_status(f"Batch done.\nFolder: {out_dir}\nSuccess: {success} | Skipped: {skipped}")
-        except Exception as e:
-            traceback.print_exc()
-            self.set_status(f"Batch Error: {e}")
-
-
-if __name__ == "__main__":
-    MediMapProApp().run()
+                raw_img = self.engine.get_raw_preview_
