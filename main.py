@@ -2033,7 +2033,7 @@ class MediMapProApp(MDApp):
 
         if KIVYMD_AVAILABLE and hasattr(self, "theme_cls"):
             try:
-                self.theme_cls.theme_style = "Light"
+                self.theme_cls.theme_style = "Dark"
                 self.theme_cls.primary_palette = "Blue"
                 self.theme_cls.accent_palette = "Teal"
                 if hasattr(self.theme_cls, "material_style"):
@@ -2048,16 +2048,20 @@ class MediMapProApp(MDApp):
         input_h = dp(52) if is_mobile else dp(44)
 
         palette = {
-            "bg": (0.95, 0.96, 0.98, 1),
-            "surface": (1, 1, 1, 1),
-            "surface_alt": (0.98, 0.985, 0.995, 1),
-            "primary": (0.19, 0.44, 0.89, 1),
-            "primary_soft": (0.88, 0.92, 1.0, 1),
-            "accent": (0.18, 0.72, 0.54, 1),
-            "text": (0.12, 0.15, 0.21, 1),
-            "muted": (0.39, 0.44, 0.53, 1),
-            "border": (0.86, 0.89, 0.95, 1),
-            "preview_bg": (0.97, 0.98, 1.0, 1),
+            "bg": (0.055, 0.075, 0.11, 1),
+            "surface": (0.085, 0.105, 0.145, 1),
+            "surface_alt": (0.11, 0.135, 0.185, 1),
+            "surface_soft": (0.135, 0.16, 0.215, 1),
+            "primary": (0.24, 0.48, 0.96, 1),
+            "primary_soft": (0.16, 0.24, 0.38, 1),
+            "accent": (0.10, 0.78, 0.63, 1),
+            "accent_soft": (0.10, 0.28, 0.24, 1),
+            "text": (0.93, 0.96, 1.0, 1),
+            "muted": (0.60, 0.68, 0.80, 1),
+            "border": (0.18, 0.24, 0.34, 1),
+            "preview_bg": (0.06, 0.08, 0.11, 1),
+            "chip": (0.13, 0.18, 0.27, 1),
+            "danger": (0.87, 0.33, 0.41, 1),
         }
         Window.clearcolor = palette["bg"]
 
@@ -2067,7 +2071,7 @@ class MediMapProApp(MDApp):
                 widget._card_bg_color = Color(*color)
                 widget._card_bg = RoundedRectangle(radius=[radius] * 4)
                 widget._card_border_color = Color(*palette["border"])
-                widget._card_border = Line(rounded_rectangle=[0, 0, 0, 0, radius], width=1)
+                widget._card_border = Line(rounded_rectangle=[0, 0, 0, 0, radius], width=1.1)
             def _upd(*_):
                 widget._card_bg.pos = widget.pos
                 widget._card_bg.size = widget.size
@@ -2083,7 +2087,7 @@ class MediMapProApp(MDApp):
                     padding=dp(14),
                     spacing=dp(10),
                     radius=[dp(24)] * 4,
-                    elevation=2,
+                    elevation=4,
                     size_hint_y=None,
                     md_bg_color=palette["surface"],
                 )
@@ -2159,7 +2163,7 @@ class MediMapProApp(MDApp):
                 "primary": palette["primary"],
                 "soft": palette["primary_soft"],
                 "accent": palette["accent"],
-                "plain": palette["surface_alt"],
+                "plain": palette["surface_soft"],
             }
             label = text if not icon else f"{icon}  {text}"
             if KIVYMD_AVAILABLE and MDRaisedButton is not None:
@@ -2285,24 +2289,58 @@ class MediMapProApp(MDApp):
 
         root = BoxLayout(orientation="vertical", spacing=gap, padding=pad)
 
-        hero = BoxLayout(orientation="vertical", spacing=dp(6), size_hint_y=None, height=dp(110) if is_mobile else dp(102), padding=dp(14))
-        style_card(hero, palette["primary"])
-        hero_title = Label(text="MediMap Pro", color=(1,1,1,1), bold=True,
-                           size_hint_y=None, height=dp(28), halign="left", valign="middle",
-                           font_size=dp(22) if is_mobile else dp(20))
-        hero_title.bind(size=self._sync_label_text_size)
-        hero.add_widget(hero_title)
-        hero_sub = Label(text="Modern PDF form automation with live preview, direct mapping, and Android-friendly fallback rendering.",
-                         color=(0.93,0.96,1,1), size_hint_y=None, height=dp(40), halign="left", valign="middle", font_size=dp(12))
-        hero_sub.bind(size=self._sync_label_text_size)
-        hero.add_widget(hero_sub)
-        self.status_lbl = Label(text="Load CSV/XLSX, Google Sheet URL, and PDF to begin", color=(1,1,1,1),
-                                size_hint_y=None, height=dp(24), halign="left", valign="middle", font_size=dp(12))
-        self.status_lbl.bind(size=self._sync_label_text_size)
-        hero.add_widget(self.status_lbl)
-        root.add_widget(hero)
+        appbar = BoxLayout(
+            orientation="horizontal",
+            spacing=dp(14),
+            size_hint_y=None,
+            height=dp(84) if is_mobile else dp(74),
+            padding=[dp(16), dp(12), dp(16), dp(12)],
+        )
+        style_card(appbar, palette["surface"], radius=dp(26))
 
-        main = BoxLayout(orientation="vertical" if is_mobile else "horizontal", spacing=gap)
+        brand_wrap = BoxLayout(orientation="vertical", spacing=dp(2))
+        hero_title = Label(
+            text="MediMap Pro",
+            color=palette["text"],
+            bold=True,
+            size_hint_y=None,
+            height=dp(28),
+            halign="left",
+            valign="middle",
+            font_size=dp(24) if is_mobile else dp(20),
+        )
+        hero_title.bind(size=self._sync_label_text_size)
+        brand_wrap.add_widget(hero_title)
+
+        hero_sub = Label(
+            text="Medical-tech PDF automation with interactive mapping and Android-native fallback preview.",
+            color=palette["muted"],
+            size_hint_y=None,
+            height=dp(20),
+            halign="left",
+            valign="middle",
+            font_size=dp(11.5),
+        )
+        hero_sub.bind(size=self._sync_label_text_size)
+        brand_wrap.add_widget(hero_sub)
+        appbar.add_widget(brand_wrap)
+
+        status_chip = Label(
+            text="Ready • Load CSV/XLSX, Google Sheet URL, and PDF to begin",
+            color=palette["text"],
+            size_hint=(0.42 if not is_mobile else 0.52, None),
+            height=dp(42),
+            halign="center",
+            valign="middle",
+            font_size=dp(11),
+        )
+        status_chip.bind(size=self._sync_label_text_size)
+        style_card(status_chip, palette["chip"], radius=dp(18))
+        self.status_lbl = status_chip
+        appbar.add_widget(status_chip)
+        root.add_widget(appbar)
+
+        main = BoxLayout(orientation="vertical" if is_mobile else "horizontal", spacing=dp(14))
 
         controls_wrap = BoxLayout(orientation="vertical", size_hint=(1, 0.56) if is_mobile else (0.44, 1))
         controls_scroll = ScrollView(do_scroll_x=False, do_scroll_y=True, bar_width=dp(6), scroll_type=["bars", "content"])
@@ -2445,7 +2483,7 @@ class MediMapProApp(MDApp):
         controls_wrap.add_widget(controls_scroll)
 
         preview_outer = BoxLayout(orientation="vertical", spacing=gap, size_hint=(1, 0.44) if is_mobile else (0.56,1))
-        preview_card, preview_body = make_card("Live Preview", "Tap boxes to map. Hover on desktop for more details.")
+        preview_card, preview_body = make_card("Live Preview", "Interactive canvas for detection review, mapping, and patient output preview.")
         preview_card.size_hint_y = 1
         preview_card.bind(minimum_height=preview_card.setter("height"))
         preview_toolbar = GridLayout(cols=2 if is_mobile else 4, spacing=dp(8), size_hint_y=None, height=row_h if not is_mobile else 2*row_h+dp(8))
@@ -2462,7 +2500,7 @@ class MediMapProApp(MDApp):
 
         preview_shell = BoxLayout(orientation="vertical", spacing=dp(8), padding=dp(8), size_hint_y=None)
         preview_shell.height = dp(720) if is_mobile else dp(860)
-        style_card(preview_shell, palette["preview_bg"], radius=dp(18))
+        style_card(preview_shell, palette["preview_bg"], radius=dp(24))
         preview_wrap = ScrollView(do_scroll_x=True, do_scroll_y=True, bar_width=dp(6), scroll_type=["bars", "content"])
         preview_stack = BoxLayout(orientation="vertical", spacing=dp(8), size_hint_y=None)
         preview_stack.bind(minimum_height=preview_stack.setter("height"))
@@ -2471,8 +2509,9 @@ class MediMapProApp(MDApp):
         self.preview.box_tap_callback = self.on_preview_box_tap
         self.preview.hover_callback = self.on_preview_box_hover
         self.preview_info = Label(text="Interactive preview ready. Tap a box to select it.", color=palette["text"],
-                                  size_hint_y=None, height=dp(56), halign="left", valign="middle", font_size=dp(13))
+                                  size_hint_y=None, height=dp(52), halign="left", valign="middle", font_size=dp(13))
         self.preview_info.bind(size=self._sync_label_text_size)
+        style_card(self.preview_info, palette["chip"], radius=dp(18))
         preview_stack.add_widget(self.preview)
         preview_stack.add_widget(self.preview_info)
         preview_wrap.add_widget(preview_stack)
@@ -3230,12 +3269,23 @@ class MediMapProApp(MDApp):
         activity_obj = AndroidPythonActivity.mActivity
         resolver = activity_obj.getContentResolver()
 
-        # Accept either a real Android Uri object or a URI string.
-        # Passing str(uri) from PyJNIus can produce a debug repr instead of a
-        # usable content:// URI, so prefer the Uri object directly.
+        # Normalize the returned value into a real Android Uri instance.
+        # PyJNIus wrappers can display as "<android.net.Uri at 0x...>" when
+        # converted with str(...), so use Java's toString() instead.
         if isinstance(uri, str):
-            uri = AndroidUri.parse(uri)
+            uri_string = uri.strip()
+        else:
+            try:
+                uri_string = str(uri.toString()).strip()
+            except Exception:
+                uri_string = ""
 
+        if not uri_string:
+            raise ValueError("Android returned an empty document URI.")
+        if not (uri_string.startswith("content://") or uri_string.startswith("file://")):
+            raise ValueError(f"Android returned an invalid document URI: {uri_string}")
+
+        uri = AndroidUri.parse(uri_string)
         input_stream = resolver.openInputStream(uri)
         if input_stream is None:
             raise ValueError("Unable to open the selected Android document.")
