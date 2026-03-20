@@ -483,6 +483,14 @@ class MediMapEngine:
 
         raise RuntimeError("No PDF rendering backend is available.")
 
+
+    def supports_processing_backend(self):
+        """
+        Return True when full PDF processing is available.
+        Full detection/fill/export currently depends on PyMuPDF (fitz).
+        """
+        return bool(FITZ_AVAILABLE)
+
     def get_raw_preview_pixmap(self, page_idx=0, preview_zoom=1.5):
         """Render the raw loaded PDF page without filling or boxes."""
         if not self.pdf_path or not os.path.exists(self.pdf_path):
