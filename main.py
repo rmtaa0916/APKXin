@@ -87,6 +87,8 @@ if platform == "android":
         AndroidPythonActivity = autoclass("org.kivy.android.PythonActivity")
         AndroidIntent = autoclass("android.content.Intent")
         AndroidBitmap = autoclass("android.graphics.Bitmap")
+        AndroidBitmapConfig = autoclass("android.graphics.Bitmap$Config")
+        AndroidCompressFormat = autoclass("android.graphics.Bitmap$CompressFormat")
         AndroidPdfRenderer = autoclass("android.graphics.pdf.PdfRenderer")
         AndroidParcelFileDescriptor = autoclass("android.os.ParcelFileDescriptor")
         AndroidUri = autoclass("android.net.Uri")
@@ -100,6 +102,8 @@ if platform == "android":
         AndroidParcelFileDescriptor = None
         AndroidUri = None
         AndroidByteArrayOutputStream = None
+        AndroidBitmapConfig = None
+        AndroidCompressFormat = None
         ANDROID_JAVA_AVAILABLE = False
 else:
     ANDROID_JAVA_AVAILABLE = False
@@ -125,12 +129,12 @@ def android_render_pdf_page(path, page_idx=0, preview_zoom=1.5):
 
         width = max(1, int(page.getWidth() * float(preview_zoom)))
         height = max(1, int(page.getHeight() * float(preview_zoom)))
-        bitmap = AndroidBitmap.createBitmap(width, height, AndroidBitmap.Config.ARGB_8888)
+        bitmap = AndroidBitmap.createBitmap(width, height, AndroidBitmapConfig.ARGB_8888)
         bitmap.eraseColor(-1)
         page.render(bitmap, None, None, AndroidPdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
 
         baos = AndroidByteArrayOutputStream()
-        bitmap.compress(AndroidBitmap.CompressFormat.PNG, 100, baos)
+        bitmap.compress(AndroidCompressFormat.PNG, 100, baos)
         png_bytes = bytes(baos.toByteArray())
         img = cv2.imdecode(np.frombuffer(png_bytes, np.uint8), cv2.IMREAD_COLOR)
         if img is None:
