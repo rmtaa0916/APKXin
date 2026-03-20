@@ -39,7 +39,7 @@ from kivy.clock import Clock
 from kivy.core.image import Image as CoreImage
 from kivy.core.text import Label as CoreLabel
 from kivy.core.window import Window
-from kivy.graphics import Color, Line, Rectangle
+from kivy.graphics import Color, Line, Rectangle, RoundedRectangle
 from kivy.graphics.texture import Texture
 from kivy.metrics import dp
 from kivy.properties import StringProperty, NumericProperty, BooleanProperty, ListProperty, ObjectProperty
@@ -57,6 +57,26 @@ from kivy.uix.spinner import Spinner
 from kivy.uix.textinput import TextInput
 from kivy.uix.widget import Widget
 from kivy.utils import platform
+
+try:
+    from kivymd.app import MDApp
+    from kivymd.uix.card import MDCard
+    from kivymd.uix.button import MDRaisedButton, MDFlatButton, MDRectangleFlatButton
+    from kivymd.uix.textfield import MDTextField
+    from kivymd.uix.label import MDLabel
+    from kivymd.uix.selectioncontrol import MDCheckbox, MDSwitch
+    KIVYMD_AVAILABLE = True
+except Exception:
+    MDApp = App
+    MDCard = None
+    MDRaisedButton = None
+    MDFlatButton = None
+    MDRectangleFlatButton = None
+    MDTextField = None
+    MDLabel = None
+    MDCheckbox = None
+    MDSwitch = None
+    KIVYMD_AVAILABLE = False
 
 FITZ_AVAILABLE = bool(fitz is not None and hasattr(fitz, "open") and hasattr(fitz, "Rect"))
 
@@ -2005,398 +2025,464 @@ class MediMapProLayout(BoxLayout):
     pass
 
 
-class MediMapProApp(App):
+class MediMapProApp(MDApp):
 
     def build(self):
         self.title = "MediMap Pro"
         self.engine = MediMapEngine()
 
+        if KIVYMD_AVAILABLE and hasattr(self, "theme_cls"):
+            try:
+                self.theme_cls.theme_style = "Light"
+                self.theme_cls.primary_palette = "Blue"
+                self.theme_cls.accent_palette = "Teal"
+                if hasattr(self.theme_cls, "material_style"):
+                    self.theme_cls.material_style = "M3"
+            except Exception:
+                pass
+
         is_mobile = (platform == "android")
-        pad = dp(10)
-        gap = dp(8)
-        section_gap = dp(10) if is_mobile else dp(8)
-        row_h = dp(52) if is_mobile else dp(44)
-        title_h = dp(30) if is_mobile else dp(24)
-        status_h = dp(120) if is_mobile else dp(82)
-        preview_title_h = dp(30) if is_mobile else dp(24)
-        preview_hint_h = dp(30) if is_mobile else dp(24)
+        pad = dp(12) if is_mobile else dp(14)
+        gap = dp(10) if is_mobile else dp(12)
+        row_h = dp(52) if is_mobile else dp(46)
+        input_h = dp(52) if is_mobile else dp(44)
 
-        root = BoxLayout(
-            orientation="vertical" if is_mobile else "horizontal",
-            spacing=gap,
-            padding=pad
-        )
+        palette = {
+            "bg": (0.95, 0.96, 0.98, 1),
+            "surface": (1, 1, 1, 1),
+            "surface_alt": (0.98, 0.985, 0.995, 1),
+            "primary": (0.19, 0.44, 0.89, 1),
+            "primary_soft": (0.88, 0.92, 1.0, 1),
+            "accent": (0.18, 0.72, 0.54, 1),
+            "text": (0.12, 0.15, 0.21, 1),
+            "muted": (0.39, 0.44, 0.53, 1),
+            "border": (0.86, 0.89, 0.95, 1),
+            "preview_bg": (0.97, 0.98, 1.0, 1),
+        }
+        Window.clearcolor = palette["bg"]
 
-        controls_wrap = BoxLayout(
-            orientation="vertical",
-            size_hint=(1, 0.58) if is_mobile else (0.42, 1)
-        )
+        def style_card(widget, color=None, radius=dp(22)):
+            color = color or palette["surface"]
+            with widget.canvas.before:
+                widget._card_bg_color = Color(*color)
+                widget._card_bg = RoundedRectangle(radius=[radius] * 4)
+                widget._card_border_color = Color(*palette["border"])
+                widget._card_border = Line(rounded_rectangle=[0, 0, 0, 0, radius], width=1)
+            def _upd(*_):
+                widget._card_bg.pos = widget.pos
+                widget._card_bg.size = widget.size
+                widget._card_border.rounded_rectangle = [widget.x, widget.y, widget.width, widget.height, radius]
+            widget.bind(pos=_upd, size=_upd)
+            _upd()
+            return widget
 
-        controls_scroll = ScrollView(
-            do_scroll_x=False,
-            do_scroll_y=True,
-            bar_width=dp(8),
-            scroll_type=["bars", "content"]
-        )
+        def make_card(title, subtitle=None):
+            if KIVYMD_AVAILABLE and MDCard is not None:
+                card = MDCard(
+                    orientation="vertical",
+                    padding=dp(14),
+                    spacing=dp(10),
+                    radius=[dp(24)] * 4,
+                    elevation=2,
+                    size_hint_y=None,
+                    md_bg_color=palette["surface"],
+                )
+                card.bind(minimum_height=card.setter("height"))
 
-        controls = GridLayout(
-            cols=1,
-            spacing=section_gap,
-            size_hint_y=None,
-            padding=(0, 0, dp(4), 0)
-        )
-        controls.bind(minimum_height=controls.setter("height"))
+                head = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(2))
+                head.height = dp(48) if subtitle else dp(28)
+                ttl_cls = MDLabel if MDLabel is not None else Label
+                ttl = ttl_cls(
+                    text=title,
+                    theme_text_color="Custom" if MDLabel is not None else None,
+                    text_color=palette["text"] if MDLabel is not None else None,
+                    size_hint_y=None,
+                    height=dp(24),
+                    halign="left",
+                    valign="middle",
+                    font_style="TitleMedium" if MDLabel is not None else None,
+                )
+                if hasattr(ttl, "bind") and not MDLabel is ttl_cls:
+                    ttl.bind(size=self._sync_label_text_size)
+                head.add_widget(ttl)
+                if subtitle:
+                    sub = ttl_cls(
+                        text=subtitle,
+                        theme_text_color="Custom" if MDLabel is not None else None,
+                        text_color=palette["muted"] if MDLabel is not None else None,
+                        size_hint_y=None,
+                        height=dp(18),
+                        halign="left",
+                        valign="middle",
+                        font_style="BodySmall" if MDLabel is not None else None,
+                    )
+                    if hasattr(sub, "bind") and not MDLabel is ttl_cls:
+                        sub.bind(size=self._sync_label_text_size)
+                    head.add_widget(sub)
+                card.add_widget(head)
 
-        def make_title(text):
-            lbl = Label(
-                text=f"[b]{text}[/b]",
-                markup=True,
-                size_hint_y=None,
-                height=title_h,
-                halign="left",
-                valign="middle",
-                font_size=dp(16) if is_mobile else dp(14)
+                body = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
+                body.bind(minimum_height=body.setter("height"))
+                card.add_widget(body)
+                return card, body
+
+            wrap = BoxLayout(orientation="vertical", spacing=dp(8), padding=dp(12), size_hint_y=None)
+            wrap.bind(minimum_height=wrap.setter("height"))
+            style_card(wrap, palette["surface"])
+
+            head = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(2))
+            head.height = dp(44) if subtitle else dp(28)
+            ttl = Label(
+                text=title, markup=False, bold=True, color=palette["text"],
+                size_hint_y=None, height=dp(24), halign="left", valign="middle",
+                font_size=dp(16) if is_mobile else dp(15)
             )
-            lbl.bind(size=self._sync_label_text_size)
-            return lbl
+            ttl.bind(size=self._sync_label_text_size)
+            head.add_widget(ttl)
+            if subtitle:
+                sub = Label(
+                    text=subtitle, color=palette["muted"],
+                    size_hint_y=None, height=dp(18), halign="left", valign="middle",
+                    font_size=dp(12)
+                )
+                sub.bind(size=self._sync_label_text_size)
+                head.add_widget(sub)
+            wrap.add_widget(head)
 
-        def make_button(text):
-            return Button(
-                text=text,
-                size_hint_y=None,
-                height=row_h,
-                font_size=dp(15) if is_mobile else dp(13)
-            )
+            body = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
+            body.bind(minimum_height=body.setter("height"))
+            wrap.add_widget(body)
+            return wrap, body
 
-        def make_input(default="", hint="", multiline=False, input_filter=None):
-            kwargs = dict(
-                text=str(default),
-                hint_text=hint,
-                multiline=multiline,
-                size_hint_y=None,
-                height=row_h,
-                font_size=dp(15) if is_mobile else dp(13),
-                write_tab=False
+        def make_button(text, tone="primary", icon=None):
+            colors = {
+                "primary": palette["primary"],
+                "soft": palette["primary_soft"],
+                "accent": palette["accent"],
+                "plain": palette["surface_alt"],
+            }
+            label = text if not icon else f"{icon}  {text}"
+            if KIVYMD_AVAILABLE and MDRaisedButton is not None:
+                if tone in ("primary", "accent"):
+                    btn = MDRaisedButton(
+                        text=label,
+                        size_hint_y=None,
+                        height=row_h,
+                        md_bg_color=colors.get(tone, palette["primary"]),
+                        text_color=(1, 1, 1, 1),
+                        elevation=1,
+                    )
+                elif tone == "plain":
+                    btn = MDRectangleFlatButton(
+                        text=label,
+                        size_hint_y=None,
+                        height=row_h,
+                        line_color=palette["border"],
+                        text_color=palette["text"],
+                    )
+                else:
+                    btn = MDFlatButton(
+                        text=label,
+                        size_hint_y=None,
+                        height=row_h,
+                        theme_text_color="Custom",
+                        text_color=palette["text"],
+                    )
+                return btn
+
+            txt_color = (1,1,1,1) if tone in ("primary","accent") else palette["text"]
+            btn = Button(
+                text=label,
+                size_hint_y=None, height=row_h,
+                background_normal="", background_down="",
+                background_color=colors.get(tone, palette["primary"]),
+                color=txt_color, font_size=dp(14) if is_mobile else dp(13),
             )
+            return btn
+
+        def make_input(default="", hint="", input_filter=None):
+            if KIVYMD_AVAILABLE and MDTextField is not None:
+                field = MDTextField(
+                    text=str(default),
+                    hint_text=hint,
+                    mode="fill",
+                    size_hint_y=None,
+                    height=input_h + dp(8),
+                    helper_text_mode="on_focus",
+                )
+                try:
+                    field.fill_color_normal = palette["surface_alt"]
+                    field.fill_color_focus = palette["surface_alt"]
+                    field.line_color_normal = palette["border"]
+                    field.line_color_focus = palette["primary"]
+                    field.text_color_normal = palette["text"]
+                    field.text_color_focus = palette["text"]
+                    field.hint_text_color_normal = palette["muted"]
+                    field.hint_text_color_focus = palette["primary"]
+                except Exception:
+                    pass
+                if input_filter is not None:
+                    try:
+                        field.input_filter = input_filter
+                    except Exception:
+                        pass
+                return field
+
+            kwargs = dict(text=str(default), hint_text=hint, multiline=False,
+                          size_hint_y=None, height=input_h, font_size=dp(14), write_tab=False,
+                          background_normal="", background_active="",
+                          background_color=palette["surface_alt"], foreground_color=palette["text"],
+                          cursor_color=palette["primary"], padding=[dp(12), dp(14), dp(12), dp(14)])
             if input_filter is not None:
                 kwargs["input_filter"] = input_filter
             return TextInput(**kwargs)
 
         def make_spinner(text, values=()):
-            return Spinner(
-                text=text,
-                values=list(values),
-                size_hint_y=None,
-                height=row_h,
-                font_size=dp(15) if is_mobile else dp(13)
-            )
+            return Spinner(text=text, values=list(values), size_hint_y=None, height=input_h,
+                           font_size=dp(14), background_normal="", background_color=palette["surface_alt"],
+                           color=palette["text"])
 
-        # Status
-        status_box = BoxLayout(
-            orientation="vertical",
-            size_hint_y=None,
-            height=status_h,
-            spacing=dp(4)
-        )
-        status_title = Label(
-            text="[b]MediMap Pro[/b]",
-            markup=True,
-            size_hint_y=None,
-            height=dp(34) if is_mobile else dp(30),
-            halign="left",
-            valign="middle",
-            font_size=dp(18) if is_mobile else dp(16)
-        )
-        status_title.bind(size=self._sync_label_text_size)
-        status_box.add_widget(status_title)
+        def labeled_field(label_text, widget, helper=None):
+            box = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(4))
+            extra = dp(18) if helper else 0
+            box.height = dp(24) + widget.height + extra
+            lbl = Label(text=label_text, color=palette["text"], size_hint_y=None,
+                        height=dp(20), halign="left", valign="middle", font_size=dp(12))
+            lbl.bind(size=self._sync_label_text_size)
+            box.add_widget(lbl)
+            box.add_widget(widget)
+            if helper:
+                hlp = Label(text=helper, color=palette["muted"], size_hint_y=None,
+                            height=dp(16), halign="left", valign="middle", font_size=dp(10))
+                hlp.bind(size=self._sync_label_text_size)
+                box.add_widget(hlp)
+            return box
 
-        self.status_lbl = Label(
-            text="Load CSV/XLSX, Google Sheet URL, and PDF to begin",
-            size_hint_y=None,
-            height=status_h - (dp(38) if is_mobile else dp(32)),
-            halign="left",
-            valign="top",
-            font_size=dp(14) if is_mobile else dp(13)
-        )
+        def labeled_checkbox(label_text, checkbox, helper=None):
+            row = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(34), spacing=dp(10))
+            checkbox.size_hint = (None, None)
+            checkbox.size = (dp(36), dp(24))
+            row.add_widget(checkbox)
+            lbl_cls = MDLabel if KIVYMD_AVAILABLE and MDLabel is not None else Label
+            lbl_kwargs = dict(text=label_text, halign="left", valign="middle")
+            if lbl_cls is Label:
+                lbl_kwargs.update(color=palette["text"], font_size=dp(13))
+            else:
+                lbl_kwargs.update(theme_text_color="Custom", text_color=palette["text"], font_style="BodyMedium")
+            lbl = lbl_cls(**lbl_kwargs)
+            if lbl_cls is Label:
+                lbl.bind(size=self._sync_label_text_size)
+            row.add_widget(lbl)
+            if helper:
+                wrap = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(2))
+                wrap.height = dp(54)
+                wrap.add_widget(row)
+                sub = Label(text=helper, color=palette["muted"], size_hint_y=None, height=dp(14), halign="left", valign="middle", font_size=dp(10))
+                sub.bind(size=self._sync_label_text_size)
+                wrap.add_widget(sub)
+                return wrap
+            return row
+
+        root = BoxLayout(orientation="vertical", spacing=gap, padding=pad)
+
+        hero = BoxLayout(orientation="vertical", spacing=dp(6), size_hint_y=None, height=dp(110) if is_mobile else dp(102), padding=dp(14))
+        style_card(hero, palette["primary"])
+        hero_title = Label(text="MediMap Pro", color=(1,1,1,1), bold=True,
+                           size_hint_y=None, height=dp(28), halign="left", valign="middle",
+                           font_size=dp(22) if is_mobile else dp(20))
+        hero_title.bind(size=self._sync_label_text_size)
+        hero.add_widget(hero_title)
+        hero_sub = Label(text="Modern PDF form automation with live preview, direct mapping, and Android-friendly fallback rendering.",
+                         color=(0.93,0.96,1,1), size_hint_y=None, height=dp(40), halign="left", valign="middle", font_size=dp(12))
+        hero_sub.bind(size=self._sync_label_text_size)
+        hero.add_widget(hero_sub)
+        self.status_lbl = Label(text="Load CSV/XLSX, Google Sheet URL, and PDF to begin", color=(1,1,1,1),
+                                size_hint_y=None, height=dp(24), halign="left", valign="middle", font_size=dp(12))
         self.status_lbl.bind(size=self._sync_label_text_size)
-        status_box.add_widget(self.status_lbl)
-        controls.add_widget(status_box)
+        hero.add_widget(self.status_lbl)
+        root.add_widget(hero)
 
-        # Data & files
-        controls.add_widget(make_title("Data & Files"))
-        if is_mobile:
-            file_grid = GridLayout(cols=2, size_hint_y=None, spacing=gap)
-            file_buttons = [
-                ("Load PDF", self.on_load_pdf),
-                ("Load CSV/XLSX", self.on_load_csv),
-                ("Load GSheet URL", self.on_load_gsheet_url),
-                ("Load Config", self.on_load_config),
-                ("Merge Mappings", self.on_merge_config),
-                ("Save Config", self.on_save_config),
-            ]
-            file_grid.height = ((len(file_buttons) + 1) // 2) * row_h + (max(((len(file_buttons) + 1) // 2) - 1, 0) * gap)
-            for txt, cb in file_buttons:
-                btn = make_button(txt)
-                btn.bind(on_release=cb)
-                file_grid.add_widget(btn)
-            controls.add_widget(file_grid)
-        else:
-            file_grid = GridLayout(cols=3, size_hint_y=None, height=2 * row_h + gap, spacing=gap)
-            self.btn_load_pdf = make_button("Load PDF")
-            self.btn_load_pdf.bind(on_release=self.on_load_pdf)
-            file_grid.add_widget(self.btn_load_pdf)
+        main = BoxLayout(orientation="vertical" if is_mobile else "horizontal", spacing=gap)
 
-            self.btn_load_csv = make_button("Load CSV/XLSX")
-            self.btn_load_csv.bind(on_release=self.on_load_csv)
-            file_grid.add_widget(self.btn_load_csv)
+        controls_wrap = BoxLayout(orientation="vertical", size_hint=(1, 0.56) if is_mobile else (0.44, 1))
+        controls_scroll = ScrollView(do_scroll_x=False, do_scroll_y=True, bar_width=dp(6), scroll_type=["bars", "content"])
+        controls = GridLayout(cols=1, spacing=gap, size_hint_y=None)
+        controls.bind(minimum_height=controls.setter("height"))
 
-            self.btn_load_gsheet = make_button("Load GSheet URL")
-            self.btn_load_gsheet.bind(on_release=self.on_load_gsheet_url)
-            file_grid.add_widget(self.btn_load_gsheet)
+        files_card, files_body = make_card("Workspace", "Open data, templates, and saved presets")
+        file_grid = GridLayout(cols=2 if is_mobile else 3, spacing=dp(8), size_hint_y=None)
+        file_buttons = [
+            ("Load PDF", self.on_load_pdf, "primary"),
+            ("Load CSV/XLSX", self.on_load_csv, "soft"),
+            ("Load GSheet", self.on_load_gsheet_url, "soft"),
+            ("Load Config", self.on_load_config, "plain"),
+            ("Merge Mappings", self.on_merge_config, "plain"),
+            ("Save Config", self.on_save_config, "accent"),
+        ]
+        rows = (len(file_buttons) + file_grid.cols - 1) // file_grid.cols
+        file_grid.height = rows * row_h + max(rows-1,0) * dp(8)
+        for txt, cb, tone in file_buttons:
+            btn = make_button(txt, tone=tone)
+            btn.bind(on_release=cb)
+            file_grid.add_widget(btn)
+        files_body.add_widget(file_grid)
+        controls.add_widget(files_card)
 
-            self.btn_load_cfg = make_button("Load Config")
-            self.btn_load_cfg.bind(on_release=self.on_load_config)
-            file_grid.add_widget(self.btn_load_cfg)
-
-            self.btn_merge_cfg = make_button("Merge Mappings")
-            self.btn_merge_cfg.bind(on_release=self.on_merge_config)
-            file_grid.add_widget(self.btn_merge_cfg)
-
-            self.btn_save_cfg = make_button("Save Config")
-            self.btn_save_cfg.bind(on_release=self.on_save_config)
-            file_grid.add_widget(self.btn_save_cfg)
-            controls.add_widget(file_grid)
-
-        if is_mobile:
-            # keep references for consistency
-            pass
-
-        # Navigation
-        controls.add_widget(make_title("Navigation"))
+        nav_card, nav_body = make_card("Session", "Choose a patient, move pages, detect, and refresh")
         self.patient_spinner = make_spinner("Select Patient")
         self.patient_spinner.bind(text=self.on_patient_change)
-        controls.add_widget(self.patient_spinner)
-
-        if is_mobile:
-            nav_row = GridLayout(cols=3, size_hint_y=None, height=row_h, spacing=gap)
-            self.page_input = make_input("0", "Page", multiline=False, input_filter="int")
-            self.btn_prev = make_button("Prev")
-            self.btn_next = make_button("Next")
-            self.btn_prev.bind(on_release=self.on_prev_page)
-            self.btn_next.bind(on_release=self.on_next_page)
-            nav_row.add_widget(self.page_input)
-            nav_row.add_widget(self.btn_prev)
-            nav_row.add_widget(self.btn_next)
-            controls.add_widget(nav_row)
-        else:
-            nav_row = BoxLayout(size_hint_y=None, height=row_h, spacing=gap)
-            self.page_input = make_input("0", "Page", multiline=False, input_filter="int")
-            self.page_input.size_hint_x = 0.18
-            self.btn_prev = make_button("Prev")
-            self.btn_prev.size_hint_x = 0.20
-            self.btn_next = make_button("Next")
-            self.btn_next.size_hint_x = 0.20
-            self.btn_prev.bind(on_release=self.on_prev_page)
-            self.btn_next.bind(on_release=self.on_next_page)
-            nav_row.add_widget(self.page_input)
-            nav_row.add_widget(self.btn_prev)
-            nav_row.add_widget(self.btn_next)
-            controls.add_widget(nav_row)
-
-        nav_actions = GridLayout(cols=2, size_hint_y=None, height=row_h, spacing=gap)
-        self.btn_detect = make_button("Run Detect")
+        nav_body.add_widget(labeled_field("Patient", self.patient_spinner, "Active data row for preview and export"))
+        nav_grid = GridLayout(cols=3, spacing=dp(8), size_hint_y=None, height=row_h)
+        self.page_input = make_input("0", "Page", input_filter="int")
+        self.btn_prev = make_button("Prev", tone="plain")
+        self.btn_next = make_button("Next", tone="plain")
+        self.btn_prev.bind(on_release=self.on_prev_page)
+        self.btn_next.bind(on_release=self.on_next_page)
+        nav_grid.add_widget(self.page_input)
+        nav_grid.add_widget(self.btn_prev)
+        nav_grid.add_widget(self.btn_next)
+        nav_body.add_widget(labeled_field("Page", nav_grid, "Preview uses zero-based page index"))
+        action_grid = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=row_h)
+        self.btn_detect = make_button("Run Detect", tone="accent")
         self.btn_detect.bind(on_release=self.on_run_detect)
-        nav_actions.add_widget(self.btn_detect)
-
-        self.btn_preview = make_button("Refresh Preview")
+        self.btn_preview = make_button("Refresh Preview", tone="primary")
         self.btn_preview.bind(on_release=self.on_preview)
-        nav_actions.add_widget(self.btn_preview)
-        controls.add_widget(nav_actions)
+        action_grid.add_widget(self.btn_detect)
+        action_grid.add_widget(self.btn_preview)
+        nav_body.add_widget(action_grid)
+        controls.add_widget(nav_card)
 
-        # Detection settings
-        controls.add_widget(make_title("Detection Settings"))
-        settings_cols = 2 if is_mobile else 3
-        settings_items = []
+        detect_card, detect_body = make_card("Detection", "Field, line, checkbox, and extent thresholds")
+        explain = Label(text="F = field sizing  •  Line = answer lines  •  C = checkbox tuning  •  Ext = contour extent limits",
+                        color=palette["muted"], size_hint_y=None, height=dp(18), halign="left", valign="middle", font_size=dp(11))
+        explain.bind(size=self._sync_label_text_size)
+        detect_body.add_widget(explain)
 
-        self.f_area = make_input(DEFAULTS["F_Area"], "F_Area", input_filter="int")
-        self.f_minw = make_input(DEFAULTS["F_MinW"], "F_MinW", input_filter="int")
-        self.f_minh = make_input(DEFAULTS["F_MinH"], "F_MinH", input_filter="int")
-        self.f_close = make_input(DEFAULTS["F_Close"], "F_Close", input_filter="int")
-        self.line_minw = make_input(DEFAULTS["Line_MinW"], "Line_MinW", input_filter="int")
-        self.line_maxw = make_input(DEFAULTS["Line_MaxW"], "Line_MaxW", input_filter="int")
-        self.c_strict = make_input(DEFAULTS["C_Strict"], "C_Strict", input_filter="int")
-        self.c_size_min = make_input(DEFAULTS["C_Size"][0], "C_Size_Min", input_filter="int")
-        self.c_size_max = make_input(DEFAULTS["C_Size"][1], "C_Size_Max", input_filter="int")
-        self.c_border = make_input(DEFAULTS["C_Border"], "C_Border")
-        self.c_inner = make_input(DEFAULTS["C_Inner"], "C_Inner")
-        self.roi_max = make_input(DEFAULTS["ROI_Max"], "ROI_Max", input_filter="int")
-        self.c_open = make_input(DEFAULTS["C_Open"], "C_Open", input_filter="int")
-        self.c_close = make_input(DEFAULTS["C_Close"], "C_Close", input_filter="int")
-        self.c_band = make_input(DEFAULTS["C_BandPct"], "C_BandPct")
-        self.c_aspect = make_input(DEFAULTS["C_AspectTol"], "C_AspectTol")
-        self.ext_low = make_input(DEFAULTS["Ext_Low"], "Ext_Low")
-        self.ext_high = make_input(DEFAULTS["Ext_High"], "Ext_High")
-        self.c_fill = make_input(DEFAULTS["C_FillMin"], "C_FillMin")
-        self.c_eps = make_input(DEFAULTS["C_Eps"], "C_Eps")
-        self.use_extent = make_input("0", "Use_Extent 0/1", input_filter="int")
+        self.f_area = make_input(DEFAULTS["F_Area"], "500", input_filter="int")
+        self.f_minw = make_input(DEFAULTS["F_MinW"], "15", input_filter="int")
+        self.f_minh = make_input(DEFAULTS["F_MinH"], "35", input_filter="int")
+        self.f_close = make_input(DEFAULTS["F_Close"], "1", input_filter="int")
+        self.line_minw = make_input(DEFAULTS["Line_MinW"], "100", input_filter="int")
+        self.line_maxw = make_input(DEFAULTS["Line_MaxW"], "1680", input_filter="int")
+        self.c_strict = make_input(DEFAULTS["C_Strict"], "40", input_filter="int")
+        self.c_size_min = make_input(DEFAULTS["C_Size"][0], "14", input_filter="int")
+        self.c_size_max = make_input(DEFAULTS["C_Size"][1], "65", input_filter="int")
+        self.c_border = make_input(DEFAULTS["C_Border"], "0.10")
+        self.c_inner = make_input(DEFAULTS["C_Inner"], "0.40")
+        self.roi_max = make_input(DEFAULTS["ROI_Max"], "200", input_filter="int")
+        self.c_open = make_input(DEFAULTS["C_Open"], "1", input_filter="int")
+        self.c_close = make_input(DEFAULTS["C_Close"], "0", input_filter="int")
+        self.c_band = make_input(DEFAULTS["C_BandPct"], "0.18")
+        self.c_aspect = make_input(DEFAULTS["C_AspectTol"], "0.10")
+        self.ext_low = make_input(DEFAULTS["Ext_Low"], "0.04")
+        self.ext_high = make_input(DEFAULTS["Ext_High"], "0.60")
+        self.c_fill = make_input(DEFAULTS["C_FillMin"], "0.45")
+        self.c_eps = make_input(DEFAULTS["C_Eps"], "0.04")
+        self.use_extent_chk = (MDSwitch(active=bool(DEFAULTS["Use_Extent"])) if KIVYMD_AVAILABLE and MDSwitch is not None else CheckBox(active=bool(DEFAULTS["Use_Extent"])))
 
-        settings_items.extend([
-            self.f_area, self.f_minw, self.f_minh,
-            self.f_close, self.line_minw, self.line_maxw,
-            self.c_strict, self.c_size_min, self.c_size_max,
-            self.c_border, self.c_inner, self.roi_max,
-            self.c_open, self.c_close, self.c_band,
-            self.c_aspect, self.ext_low, self.ext_high,
-            self.c_fill, self.c_eps, self.use_extent,
-        ])
+        detection_fields = [
+            labeled_field("Field Area", self.f_area, "Minimum contour area kept as a field"),
+            labeled_field("Field Min Width", self.f_minw),
+            labeled_field("Field Min Height", self.f_minh),
+            labeled_field("Field Close", self.f_close, "Morph close kernel for field cleanup"),
+            labeled_field("Line Min Width", self.line_minw),
+            labeled_field("Line Max Width", self.line_maxw),
+            labeled_field("Checkbox Strict", self.c_strict, "Higher values tighten checkbox rules"),
+            labeled_field("Checkbox Min Size", self.c_size_min),
+            labeled_field("Checkbox Max Size", self.c_size_max),
+            labeled_field("Border Fill", self.c_border),
+            labeled_field("Inner Fill", self.c_inner),
+            labeled_field("ROI Max", self.roi_max),
+            labeled_field("Checkbox Open", self.c_open),
+            labeled_field("Checkbox Close", self.c_close),
+            labeled_field("Band %", self.c_band),
+            labeled_field("Aspect Tolerance", self.c_aspect),
+            labeled_field("Extent Low", self.ext_low),
+            labeled_field("Extent High", self.ext_high),
+            labeled_field("Fill Min", self.c_fill),
+            labeled_field("Approx Eps", self.c_eps),
+            labeled_checkbox("Use Extent", self.use_extent_chk, "Use contour extent as an extra checkbox filter"),
+        ]
+        det_grid = GridLayout(cols=2 if is_mobile else 3, spacing=dp(8), size_hint_y=None)
+        rows = (len(detection_fields)+det_grid.cols-1)//det_grid.cols
+        max_cell_h = max(w.height for w in detection_fields)
+        det_grid.height = rows * max_cell_h + max(rows-1,0)*dp(8)
+        for w in detection_fields:
+            det_grid.add_widget(w)
+        detect_body.add_widget(det_grid)
+        controls.add_widget(detect_card)
 
-        settings_rows = (len(settings_items) + settings_cols - 1) // settings_cols
-        settings_grid = GridLayout(
-            cols=settings_cols,
-            size_hint_y=None,
-            height=settings_rows * row_h + max(settings_rows - 1, 0) * gap,
-            spacing=gap
-        )
-        for widget in settings_items:
-            settings_grid.add_widget(widget)
-        controls.add_widget(settings_grid)
+        map_card, map_body = make_card("Mapping", "Assign values to selected boxes directly from preview")
+        self.box_ids_input = make_input("", "0,1,2")
+        self.column_spinner = make_spinner("Select Column")
+        self.trigger_input = make_input("", "Trigger")
+        self.grid_flag_chk = (MDSwitch(active=False) if KIVYMD_AVAILABLE and MDSwitch is not None else CheckBox(active=False))
+        self.grid_n_input = make_input("1", "1", input_filter="int")
+        map_body.add_widget(labeled_field("Selected Box IDs", self.box_ids_input, "Click boxes in preview to add or remove them"))
+        map_body.add_widget(labeled_field("Column", self.column_spinner, "Data column written into the selected target"))
+        map_body.add_widget(labeled_field("Trigger", self.trigger_input, "Leave blank for text fill, use value for checkbox X mark"))
+        map_opts = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=max(dp(48), self.grid_n_input.height))
+        map_opts.add_widget(labeled_checkbox("Is Grid?", self.grid_flag_chk, "Split characters across boxes or cells"))
+        map_opts.add_widget(labeled_field("Grid N", self.grid_n_input, "Characters or cells to distribute"))
+        map_body.add_widget(map_opts)
+        self.btn_assign = make_button("Assign Mapping", tone="primary")
+        self.btn_assign.bind(on_release=self.on_assign_mapping)
+        map_body.add_widget(self.btn_assign)
+        controls.add_widget(map_card)
 
-        # Mapping
-        controls.add_widget(make_title("Mapping"))
-        if is_mobile:
-            self.box_ids_input = make_input("", "Box IDs")
-            controls.add_widget(self.box_ids_input)
-
-            self.column_spinner = make_spinner("Select Column")
-            controls.add_widget(self.column_spinner)
-
-            self.trigger_input = make_input("", "Trigger")
-            controls.add_widget(self.trigger_input)
-
-            map_grid = GridLayout(cols=3, size_hint_y=None, height=row_h, spacing=gap)
-            self.grid_flag_input = make_input("0", "Grid", input_filter="int")
-            self.grid_n_input = make_input("1", "Grid N", input_filter="int")
-            self.btn_assign = make_button("Assign")
-            self.btn_assign.bind(on_release=self.on_assign_mapping)
-            map_grid.add_widget(self.grid_flag_input)
-            map_grid.add_widget(self.grid_n_input)
-            map_grid.add_widget(self.btn_assign)
-            controls.add_widget(map_grid)
-        else:
-            map_row_1 = BoxLayout(size_hint_y=None, height=row_h, spacing=gap)
-            self.box_ids_input = make_input("", "Box IDs")
-            self.box_ids_input.size_hint_x = 0.24
-            map_row_1.add_widget(self.box_ids_input)
-
-            self.column_spinner = make_spinner("Select Column")
-            self.column_spinner.size_hint_x = 0.46
-            map_row_1.add_widget(self.column_spinner)
-
-            self.trigger_input = make_input("", "Trigger")
-            self.trigger_input.size_hint_x = 0.30
-            map_row_1.add_widget(self.trigger_input)
-            controls.add_widget(map_row_1)
-
-            map_row_2 = BoxLayout(size_hint_y=None, height=row_h, spacing=gap)
-            self.grid_flag_input = make_input("0", "Grid 0/1", input_filter="int")
-            self.grid_flag_input.size_hint_x = 0.18
-            map_row_2.add_widget(self.grid_flag_input)
-
-            self.grid_n_input = make_input("1", "Grid N", input_filter="int")
-            self.grid_n_input.size_hint_x = 0.18
-            map_row_2.add_widget(self.grid_n_input)
-
-            self.btn_assign = make_button("Assign Mapping")
-            self.btn_assign.size_hint_x = 0.64
-            self.btn_assign.bind(on_release=self.on_assign_mapping)
-            map_row_2.add_widget(self.btn_assign)
-            controls.add_widget(map_row_2)
-
-        if is_mobile:
-            self.btn_assign.text = "Assign Mapping"
-
-        # Output
-        controls.add_widget(make_title("Output"))
-        output_grid = GridLayout(
-            cols=1 if is_mobile else 2,
-            size_hint_y=None,
-            height=(2 * row_h + gap) if is_mobile else row_h,
-            spacing=gap
-        )
-        self.btn_generate_one = make_button("Generate Single PDF")
+        export_card, export_body = make_card("Export", "Generate patient output files")
+        out_grid = GridLayout(cols=1 if is_mobile else 2, spacing=dp(8), size_hint_y=None, height=(2*row_h+dp(8)) if is_mobile else row_h)
+        self.btn_generate_one = make_button("Generate Single PDF", tone="accent")
         self.btn_generate_one.bind(on_release=self.on_generate_single)
-        output_grid.add_widget(self.btn_generate_one)
-
-        self.btn_generate_batch = make_button("Generate Batch PDFs")
+        self.btn_generate_batch = make_button("Generate Batch PDFs", tone="plain")
         self.btn_generate_batch.bind(on_release=self.on_generate_batch)
-        output_grid.add_widget(self.btn_generate_batch)
-        controls.add_widget(output_grid)
+        out_grid.add_widget(self.btn_generate_one)
+        out_grid.add_widget(self.btn_generate_batch)
+        export_body.add_widget(out_grid)
+        controls.add_widget(export_card)
 
         controls_scroll.add_widget(controls)
         controls_wrap.add_widget(controls_scroll)
 
-        # Preview panel
-        preview_panel = BoxLayout(
-            orientation="vertical",
-            size_hint=(1, 0.42) if is_mobile else (0.58, 1),
-            spacing=gap
-        )
+        preview_outer = BoxLayout(orientation="vertical", spacing=gap, size_hint=(1, 0.44) if is_mobile else (0.56,1))
+        preview_card, preview_body = make_card("Live Preview", "Tap boxes to map. Hover on desktop for more details.")
+        preview_card.size_hint_y = 1
+        preview_card.bind(minimum_height=preview_card.setter("height"))
+        preview_toolbar = GridLayout(cols=2 if is_mobile else 4, spacing=dp(8), size_hint_y=None, height=row_h if not is_mobile else 2*row_h+dp(8))
+        for txt, cb, tone in [
+            ("Refresh", self.on_preview, "primary"),
+            ("Detect", self.on_run_detect, "accent"),
+            ("Prev", self.on_prev_page, "plain"),
+            ("Next", self.on_next_page, "plain"),
+        ]:
+            b = make_button(txt, tone=tone)
+            b.bind(on_release=cb)
+            preview_toolbar.add_widget(b)
+        preview_body.add_widget(preview_toolbar)
 
-        preview_title = Label(
-            text="[b]Preview[/b]",
-            markup=True,
-            size_hint_y=None,
-            height=preview_title_h,
-            halign="left",
-            valign="middle",
-            font_size=dp(16) if is_mobile else dp(14)
-        )
-        preview_title.bind(size=self._sync_label_text_size)
-        preview_panel.add_widget(preview_title)
-
-        preview_hint = Label(
-            text="Tap boxes to map directly" if is_mobile else "Tap boxes to map directly; hover for details",
-            size_hint_y=None,
-            height=preview_hint_h,
-            halign="left",
-            valign="middle",
-            font_size=dp(13) if is_mobile else dp(12)
-        )
-        preview_hint.bind(size=self._sync_label_text_size)
-        preview_panel.add_widget(preview_hint)
-
-        preview_wrap = ScrollView(
-            do_scroll_x=True,
-            do_scroll_y=True,
-            bar_width=dp(8),
-            scroll_type=["bars", "content"]
-        )
-
-        preview_stack = BoxLayout(orientation="vertical", spacing=gap, size_hint_y=None)
+        preview_shell = BoxLayout(orientation="vertical", spacing=dp(8), padding=dp(8), size_hint_y=None)
+        preview_shell.height = dp(720) if is_mobile else dp(860)
+        style_card(preview_shell, palette["preview_bg"], radius=dp(18))
+        preview_wrap = ScrollView(do_scroll_x=True, do_scroll_y=True, bar_width=dp(6), scroll_type=["bars", "content"])
+        preview_stack = BoxLayout(orientation="vertical", spacing=dp(8), size_hint_y=None)
         preview_stack.bind(minimum_height=preview_stack.setter("height"))
-
         self.preview = InteractivePreview(size_hint=(None, None))
         self.preview.bind(texture=self._update_preview_size)
         self.preview.box_tap_callback = self.on_preview_box_tap
         self.preview.hover_callback = self.on_preview_box_hover
-
-        self.preview_info = Label(
-            text="Interactive preview ready. Tap a box to select it.",
-            size_hint_y=None,
-            height=dp(52) if is_mobile else dp(42),
-            halign="left",
-            valign="middle",
-            font_size=dp(14) if is_mobile else dp(12)
-        )
+        self.preview_info = Label(text="Interactive preview ready. Tap a box to select it.", color=palette["text"],
+                                  size_hint_y=None, height=dp(56), halign="left", valign="middle", font_size=dp(13))
         self.preview_info.bind(size=self._sync_label_text_size)
-
         preview_stack.add_widget(self.preview)
         preview_stack.add_widget(self.preview_info)
         preview_wrap.add_widget(preview_stack)
-        preview_panel.add_widget(preview_wrap)
+        preview_shell.add_widget(preview_wrap)
+        preview_body.add_widget(preview_shell)
+        preview_outer.add_widget(preview_card)
 
-        root.add_widget(controls_wrap)
-        root.add_widget(preview_panel)
+        main.add_widget(controls_wrap)
+        main.add_widget(preview_outer)
+        root.add_widget(main)
 
         return root
 
@@ -2455,7 +2541,7 @@ class MediMapProApp(App):
             self.engine.settings["Ext_High"] = float(self.ext_high.text)
             self.engine.settings["C_FillMin"] = float(self.c_fill.text)
             self.engine.settings["C_Eps"] = float(self.c_eps.text)
-            self.engine.settings["Use_Extent"] = bool(int(self.use_extent.text.strip() or "0"))
+            self.engine.settings["Use_Extent"] = bool(getattr(self, "use_extent_chk", None).active if hasattr(self, "use_extent_chk") else int(self.use_extent.text.strip() or "0"))
         except Exception as e:
             raise ValueError(f"Invalid settings input: {e}")
 
@@ -2504,7 +2590,11 @@ class MediMapProApp(App):
         self.ext_high.text = str(s["Ext_High"])
         self.c_fill.text = str(s["C_FillMin"])
         self.c_eps.text = str(s["C_Eps"])
-        self.use_extent.text = "1" if s["Use_Extent"] else "0"
+        
+        if hasattr(self, "use_extent_chk"):
+            self.use_extent_chk.active = bool(s["Use_Extent"])
+        elif hasattr(self, "use_extent"):
+            self.use_extent.text = "1" if s["Use_Extent"] else "0"
 
     def refresh_patient_and_column_lists(self):
         if self.engine.df is None or self.engine.df.empty:
@@ -2626,7 +2716,10 @@ class MediMapProApp(App):
             if col:
                 self.column_spinner.text = col
             self.trigger_input.text = trig
-            self.grid_flag_input.text = "1" if bool(mapping.get("g", False)) else "0"
+            if hasattr(self, "grid_flag_chk"):
+                self.grid_flag_chk.active = bool(mapping.get("g", False))
+            else:
+                self.grid_flag_input.text = "1" if bool(mapping.get("g", False)) else "0"
             self.grid_n_input.text = str(int(mapping.get("n", 1)))
 
         self.open_mapping_popup_for_selection(primary_box_id=box_id)
@@ -2643,7 +2736,7 @@ class MediMapProApp(App):
 
         current_col = self.column_spinner.text if self.column_spinner.text != "Select Column" else ""
         current_trigger = self.trigger_input.text.strip()
-        current_grid_flag = self.grid_flag_input.text.strip() or "0"
+        current_grid_flag = "1" if getattr(self, "grid_flag_chk", None).active else "0" if hasattr(self, "grid_flag_chk") else (self.grid_flag_input.text.strip() or "0")
         current_grid_n = self.grid_n_input.text.strip() or "1"
 
         if existing:
@@ -2681,18 +2774,19 @@ class MediMapProApp(App):
         )
         wrap.add_widget(trigger_input)
 
-        grid_row = GridLayout(cols=2, size_hint_y=None, height=44, spacing=6)
-        grid_flag_input = TextInput(
-            text=current_grid_flag,
-            hint_text="Grid 0/1",
-            multiline=False
-        )
+        grid_row = GridLayout(cols=2, size_hint_y=None, height=64, spacing=8)
+        popup_grid_chk = CheckBox(active=(str(current_grid_flag).strip() == "1"))
+        grid_flag_wrap = BoxLayout(orientation="horizontal", spacing=8)
+        grid_flag_wrap.add_widget(popup_grid_chk)
+        grid_flag_lbl = Label(text="Is Grid?", halign="left", valign="middle")
+        grid_flag_lbl.bind(size=self._sync_label_text_size)
+        grid_flag_wrap.add_widget(grid_flag_lbl)
         grid_n_input = TextInput(
             text=current_grid_n,
             hint_text="Grid N",
             multiline=False
         )
-        grid_row.add_widget(grid_flag_input)
+        grid_row.add_widget(grid_flag_wrap)
         grid_row.add_widget(grid_n_input)
         wrap.add_widget(grid_row)
 
@@ -2713,14 +2807,18 @@ class MediMapProApp(App):
                 if not column or column == "Select Column":
                     raise ValueError("Please select a column.")
                 trigger = trigger_input.text.strip()
-                is_grid = bool(int(grid_flag_input.text.strip() or "0"))
+                is_grid = bool(getattr(popup_grid_chk, "active", False))
                 grid_n = int(grid_n_input.text.strip() or "1")
 
                 self.engine.assign_mapping(ids, column, trigger, is_grid, grid_n, page_idx)
 
                 self.column_spinner.text = column
                 self.trigger_input.text = trigger
-                self.grid_flag_input.text = "1" if is_grid else "0"
+                
+                if hasattr(self, "grid_flag_chk"):
+                    self.grid_flag_chk.active = bool(is_grid)
+                else:
+                    self.grid_flag_input.text = "1" if is_grid else "0"
                 self.grid_n_input.text = str(grid_n)
                 self.box_ids_input.text = ",".join(str(i) for i in ids)
                 self.engine.selected_box_ids = ids
@@ -3049,7 +3147,7 @@ class MediMapProApp(App):
                 raise ValueError("Please enter at least one Box ID.")
 
             trigger = self.trigger_input.text.strip()
-            is_grid = bool(int(self.grid_flag_input.text.strip() or "0"))
+            is_grid = bool(self.grid_flag_chk.active) if hasattr(self, "grid_flag_chk") else bool(int(self.grid_flag_input.text.strip() or "0"))
             grid_n = int(self.grid_n_input.text.strip() or "1")
             page_idx = self.current_page_idx()
 
@@ -3122,19 +3220,51 @@ class MediMapProApp(App):
             f"{mode_note}"
         )
 
-    def _copy_android_uri_to_local_pdf(self, uri_string):
+    def _copy_android_uri_to_local_pdf(self, uri):
         if platform != "android" or not ANDROID_JAVA_AVAILABLE:
             raise RuntimeError("Android document picker is unavailable.")
 
+        if uri is None:
+            raise ValueError("Android returned no document URI.")
+
         activity_obj = AndroidPythonActivity.mActivity
         resolver = activity_obj.getContentResolver()
-        uri = AndroidUri.parse(uri_string)
+
+        # Accept either a real Android Uri object or a URI string.
+        # Passing str(uri) from PyJNIus can produce a debug repr instead of a
+        # usable content:// URI, so prefer the Uri object directly.
+        if isinstance(uri, str):
+            uri = AndroidUri.parse(uri)
+
         input_stream = resolver.openInputStream(uri)
         if input_stream is None:
             raise ValueError("Unable to open the selected Android document.")
 
+        display_name = None
+        cursor = None
+        try:
+            OpenableColumns = autoclass("android.provider.OpenableColumns")
+            cursor = resolver.query(uri, None, None, None, None)
+            if cursor is not None and cursor.moveToFirst():
+                idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if idx >= 0:
+                    display_name = cursor.getString(idx)
+        except Exception:
+            display_name = None
+        finally:
+            try:
+                if cursor is not None:
+                    cursor.close()
+            except Exception:
+                pass
+
+        filename = safe_name(display_name or "selected_input")
+        if not filename.lower().endswith(".pdf"):
+            filename += ".pdf"
+
         out_dir = self.get_app_output_dir()
-        out_path = os.path.join(out_dir, "selected_input.pdf")
+        os.makedirs(out_dir, exist_ok=True)
+        out_path = os.path.join(out_dir, filename)
         fos = autoclass("java.io.FileOutputStream")(out_path)
         try:
             while True:
@@ -3177,7 +3307,7 @@ class MediMapProApp(App):
                     AndroidPythonActivity.mActivity.getContentResolver().takePersistableUriPermission(uri, take_flags)
                 except Exception:
                     pass
-                local_path = self._copy_android_uri_to_local_pdf(str(uri))
+                local_path = self._copy_android_uri_to_local_pdf(uri)
                 self._load_pdf_from_path(local_path)
             except Exception as e:
                 traceback.print_exc()
