@@ -25,23 +25,10 @@ if not hasattr(base64, "encodestring"):
     base64.encodestring = base64.encodebytes
 
 import cv2
-FITZ_AVAILABLE = False
-FITZ_BACKEND = None
-FITZ_IMPORT_ERROR = None
 try:
-    import fitz as _fitz
-    fitz = _fitz
-    FITZ_AVAILABLE = True
-    FITZ_BACKEND = "fitz"
-except Exception as e_fitzz:
-    try:
-        import pymupdf as _fitz
-        fitz = _fitz
-        FITZ_AVAILABLE = True
-        FITZ_BACKEND = "pymupdf"
-    except Exception as e_pymupdf:
-        fitz = None
-        FITZ_IMPORT_ERROR = f"fitz import error: {e_fitzz}; pymupdf import error: {e_pymupdf}"
+    import fitz
+except Exception:
+    fitz = None
 import numpy as np
 import pandas as pd
 
@@ -50,6 +37,8 @@ from pypdf import PdfReader, PdfWriter
 from kivy.app import App
 from kivy.clock import Clock
 from kivy.core.image import Image as CoreImage
+from kivy.core.text import Label as CoreLabel
+from kivy.core.window import Window
 from kivy.graphics import Color, Line, Rectangle
 from kivy.graphics.texture import Texture
 from kivy.metrics import dp
@@ -66,7 +55,83 @@ from kivy.uix.scrollview import ScrollView
 from kivy.uix.slider import Slider
 from kivy.uix.spinner import Spinner
 from kivy.uix.textinput import TextInput
+from kivy.uix.widget import Widget
 from kivy.utils import platform
+
+FITZ_AVAILABLE = bool(fitz is not None and hasattr(fitz, "open") and hasattr(fitz, "Rect"))
+
+if platform == "android":
+    try:
+        from jnius import autoclass
+        from android import activity
+        AndroidPythonActivity = autoclass("org.kivy.android.PythonActivity")
+        AndroidIntent = autoclass("android.content.Intent")
+        AndroidBitmap = autoclass("android.graphics.Bitmap")
+        AndroidPdfRenderer = autoclass("android.graphics.pdf.PdfRenderer")
+        AndroidParcelFileDescriptor = autoclass("android.os.ParcelFileDescriptor")
+        AndroidUri = autoclass("android.net.Uri")
+        AndroidByteArrayOutputStream = autoclass("java.io.ByteArrayOutputStream")
+        ANDROID_JAVA_AVAILABLE = True
+    except Exception:
+        AndroidPythonActivity = None
+        AndroidIntent = None
+        AndroidBitmap = None
+        AndroidPdfRenderer = None
+        AndroidParcelFileDescriptor = None
+        AndroidUri = None
+        AndroidByteArrayOutputStream = None
+        ANDROID_JAVA_AVAILABLE = False
+else:
+    ANDROID_JAVA_AVAILABLE = False
+
+
+def android_render_pdf_page(path, page_idx=0, preview_zoom=1.5):
+    """Render a PDF page on Android using the native PdfRenderer API."""
+    if platform != "android" or not ANDROID_JAVA_AVAILABLE:
+        raise RuntimeError("Android PdfRenderer is unavailable.")
+
+    pfd = None
+    renderer = None
+    page = None
+    try:
+        file_obj = autoclass("java.io.File")(path)
+        pfd = AndroidParcelFileDescriptor.open(file_obj, AndroidParcelFileDescriptor.MODE_READ_ONLY)
+        renderer = AndroidPdfRenderer(pfd)
+        total = renderer.getPageCount()
+        if total <= 0:
+            raise ValueError("PDF has no pages.")
+        page_idx = max(0, min(int(page_idx), total - 1))
+        page = renderer.openPage(page_idx)
+
+        width = max(1, int(page.getWidth() * float(preview_zoom)))
+        height = max(1, int(page.getHeight() * float(preview_zoom)))
+        bitmap = AndroidBitmap.createBitmap(width, height, AndroidBitmap.Config.ARGB_8888)
+        bitmap.eraseColor(-1)
+        page.render(bitmap, None, None, AndroidPdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+
+        baos = AndroidByteArrayOutputStream()
+        bitmap.compress(AndroidBitmap.CompressFormat.PNG, 100, baos)
+        png_bytes = bytes(baos.toByteArray())
+        img = cv2.imdecode(np.frombuffer(png_bytes, np.uint8), cv2.IMREAD_COLOR)
+        if img is None:
+            raise ValueError("Android PdfRenderer returned an unreadable image.")
+        return img
+    finally:
+        try:
+            if page is not None:
+                page.close()
+        except Exception:
+            pass
+        try:
+            if renderer is not None:
+                renderer.close()
+        except Exception:
+            pass
+        try:
+            if pfd is not None:
+                pfd.close()
+        except Exception:
+            pass
 
 
 # ============================================================
@@ -74,12 +139,8 @@ from kivy.utils import platform
 # ============================================================
 APP_TITLE = "MediMap Pro: Intelligent Form Automator"
 CONFIG_FILENAME = "medimap_config.json"
-if platform == "android":
-    ZOOM = 2.4
-    PREVIEW_SCALE = 1.35
-else:
-    ZOOM = 4.0
-    PREVIEW_SCALE = 2.2
+ZOOM = 4.0
+PREVIEW_SCALE = 2.2
 
 DEFAULTS = {
     "F_Area": 500,
@@ -262,16 +323,6 @@ class MediMapEngine:
         self.settings = dict(DEFAULTS)
         self.settings["C_Size"] = list(DEFAULTS["C_Size"])
 
-    def ensure_pdf_backend(self):
-        if fitz is None or not FITZ_AVAILABLE:
-            detail = FITZ_IMPORT_ERROR or "Unknown PyMuPDF import error."
-            raise RuntimeError(
-                "PDF engine is unavailable in this build. "
-                "PyMuPDF could not be imported on this device. "
-                f"Details: {detail}"
-            )
-        return fitz
-
     # --------------------------------------------------------
     # Data loading
     # --------------------------------------------------------
@@ -334,18 +385,15 @@ class MediMapEngine:
 
     def load_pdf(self, path):
         """Set PDF path, validate file, and return page count."""
-        self.ensure_pdf_backend()
-
         if not path:
             raise ValueError("No PDF path provided.")
         if not os.path.exists(path):
             raise FileNotFoundError(f"PDF file not found: {path}")
 
         try:
-            with fitz.open(path) as doc:
-                total = len(doc)
-                if total <= 0:
-                    raise ValueError("PDF has no pages.")
+            total = self._pdf_page_count(path)
+            if total <= 0:
+                raise ValueError("PDF has no pages.")
         except Exception as e:
             raise ValueError(f"Failed to open PDF: {e}")
 
@@ -356,35 +404,18 @@ class MediMapEngine:
         return total
 
     def total_pages(self):
-        if fitz is None or not FITZ_AVAILABLE:
-            return 1
         if not self.pdf_path or not os.path.exists(self.pdf_path):
             return 1
         try:
-            with fitz.open(self.pdf_path) as doc:
-                return max(len(doc), 1)
+            return max(self._pdf_page_count(self.pdf_path), 1)
         except Exception:
             return 1
 
     def get_raw_preview_pixmap(self, page_idx=0, preview_zoom=1.5):
         """Render the raw loaded PDF page without filling or boxes."""
-        self.ensure_pdf_backend()
         if not self.pdf_path or not os.path.exists(self.pdf_path):
             raise FileNotFoundError("PDF path is missing or invalid.")
-
-        with fitz.open(self.pdf_path) as doc:
-            total = len(doc)
-            if total <= 0:
-                raise ValueError("PDF has no pages.")
-            page_idx = max(0, min(int(page_idx), total - 1))
-            page = doc[page_idx]
-            pix = page.get_pixmap(matrix=fitz.Matrix(preview_zoom, preview_zoom))
-            img = cv2.imdecode(np.frombuffer(pix.tobytes("png"), np.uint8), cv2.IMREAD_COLOR)
-
-        if img is None:
-            raise ValueError("Failed to render raw PDF preview image.")
-
-        return img
+        return self._render_pdf_page_bgr(self.pdf_path, page_idx=page_idx, preview_zoom=preview_zoom)
 
 
 
@@ -804,9 +835,10 @@ class MediMapEngine:
     # Main detection entry
     # --------------------------------------------------------
     def run_detection(self, page_idx=0):
-        self.ensure_pdf_backend()
         if not self.pdf_path or not os.path.exists(self.pdf_path):
             raise FileNotFoundError("PDF path is missing or invalid.")
+        if not self.supports_processing_backend():
+            raise RuntimeError("Android native preview is available, but detection still requires the PyMuPDF backend in this build.")
 
         doc = fitz.open(self.pdf_path)
         page_obj = doc[page_idx]
@@ -974,17 +1006,19 @@ class MediMapEngine:
                 0.60 <= aspect <= 1.60
             ):
                 for fx, fy, fw, fh in self.find_checkbox_rects_in_roi(bin_checks, x, y, w, h):
-                    self.all_boxes.append(
-                        fitz.Rect(fx / ZOOM, fy / ZOOM, (fx + fw) / ZOOM, (fy + fh) / ZOOM)
+                    self._append_box_unique(
+                        fitz.Rect(fx / ZOOM, fy / ZOOM, (fx + fw) / ZOOM, (fy + fh) / ZOOM),
+                        "check",
+                        iou_thresh=0.45
                     )
-                    self.box_types.append("check")
 
             elif max(w, h) <= int(red_roi_max_val) and min(w, h) >= checkbox_min_sz:
                 for fx, fy, fw, fh in self.find_checkbox_rects_in_roi(bin_checks, x, y, w, h):
-                    self.all_boxes.append(
-                        fitz.Rect(fx / ZOOM, fy / ZOOM, (fx + fw) / ZOOM, (fy + fh) / ZOOM)
+                    self._append_box_unique(
+                        fitz.Rect(fx / ZOOM, fy / ZOOM, (fx + fw) / ZOOM, (fy + fh) / ZOOM),
+                        "check",
+                        iou_thresh=0.45
                     )
-                    self.box_types.append("check")
 
         # --- field detection
         nf2, _, sf2, _ = cv2.connectedComponentsWithStats(bin_fields)
@@ -1322,7 +1356,8 @@ class MediMapEngine:
     # Document processing
     # --------------------------------------------------------
     def process_doc(self, patient_name, page_idx=0):
-        self.ensure_pdf_backend()
+        if not self.supports_processing_backend():
+            raise RuntimeError("Android native preview is available, but PDF filling/export still requires the PyMuPDF backend in this build.")
         if self.df is None or self.df.empty:
             raise ValueError("DataFrame is empty.")
 
@@ -1330,9 +1365,7 @@ class MediMapEngine:
         if matches.empty:
             raise ValueError(f"Patient not found: {patient_name}")
         if len(matches) > 1:
-            raise ValueError(
-                f"Multiple records found for '{patient_name}'. Please make the display name unique or use a unique identifier."
-            )
+            raise ValueError(f"Multiple records found for '{patient_name}'. Please make the display name unique.")
 
         row = matches.iloc[0]
         doc = fitz.open(self.pdf_path)
@@ -1682,8 +1715,7 @@ class MediMapEngine:
         self.apply_config(cfg)
         return cfg
 
-    def get_preview_pixmap_with_boxes(self, patient_name, page_idx=0, preview_zoom=1.5):
-        self.ensure_pdf_backend()
+    def get_processed_preview_pixmap(self, patient_name, page_idx=0, preview_zoom=1.5):
         if not self.all_boxes:
             self.run_detection(page_idx=page_idx)
 
@@ -1692,9 +1724,13 @@ class MediMapEngine:
         pix = page.get_pixmap(matrix=fitz.Matrix(preview_zoom, preview_zoom))
         img = cv2.imdecode(np.frombuffer(pix.tobytes("png"), np.uint8), cv2.IMREAD_COLOR)
 
+        doc.close()
         if img is None:
-            doc.close()
             raise ValueError("Failed to build preview image.")
+        return img
+
+    def get_preview_pixmap_with_boxes(self, patient_name, page_idx=0, preview_zoom=1.5):
+        img = self.get_processed_preview_pixmap(patient_name, page_idx=page_idx, preview_zoom=preview_zoom)
 
         for i, r in enumerate(self.all_boxes):
             x0 = int(r.x0 * preview_zoom)
@@ -1704,34 +1740,17 @@ class MediMapEngine:
 
             box_type = self.box_types[i]
             if box_type == "check":
-                color = (0, 0, 255)      # red
+                color = (0, 0, 255)
             elif box_type == "line":
-                color = (0, 215, 255)    # yellow-ish
+                color = (0, 215, 255)
             else:
-                color = (0, 255, 0)      # green
+                color = (0, 255, 0)
 
             cv2.rectangle(img, (x0, y0), (x1, y1), color, 2)
-
             label = str(i)
-            cv2.rectangle(
-                img,
-                (x0, max(0, y0 - 14)),
-                (x0 + 20, y0),
-                (0, 0, 0),
-                -1
-            )
-            cv2.putText(
-                img,
-                label,
-                (x0 + 2, y0 - 3),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.35,
-                (255, 255, 255),
-                1,
-                cv2.LINE_AA
-            )
+            cv2.rectangle(img, (x0, max(0, y0 - 14)), (x0 + 20, y0), (0, 0, 0), -1)
+            cv2.putText(img, label, (x0 + 2, y0 - 3), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1, cv2.LINE_AA)
 
-        doc.close()
         return img
 
 # =========================
@@ -1739,6 +1758,168 @@ class MediMapEngine:
 # Kivy App UI + Wiring
 # Paste this BELOW Part 3
 # =========================
+
+class InteractivePreview(Image):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.allow_stretch = False
+        self.keep_ratio = True
+        self.boxes_payload = []
+        self.selected_ids = set()
+        self.hovered_box_id = None
+        self.preview_zoom = 1.0
+        self.page_idx = 0
+        self.box_tap_callback = None
+        self.hover_callback = None
+        self._mouse_bound = False
+        self.bind(texture=self._redraw_overlay, size=self._redraw_overlay, pos=self._redraw_overlay)
+        if platform != "android":
+            Window.bind(mouse_pos=self._on_mouse_pos)
+            self._mouse_bound = True
+
+    def on_parent(self, *args):
+        self._redraw_overlay()
+
+    def set_texture_from_bgr(self, img_bgr):
+        if img_bgr is None:
+            self.texture = None
+            self.canvas.after.clear()
+            return
+        rgba = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGBA)
+        texture = Texture.create(size=(rgba.shape[1], rgba.shape[0]), colorfmt="rgba")
+        texture.blit_buffer(rgba.tobytes(), colorfmt="rgba", bufferfmt="ubyte")
+        texture.flip_vertical()
+        self.texture = texture
+        self._redraw_overlay()
+
+    def set_boxes_payload(self, boxes_payload, selected_ids=None, preview_zoom=1.0, page_idx=0):
+        self.boxes_payload = list(boxes_payload or [])
+        self.preview_zoom = float(preview_zoom or 1.0)
+        self.page_idx = int(page_idx or 0)
+        self.selected_ids = set(selected_ids or [])
+        self.hovered_box_id = None
+        self._redraw_overlay()
+
+    def set_selected_ids(self, selected_ids):
+        self.selected_ids = set(selected_ids or [])
+        self._redraw_overlay()
+
+    def clear_boxes(self):
+        self.boxes_payload = []
+        self.selected_ids = set()
+        self.hovered_box_id = None
+        self._redraw_overlay()
+
+    def _get_display_rect(self):
+        tex = self.texture
+        if not tex or tex.width <= 0 or tex.height <= 0:
+            return None
+        widget_w, widget_h = self.width, self.height
+        tex_w, tex_h = tex.width, tex.height
+        scale = min(widget_w / float(tex_w), widget_h / float(tex_h))
+        draw_w = tex_w * scale
+        draw_h = tex_h * scale
+        x = self.x + (widget_w - draw_w) / 2.0
+        y = self.y + (widget_h - draw_h) / 2.0
+        return x, y, draw_w, draw_h
+
+    def _box_color(self, box_type, selected=False, hovered=False):
+        if selected:
+            return (0.15, 0.85, 1.0, 1.0)
+        if hovered:
+            return (1.0, 0.6, 0.0, 1.0)
+        if box_type == "check":
+            return (1.0, 0.15, 0.15, 1.0)
+        if box_type == "line":
+            return (1.0, 0.85, 0.1, 1.0)
+        return (0.1, 1.0, 0.3, 1.0)
+
+    def _draw_label(self, x, y, text):
+        core = CoreLabel(text=str(text), font_size=12)
+        core.refresh()
+        tex = core.texture
+        pad_x, pad_y = 4, 2
+        bg_w = tex.width + pad_x * 2
+        bg_h = tex.height + pad_y * 2
+        Rectangle(pos=(x, y - bg_h), size=(bg_w, bg_h))
+        Color(1, 1, 1, 1)
+        Rectangle(texture=tex, pos=(x + pad_x, y - bg_h + pad_y), size=tex.size)
+
+    def _redraw_overlay(self, *args):
+        self.canvas.after.clear()
+        disp = self._get_display_rect()
+        if not disp:
+            return
+        dx, dy, dw, dh = disp
+        tex = self.texture
+        sx = dw / float(max(tex.width, 1))
+        sy = dh / float(max(tex.height, 1))
+        with self.canvas.after:
+            for box in self.boxes_payload:
+                x = dx + box["x"] * sx
+                y = dy + (tex.height - (box["y"] + box["h"])) * sy
+                w = max(1.0, box["w"] * sx)
+                h = max(1.0, box["h"] * sy)
+                selected = box["id"] in self.selected_ids
+                hovered = (box["id"] == self.hovered_box_id)
+                Color(*self._box_color(box.get("t", "field"), selected=selected, hovered=hovered))
+                Line(rectangle=(x, y, w, h), width=3.2 if selected else (2.4 if hovered else 1.35))
+                Color(0, 0, 0, 0.88)
+                self._draw_label(x, y + h, box["id"])
+
+    def _touch_to_image_point(self, touch):
+        disp = self._get_display_rect()
+        tex = self.texture
+        if not disp or not tex:
+            return None
+        dx, dy, dw, dh = disp
+        if not (dx <= touch.x <= dx + dw and dy <= touch.y <= dy + dh):
+            return None
+        img_x = (touch.x - dx) * tex.width / float(max(dw, 1))
+        img_y = tex.height - ((touch.y - dy) * tex.height / float(max(dh, 1)))
+        return img_x, img_y
+
+    def _find_hit_box(self, img_x, img_y):
+        hits = []
+        for box in self.boxes_payload:
+            if box["x"] <= img_x <= box["x"] + box["w"] and box["y"] <= img_y <= box["y"] + box["h"]:
+                hits.append(box)
+        if not hits:
+            return None
+        hits.sort(key=lambda b: (b["id"], b["w"] * b["h"]))
+        return hits[0]
+
+    def on_touch_down(self, touch):
+        if not self.collide_point(*touch.pos):
+            return super().on_touch_down(touch)
+        pt = self._touch_to_image_point(touch)
+        if pt is None:
+            return super().on_touch_down(touch)
+        hit = self._find_hit_box(*pt)
+        if hit is not None:
+            if callable(self.box_tap_callback):
+                self.box_tap_callback(hit)
+            return True
+        return super().on_touch_down(touch)
+
+    def _on_mouse_pos(self, _window, pos):
+        if platform == "android" or not self.get_root_window():
+            return
+        local = self.to_widget(*pos)
+        class Dummy: pass
+        d = Dummy(); d.x=local[0]; d.y=local[1]
+        pt = self._touch_to_image_point(d)
+        new_hover = None
+        if pt is not None:
+            hit = self._find_hit_box(*pt)
+            if hit is not None:
+                new_hover = hit["id"]
+                if callable(self.hover_callback):
+                    self.hover_callback(hit)
+        if new_hover != self.hovered_box_id:
+            self.hovered_box_id = new_hover
+            self._redraw_overlay()
+
 
 class MediMapProLayout(BoxLayout):
     pass
@@ -2135,14 +2316,24 @@ class MediMapProApp(App):
             scroll_type=["bars", "content"]
         )
 
-        self.preview = Image(
-            size_hint=(None, None),
-            allow_stretch=False,
-            keep_ratio=True
-        )
-        self.preview.bind(texture=self._update_preview_size)
+        preview_panel = BoxLayout(orientation="vertical", spacing=6)
 
-        preview_wrap.add_widget(self.preview)
+        self.preview = InteractivePreview(size_hint=(1, 1))
+        self.preview.box_tap_callback = self.on_preview_box_tap
+        self.preview.hover_callback = self.on_preview_box_hover
+
+        self.preview_info = Label(
+            text="Interactive preview ready. Tap a box to select it.",
+            size_hint_y=None,
+            height=dp(42),
+            halign="left",
+            valign="middle"
+        )
+        self.preview_info.bind(size=self._sync_label_text_size)
+
+        preview_panel.add_widget(self.preview)
+        preview_panel.add_widget(self.preview_info)
+        preview_wrap.add_widget(preview_panel)
         right.add_widget(preview_wrap)
 
         root.add_widget(left_wrap)
@@ -2162,15 +2353,8 @@ class MediMapProApp(App):
     def set_status(self, text):
         self.status_lbl.text = text
 
-    def pdf_backend_status_text(self):
-        if FITZ_AVAILABLE:
-            return f"PDF backend ready: {FITZ_BACKEND}"
-        return f"PDF backend unavailable: {FITZ_IMPORT_ERROR or 'PyMuPDF import failed.'}"
-
     def get_selected_file(self):
-        if not self.file_chooser.selection:
-            return None
-        return self.file_chooser.selection[0]
+        return None
 
     def current_page_idx(self):
         try:
@@ -2216,7 +2400,7 @@ class MediMapProApp(App):
             raise ValueError(f"Invalid settings input: {e}")
 
     def get_default_file_path(self):
-        return "/sdcard/Download" if platform == "android" else os.path.expanduser("~")    
+        return "/sdcard/Download" if platform == "android" else os.path.expanduser("~")
         
     def push_engine_settings_to_ui(self):
         s = self.engine.settings
@@ -2270,16 +2454,252 @@ class MediMapProApp(App):
             return None
         return val
 
-    def render_preview_image(self, img_bgr):
+    def render_preview_image(self, img_bgr, boxes_payload=None, page_idx=0, preview_zoom=PREVIEW_SCALE):
         if img_bgr is None:
             return
+        if hasattr(self.preview, "set_texture_from_bgr"):
+            self.preview.set_texture_from_bgr(img_bgr)
+            if boxes_payload is None:
+                self.preview.clear_boxes()
+            else:
+                self.preview.set_boxes_payload(
+                    boxes_payload,
+                    selected_ids=self.engine.selected_box_ids,
+                    preview_zoom=preview_zoom,
+                    page_idx=page_idx,
+                )
+        else:
+            rgba = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGBA)
+            buf = rgba.tobytes()
+            texture = Texture.create(size=(rgba.shape[1], rgba.shape[0]), colorfmt="rgba")
+            texture.blit_buffer(buf, colorfmt="rgba", bufferfmt="ubyte")
+            texture.flip_vertical()
+            self.preview.texture = texture
 
-        rgba = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGBA)
-        buf = rgba.tobytes()
-        texture = Texture.create(size=(rgba.shape[1], rgba.shape[0]), colorfmt="rgba")
-        texture.blit_buffer(buf, colorfmt="rgba", bufferfmt="ubyte")
-        texture.flip_vertical()
-        self.preview.texture = texture
+    def _build_preview_boxes_payload(self, page_idx, preview_zoom):
+        payload = []
+        for i, r in enumerate(self.engine.all_boxes):
+            payload.append({
+                "id": i,
+                "x": float(r.x0 * preview_zoom),
+                "y": float(r.y0 * preview_zoom),
+                "w": float(r.width * preview_zoom),
+                "h": float(r.height * preview_zoom),
+                "t": self.engine.box_types[i] if i < len(self.engine.box_types) else "field",
+                "mapping": self.engine.describe_box_mapping(i, page_idx),
+            })
+        return payload
+
+    def _find_mapping_for_box(self, box_id, page_idx):
+        if box_id < 0 or box_id >= len(self.engine.all_boxes):
+            return None
+        target_rect = self.engine.all_boxes[box_id]
+        best_hit = None
+        best_score = -1.0
+        for configs in self.engine.custom_mappings.values():
+            for cfg in configs:
+                if cfg.get("page", 0) != page_idx:
+                    continue
+                for r in self.engine._mapping_rect_list(cfg):
+                    score = self.engine._mapping_match_score(target_rect, r)
+                    if score > best_score:
+                        best_score = score
+                        best_hit = cfg
+        if best_hit is not None and best_score >= 1.0:
+            return best_hit
+        return None
+
+    def _sync_box_selection_ui(self):
+        ids = sorted(set(int(x) for x in self.engine.selected_box_ids if isinstance(x, int) or str(x).isdigit()))
+        self.engine.selected_box_ids = ids
+        self.box_ids_input.text = ",".join(str(i) for i in ids)
+        if hasattr(self.preview, "set_selected_ids"):
+            self.preview.set_selected_ids(ids)
+
+        if not ids:
+            self.preview_info.text = "Interactive preview ready. Tap a box to select it."
+            return
+
+        first = ids[0]
+        box_type = self.engine.box_types[first] if first < len(self.engine.box_types) else "field"
+        mapping = self.engine.describe_box_mapping(first, self.current_page_idx())
+        self.preview_info.text = f"Selected: {ids} | Type: {box_type} | {mapping}"
+
+    def on_preview_box_hover(self, hit):
+        if not hit:
+            return
+        mapping = hit.get("mapping") or "Unmapped"
+        self.preview_info.text = f"Hover Box {hit['id']} | Type: {hit.get('t', 'field')} | {mapping}"
+
+    def on_preview_box_tap(self, hit):
+        box_id = int(hit["id"])
+        ids = list(self.engine.selected_box_ids)
+        if box_id in ids:
+            ids.remove(box_id)
+        else:
+            ids.append(box_id)
+        self.engine.selected_box_ids = sorted(set(ids))
+        self._sync_box_selection_ui()
+
+        mapping = self._find_mapping_for_box(box_id, self.current_page_idx())
+        if mapping:
+            col = str(mapping.get("column", "")).strip()
+            trig = str(mapping.get("trigger", "")).strip()
+            if col:
+                self.column_spinner.text = col
+            self.trigger_input.text = trig
+            self.grid_flag_input.text = "1" if bool(mapping.get("g", False)) else "0"
+            self.grid_n_input.text = str(int(mapping.get("n", 1)))
+
+        self.open_mapping_popup_for_selection(primary_box_id=box_id)
+
+    def open_mapping_popup_for_selection(self, primary_box_id=None):
+        ids = sorted(set(int(x) for x in self.engine.selected_box_ids if isinstance(x, int) or str(x).isdigit()))
+        if not ids:
+            self.set_status("Tap at least one preview box first.")
+            return
+
+        page_idx = self.current_page_idx()
+        focus_id = ids[0] if primary_box_id is None else int(primary_box_id)
+        existing = self._find_mapping_for_box(focus_id, page_idx)
+
+        current_col = self.column_spinner.text if self.column_spinner.text != "Select Column" else ""
+        current_trigger = self.trigger_input.text.strip()
+        current_grid_flag = self.grid_flag_input.text.strip() or "0"
+        current_grid_n = self.grid_n_input.text.strip() or "1"
+
+        if existing:
+            current_col = str(existing.get("column", "")).strip() or current_col
+            current_trigger = str(existing.get("trigger", "")).strip()
+            current_grid_flag = "1" if bool(existing.get("g", False)) else "0"
+            current_grid_n = str(int(existing.get("n", 1)))
+
+        wrap = BoxLayout(orientation="vertical", spacing=8, padding=8)
+
+        title_lbl = Label(
+            text=f"Selected boxes: {', ' .join(str(i) for i in ids)}\nPage: {page_idx}",
+            size_hint_y=None,
+            height=46,
+            halign="left",
+            valign="middle"
+        )
+        title_lbl.bind(size=self._sync_label_text_size)
+        wrap.add_widget(title_lbl)
+
+        column_spinner = Spinner(
+            text=current_col if current_col else "Select Column",
+            values=self.column_spinner.values,
+            size_hint_y=None,
+            height=44
+        )
+        wrap.add_widget(column_spinner)
+
+        trigger_input = TextInput(
+            text=current_trigger,
+            hint_text="Trigger",
+            multiline=False,
+            size_hint_y=None,
+            height=44
+        )
+        wrap.add_widget(trigger_input)
+
+        grid_row = GridLayout(cols=2, size_hint_y=None, height=44, spacing=6)
+        grid_flag_input = TextInput(
+            text=current_grid_flag,
+            hint_text="Grid 0/1",
+            multiline=False
+        )
+        grid_n_input = TextInput(
+            text=current_grid_n,
+            hint_text="Grid N",
+            multiline=False
+        )
+        grid_row.add_widget(grid_flag_input)
+        grid_row.add_widget(grid_n_input)
+        wrap.add_widget(grid_row)
+
+        btn_row = GridLayout(cols=3, size_hint_y=None, height=46, spacing=6)
+        btn_assign = Button(text="Assign")
+        btn_clear = Button(text="Clear")
+        btn_close = Button(text="Close")
+        btn_row.add_widget(btn_assign)
+        btn_row.add_widget(btn_clear)
+        btn_row.add_widget(btn_close)
+        wrap.add_widget(btn_row)
+
+        popup = Popup(title="Map Selected Box(es)", content=wrap, size_hint=(0.88, 0.52))
+
+        def _assign(*_):
+            try:
+                column = column_spinner.text.strip()
+                if not column or column == "Select Column":
+                    raise ValueError("Please select a column.")
+                trigger = trigger_input.text.strip()
+                is_grid = bool(int(grid_flag_input.text.strip() or "0"))
+                grid_n = int(grid_n_input.text.strip() or "1")
+
+                self.engine.assign_mapping(ids, column, trigger, is_grid, grid_n, page_idx)
+
+                self.column_spinner.text = column
+                self.trigger_input.text = trigger
+                self.grid_flag_input.text = "1" if is_grid else "0"
+                self.grid_n_input.text = str(grid_n)
+                self.box_ids_input.text = ",".join(str(i) for i in ids)
+                self.engine.selected_box_ids = ids
+                self._sync_box_selection_ui()
+                self.set_status(
+                    f"Mapping saved from preview.\nPage: {page_idx}\nColumn: {column}\nBoxes: {ids}"
+                )
+                popup.dismiss()
+                self.on_preview(None)
+            except Exception as e:
+                self.set_status(f"Preview mapping error:\n{e}")
+
+        def _clear(*_):
+            try:
+                self.clear_mapping_for_box_ids(ids, page_idx)
+                self.engine.selected_box_ids = ids
+                self._sync_box_selection_ui()
+                self.set_status(f"Cleared mapping for boxes: {ids} on page {page_idx}")
+                popup.dismiss()
+                self.on_preview(None)
+            except Exception as e:
+                self.set_status(f"Clear mapping error:\n{e}")
+
+        btn_assign.bind(on_release=_assign)
+        btn_clear.bind(on_release=_clear)
+        btn_close.bind(on_release=lambda *_: popup.dismiss())
+        popup.open()
+
+    def clear_mapping_for_box_ids(self, box_ids, page_idx):
+        box_ids = sorted(set(int(x) for x in box_ids))
+        target_rects = []
+        for b_id in box_ids:
+            if b_id < 0 or b_id >= len(self.engine.all_boxes):
+                continue
+            target_rects.append(self.engine.all_boxes[b_id])
+
+        def overlaps_any(mapping_item):
+            existing_rects = self.engine._mapping_rect_list(mapping_item)
+            for er in existing_rects:
+                for sr in target_rects:
+                    if self.engine._rects_refer_to_same_target(er, sr, tol=0.20):
+                        return True
+            return False
+
+        for k in list(self.engine.custom_mappings.keys()):
+            kept = []
+            for m in self.engine.custom_mappings[k]:
+                if m.get("page", 0) != page_idx:
+                    kept.append(m)
+                    continue
+                if overlaps_any(m):
+                    continue
+                kept.append(m)
+            if kept:
+                self.engine.custom_mappings[k] = kept
+            else:
+                del self.engine.custom_mappings[k]
 
     # --------------------------------------------------------
     # File loading
@@ -2409,7 +2829,8 @@ class MediMapProApp(App):
                         page_idx=idx,
                         preview_zoom=PREVIEW_SCALE
                     )
-                    self.render_preview_image(raw_img)
+                    self.render_preview_image(raw_img, boxes_payload=[], page_idx=idx, preview_zoom=PREVIEW_SCALE)
+                    self._sync_box_selection_ui()
                     self.set_status(f"Raw PDF preview.\nPage: {idx}")
         except Exception as e:
             self.set_status(f"Prev page error:\n{e}")
@@ -2429,7 +2850,8 @@ class MediMapProApp(App):
                         page_idx=idx,
                         preview_zoom=PREVIEW_SCALE
                     )
-                    self.render_preview_image(raw_img)
+                    self.render_preview_image(raw_img, boxes_payload=[], page_idx=idx, preview_zoom=PREVIEW_SCALE)
+                    self._sync_box_selection_ui()
                     self.set_status(f"Raw PDF preview.\nPage: {idx}")
         except Exception as e:
             self.set_status(f"Next page error:\n{e}")
@@ -2452,6 +2874,7 @@ class MediMapProApp(App):
             self.apply_ui_settings_to_engine()
             page_idx = self.current_page_idx()
             self.engine.run_detection(page_idx=page_idx)
+            self.engine.selected_box_ids = []
             self.set_status(
                 f"Detection done.\n"
                 f"Page: {page_idx}\n"
@@ -2467,32 +2890,63 @@ class MediMapProApp(App):
             if not self.engine.pdf_path:
                 self.set_status("Load PDF first.")
                 return
-    
+
             page_idx = self.current_page_idx()
             patient = self.selected_patient()
-    
+
+            if platform == "android" and not self.engine.supports_processing_backend():
+                raw_img = self.engine.get_raw_preview_pixmap(
+                    page_idx=page_idx,
+                    preview_zoom=PREVIEW_SCALE
+                )
+                self.render_preview_image(
+                    raw_img,
+                    boxes_payload=[],
+                    page_idx=page_idx,
+                    preview_zoom=PREVIEW_SCALE,
+                )
+                self._sync_box_selection_ui()
+                self.set_status("Android native PDF preview is available, but detection/filling still requires the PyMuPDF backend in this build.")
+                return
+
             if not patient or self.engine.df is None or self.engine.df.empty:
                 raw_img = self.engine.get_raw_preview_pixmap(
                     page_idx=page_idx,
                     preview_zoom=PREVIEW_SCALE
                 )
-                self.render_preview_image(raw_img)
+                self.render_preview_image(
+                    raw_img,
+                    boxes_payload=[],
+                    page_idx=page_idx,
+                    preview_zoom=PREVIEW_SCALE,
+                )
+                self._sync_box_selection_ui()
                 self.set_status(
                     f"Raw PDF preview.\n"
                     f"Page: {page_idx}\n"
                     f"No patient selected yet."
                 )
                 return
-    
+
             self.apply_ui_settings_to_engine()
-    
-            img = self.engine.get_preview_pixmap_with_boxes(
+
+            img = self.engine.get_processed_preview_pixmap(
                 patient_name=patient,
                 page_idx=page_idx,
                 preview_zoom=PREVIEW_SCALE
             )
-            self.render_preview_image(img)
-    
+            boxes_payload = self._build_preview_boxes_payload(
+                page_idx=page_idx,
+                preview_zoom=PREVIEW_SCALE,
+            )
+            self.render_preview_image(
+                img,
+                boxes_payload=boxes_payload,
+                page_idx=page_idx,
+                preview_zoom=PREVIEW_SCALE,
+            )
+            self._sync_box_selection_ui()
+
             self.set_status(
                 f"Preview rendered.\n"
                 f"Patient: {patient}\n"
@@ -2523,65 +2977,17 @@ class MediMapProApp(App):
             if not box_ids:
                 raise ValueError("Please enter at least one Box ID.")
 
-            selected_rects = []
-            for b_id in box_ids:
-                if b_id < 0 or b_id >= len(self.engine.all_boxes):
-                    raise ValueError(f"Box ID {b_id} is out of range.")
-                selected_rects.append(self.engine.all_boxes[b_id])
-
-            selected_rects = sorted(selected_rects, key=lambda rr: (round(rr.y0, 3), rr.x0))
             trigger = self.trigger_input.text.strip()
             is_grid = bool(int(self.grid_flag_input.text.strip() or "0"))
             grid_n = int(self.grid_n_input.text.strip() or "1")
             page_idx = self.current_page_idx()
 
-            map_key = f"{column}_{trigger}"
-
-            def mapping_conflicts_with_selected(mapping_item, selected_rects):
-                existing_rects = self.engine._mapping_rect_list(mapping_item)
-                if not existing_rects:
-                    return False
-
-                for er in existing_rects:
-                    for sr in selected_rects:
-                        if self.engine._rects_refer_to_same_target(er, sr, tol=0.20):
-                            return True
-                return False
-
-            for k in list(self.engine.custom_mappings.keys()):
-                kept = []
-                for m in self.engine.custom_mappings[k]:
-                    if m.get("page", 0) != page_idx:
-                        kept.append(m)
-                        continue
-
-                    if mapping_conflicts_with_selected(m, selected_rects):
-                        continue
-
-                    kept.append(m)
-
-                if kept:
-                    self.engine.custom_mappings[k] = kept
-                else:
-                    del self.engine.custom_mappings[k]
-
-            if map_key not in self.engine.custom_mappings:
-                self.engine.custom_mappings[map_key] = []
-
-            self.engine.custom_mappings[map_key].append({
-                "column": column,
-                "trigger": trigger,
-                "rects": selected_rects,
-                "page": page_idx,
-                "g": is_grid,
-                "n": grid_n
-            })
+            self.engine.assign_mapping(box_ids, column, trigger, is_grid, grid_n, page_idx)
+            self.engine.selected_box_ids = sorted(set(box_ids))
+            self._sync_box_selection_ui()
 
             self.set_status(
-                f"Mapping saved.\n"
-                f"Page: {page_idx}\n"
-                f"Column: {column}\n"
-                f"Boxes: {box_ids}"
+                f"Mapping saved.\nPage: {page_idx}\nColumn: {column}\nBoxes: {box_ids}"
             )
             self.on_preview(None)
         except Exception as e:
@@ -2592,6 +2998,9 @@ class MediMapProApp(App):
     # --------------------------------------------------------
     def on_generate_single(self, instance):
         try:
+            if platform == "android" and not self.engine.supports_processing_backend():
+                self.set_status("Android native PDF preview works in this build, but PDF filling/export still requires the PyMuPDF backend.")
+                return
             if not self.engine.pdf_path:
                 self.set_status("Load PDF first.")
                 return
@@ -2622,6 +3031,107 @@ class MediMapProApp(App):
             traceback.print_exc()
             self.set_status(f"Generate single error:\n{e}")
 
+    def _load_pdf_from_path(self, path):
+        total = self.engine.load_pdf(path)
+
+        cur_idx = self.current_page_idx()
+        max_idx = max(total - 1, 0)
+        if cur_idx > max_idx:
+            self.page_input.text = "0"
+
+        raw_img = self.engine.get_raw_preview_pixmap(
+            page_idx=self.current_page_idx(),
+            preview_zoom=PREVIEW_SCALE
+        )
+        self.render_preview_image(raw_img, boxes_payload=[], page_idx=self.current_page_idx(), preview_zoom=PREVIEW_SCALE)
+        self._sync_box_selection_ui()
+
+        mode_note = "\nMode: Android native preview fallback" if self.engine.android_preview_only_mode() else ""
+        self.set_status(
+            f"PDF Loaded: {os.path.basename(path)}\n"
+            f"Pages: {total}\n"
+            f"Showing raw template page: {self.current_page_idx()}"
+            f"{mode_note}"
+        )
+
+    def _copy_android_uri_to_local_pdf(self, uri_string):
+        if platform != "android" or not ANDROID_JAVA_AVAILABLE:
+            raise RuntimeError("Android document picker is unavailable.")
+
+        activity_obj = AndroidPythonActivity.mActivity
+        resolver = activity_obj.getContentResolver()
+        uri = AndroidUri.parse(uri_string)
+        input_stream = resolver.openInputStream(uri)
+        if input_stream is None:
+            raise ValueError("Unable to open the selected Android document.")
+
+        out_dir = self.get_app_output_dir()
+        out_path = os.path.join(out_dir, "selected_input.pdf")
+        fos = autoclass("java.io.FileOutputStream")(out_path)
+        try:
+            while True:
+                b = input_stream.read()
+                if b == -1:
+                    break
+                fos.write(b)
+        finally:
+            try:
+                input_stream.close()
+            except Exception:
+                pass
+            try:
+                fos.close()
+            except Exception:
+                pass
+        return out_path
+
+    def _open_android_pdf_picker(self):
+        if platform != "android" or not ANDROID_JAVA_AVAILABLE:
+            self.set_status("Android system document picker is unavailable; falling back to the file chooser.")
+            return self._open_legacy_pdf_picker()
+
+        request_code = 42421
+
+        def _on_activity_result(request_code_result, result_code, intent):
+            if request_code_result != request_code:
+                return
+            activity.unbind(on_activity_result=_on_activity_result)
+            if result_code != -1 or intent is None:
+                self.set_status("PDF selection cancelled.")
+                return
+            try:
+                uri = intent.getData()
+                if uri is None:
+                    raise ValueError("No PDF URI was returned by Android.")
+                try:
+                    flags = intent.getFlags()
+                    take_flags = flags & (AndroidIntent.FLAG_GRANT_READ_URI_PERMISSION | AndroidIntent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                    AndroidPythonActivity.mActivity.getContentResolver().takePersistableUriPermission(uri, take_flags)
+                except Exception:
+                    pass
+                local_path = self._copy_android_uri_to_local_pdf(str(uri))
+                self._load_pdf_from_path(local_path)
+            except Exception as e:
+                traceback.print_exc()
+                self.set_status(f"PDF Error: {e}")
+
+        activity.bind(on_activity_result=_on_activity_result)
+        intent = AndroidIntent(AndroidIntent.ACTION_OPEN_DOCUMENT)
+        intent.addCategory(AndroidIntent.CATEGORY_OPENABLE)
+        intent.setType("application/pdf")
+        intent.addFlags(AndroidIntent.FLAG_GRANT_READ_URI_PERMISSION)
+        intent.addFlags(AndroidIntent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        AndroidPythonActivity.mActivity.startActivityForResult(intent, request_code)
+
+    def _open_legacy_pdf_picker(self):
+        content = FileChooserListView(
+            filters=["*.pdf"],
+            path=self.get_default_file_path()
+        )
+        popup = Popup(title="Select PDF Template", content=content, size_hint=(0.9, 0.9))
+        content.bind(on_submit=lambda obj, sel, touch: self._handle_pdf_selection(sel, popup))
+        popup.open()
+
     def on_load_pdf(self, instance):
         content = FileChooserListView(
             filters=["*.pdf"],
@@ -2646,7 +3156,8 @@ class MediMapProApp(App):
                     page_idx=self.current_page_idx(),
                     preview_zoom=PREVIEW_SCALE
                 )
-                self.render_preview_image(raw_img)
+                self.render_preview_image(raw_img, boxes_payload=[], page_idx=self.current_page_idx(), preview_zoom=PREVIEW_SCALE)
+                self._sync_box_selection_ui()
     
                 self.set_status(
                     f"PDF Loaded: {os.path.basename(path)}\n"
@@ -2655,8 +3166,7 @@ class MediMapProApp(App):
                 )
             except Exception as e:
                 traceback.print_exc()
-                backend_note = f"PDF backend: {FITZ_BACKEND}" if FITZ_AVAILABLE else f"PDF backend unavailable: {FITZ_IMPORT_ERROR}"
-                self.set_status(f"PDF Error: {e}\n{backend_note}")
+                self.set_status(f"PDF Error: {e}")
         popup.dismiss()
 
     def open_text_input_popup(self, title, hint_text, on_submit_callback, default_text=""):
@@ -2729,6 +3239,9 @@ class MediMapProApp(App):
     def on_generate_batch(self, instance):
         """Processes all rows in the data file and generates PDFs."""
         try:
+            if platform == "android" and not self.engine.supports_processing_backend():
+                self.set_status("Android native PDF preview works in this build, but batch filling/export still requires the PyMuPDF backend.")
+                return
             if self.engine.df is None or self.engine.df.empty:
                 self.set_status("Load CSV/XLSX first.")
                 return
