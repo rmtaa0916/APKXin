@@ -3484,32 +3484,54 @@ class MediMapProApp(MDApp):
         return self._open_legacy_pdf_picker()
     
     def _handle_pdf_selection(self, selection, popup):
+        popup.dismiss()
+
         if selection:
             try:
                 path = selection[0]
+                self.set_status(f"Loading PDF...\n{os.path.basename(path)}")
+
                 total = self.engine.load_pdf(path)
-    
+
                 cur_idx = self.current_page_idx()
                 max_idx = max(total - 1, 0)
                 if cur_idx > max_idx:
                     self.page_input.text = "0"
-    
-                raw_img = self.engine.get_raw_preview_pixmap(
-                    page_idx=self.current_page_idx(),
-                    preview_zoom=PREVIEW_SCALE
-                )
-                self.render_preview_image(raw_img, boxes_payload=[], page_idx=self.current_page_idx(), preview_zoom=PREVIEW_SCALE)
-                self._sync_box_selection_ui()
-    
+
                 self.set_status(
                     f"PDF Loaded: {os.path.basename(path)}\n"
                     f"Pages: {total}\n"
-                    f"Showing raw template page: {self.current_page_idx()}"
+                    f"Rendering preview..."
                 )
+                Clock.schedule_once(lambda dt: self._finish_pdf_load_preview(path, total), 0.05)
             except Exception as e:
                 traceback.print_exc()
                 self.set_status(f"PDF Error: {e}")
-        popup.dismiss()
+
+    def _finish_pdf_load_preview(self, path, total):
+        try:
+            page_idx = self.current_page_idx()
+            raw_img = self.engine.get_raw_preview_pixmap(
+                page_idx=page_idx,
+                preview_zoom=PREVIEW_SCALE
+            )
+            self.render_preview_image(
+                raw_img,
+                boxes_payload=[],
+                page_idx=page_idx,
+                preview_zoom=PREVIEW_SCALE
+            )
+            self._sync_box_selection_ui()
+
+            self.set_status(
+                f"PDF Loaded: {os.path.basename(path)}\n"
+                f"Pages: {total}\n"
+                f"Showing raw template page: {page_idx}"
+            )
+        except Exception as e:
+            traceback.print_exc()
+            self.set_status(f"PDF Preview Error: {e}")
+
 
     def open_text_input_popup(self, title, hint_text, on_submit_callback, default_text=""):
         wrap = BoxLayout(orientation="vertical", spacing=8, padding=8)
