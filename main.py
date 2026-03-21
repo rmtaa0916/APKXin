@@ -15,6 +15,7 @@ import ssl
 import urllib.request
 from urllib.parse import urlparse, parse_qs
 from functools import partial
+from types import SimpleNamespace
 
 # -------------------------------------------------------------------
 # Python 3.10+ compatibility patch for older reportlab builds
@@ -35,6 +36,49 @@ import numpy as np
 import pandas as pd
 
 from pypdf import PdfReader, PdfWriter
+
+try:
+    from reportlab.pdfgen import canvas as rl_canvas
+    from reportlab.pdfbase.pdfmetrics import stringWidth as rl_string_width
+    REPORTLAB_AVAILABLE = True
+except Exception:
+    rl_canvas = None
+    REPORTLAB_AVAILABLE = False
+
+    def rl_string_width(text, font_name, font_size):
+        return len(str(text or "")) * float(font_size) * 0.6
+
+class RectCompat:
+    """Minimal rectangle compatibility layer used when PyMuPDF is unavailable."""
+    __slots__ = ("x0", "y0", "x1", "y1")
+
+    def __init__(self, x0=0.0, y0=0.0, x1=0.0, y1=0.0):
+        self.x0 = float(x0)
+        self.y0 = float(y0)
+        self.x1 = float(x1)
+        self.y1 = float(y1)
+
+    @property
+    def width(self):
+        return self.x1 - self.x0
+
+    @property
+    def height(self):
+        return self.y1 - self.y0
+
+    def __iter__(self):
+        yield self.x0
+        yield self.y0
+        yield self.x1
+        yield self.y1
+
+    def __repr__(self):
+        return f"RectCompat({self.x0}, {self.y0}, {self.x1}, {self.y1})"
+
+if fitz is None:
+    fitz = SimpleNamespace(Rect=RectCompat)
+elif not hasattr(fitz, "Rect"):
+    fitz.Rect = RectCompat
 
 from kivy.app import App
 from kivy.clock import Clock
@@ -80,7 +124,7 @@ except Exception:
     MDSwitch = None
     KIVYMD_AVAILABLE = False
 
-FITZ_AVAILABLE = bool(fitz is not None and hasattr(fitz, "open") and hasattr(fitz, "Rect"))
+FITZ_AVAILABLE = bool(hasattr(fitz, "open") and hasattr(fitz, "Rect"))
 
 if platform == "android":
     try:
@@ -396,6 +440,247 @@ def load_google_sheet_dataframe(url):
             raise ValueError(f"Downloaded Google Sheet data could not be parsed as CSV. Details: {e}")
 
 
+
+class LocalImportStore:
+    """Manage app-private imported files and generated outputs."""
+    def __init__(self, base_dir_getter):
+        self._base_dir_getter = base_dir_getter
+
+    def get_output_dir(self):
+        base_dir = self._base_dir_getter()
+        os.makedirs(base_dir, exist_ok=True)
+        return base_dir
+
+    def get_import_dir(self):
+        out_dir = os.path.join(self.get_output_dir(), "imports")
+        os.makedirs(out_dir, exist_ok=True)
+        return out_dir
+
+    def build_local_path(self, display_name=None, default_name="selected_input", required_suffix=None):
+        filename = safe_name(display_name or default_name)
+        if required_suffix and not filename.lower().endswith(required_suffix.lower()):
+            filename += required_suffix
+        return os.path.join(self.get_import_dir(), filename)
+
+    def save_bytes(self, payload, display_name=None, default_name="selected_input", required_suffix=None):
+        if not payload:
+            raise ValueError("Imported file is empty.")
+        out_path = self.build_local_path(display_name=display_name, default_name=default_name, required_suffix=required_suffix)
+        with open(out_path, "wb") as fh:
+            fh.write(payload)
+        if not os.path.exists(out_path) or os.path.getsize(out_path) <= 0:
+            raise ValueError("Copied file is empty after saving to app storage.")
+        return out_path
+
+
+class AndroidDocumentPickerService:
+    """Android Storage Access Framework helpers for import-style document picking."""
+    def __init__(self, import_store, status_callback=None):
+        self.import_store = import_store
+        self.status_callback = status_callback
+
+    def _status(self, message):
+        if callable(self.status_callback):
+            self.status_callback(message)
+
+    def copy_uri_to_local_file(self, uri, default_name="selected_input", required_suffix=None, allowed_suffixes=None):
+        if platform != "android" or not ANDROID_JAVA_AVAILABLE:
+            raise RuntimeError("Android document picker is unavailable.")
+        if uri is None:
+            raise ValueError("Android returned no document URI.")
+
+        activity_obj = AndroidPythonActivity.mActivity
+        resolver = activity_obj.getContentResolver()
+
+        if isinstance(uri, str):
+            uri_string = uri.strip()
+        else:
+            try:
+                uri_string = str(uri.toString()).strip()
+            except Exception:
+                uri_string = ""
+
+        if not uri_string:
+            raise ValueError("Android returned an empty document URI.")
+        if not (uri_string.startswith("content://") or uri_string.startswith("file://")):
+            raise ValueError(f"Android returned an invalid document URI: {uri_string}")
+
+        uri = AndroidUri.parse(uri_string)
+
+        display_name = None
+        cursor = None
+        try:
+            OpenableColumns = autoclass("android.provider.OpenableColumns")
+            cursor = resolver.query(uri, None, None, None, None)
+            if cursor is not None and cursor.moveToFirst():
+                idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if idx >= 0:
+                    display_name = cursor.getString(idx)
+        except Exception:
+            display_name = None
+        finally:
+            try:
+                if cursor is not None:
+                    cursor.close()
+            except Exception:
+                pass
+
+        input_stream = resolver.openInputStream(uri)
+        if input_stream is None:
+            raise ValueError("Unable to open the selected Android document.")
+
+        ByteArray = autoclass("java.lang.reflect.Array")
+        JavaByte = autoclass("java.lang.Byte").TYPE
+        baos = AndroidByteArrayOutputStream()
+        buffer = ByteArray.newInstance(JavaByte, 65536)
+
+        try:
+            while True:
+                count = input_stream.read(buffer)
+                if count == -1:
+                    break
+                baos.write(buffer, 0, count)
+            file_bytes = bytes(baos.toByteArray())
+        finally:
+            try:
+                input_stream.close()
+            except Exception:
+                pass
+
+        if not file_bytes:
+            raise ValueError("Android returned an empty file.")
+
+        lower_name = str(display_name or default_name or "").lower()
+        if allowed_suffixes:
+            normalized = [str(s).lower() for s in allowed_suffixes if s]
+            if normalized and not any(lower_name.endswith(s) for s in normalized):
+                raise ValueError(f"Selected file must end with one of: {', '.join(normalized)}")
+
+        if required_suffix and required_suffix.lower() == ".pdf" and not file_bytes.startswith(b"%PDF-"):
+            raise ValueError("Selected file was copied, but it does not start with a valid PDF header.")
+
+        return self.import_store.save_bytes(
+            file_bytes,
+            display_name=display_name,
+            default_name=default_name,
+            required_suffix=required_suffix,
+        )
+
+    def open_document_picker(self, request_code, mime_type="*/*", title="document", on_picked=None, cancel_message=None, required_suffix=None, allowed_suffixes=None, extra_mime_types=None):
+        if platform != "android" or not ANDROID_JAVA_AVAILABLE:
+            self._status("Android system document picker is unavailable.")
+            return
+
+        def _on_activity_result(request_code_result, result_code, intent):
+            if request_code_result != request_code:
+                return
+            activity.unbind(on_activity_result=_on_activity_result)
+
+            if result_code != -1 or intent is None:
+                self._status(cancel_message or f"{title.capitalize()} selection cancelled.")
+                return
+
+            try:
+                uri = intent.getData()
+                if uri is None:
+                    raise ValueError(f"No {title} URI was returned by Android.")
+
+                try:
+                    flags = intent.getFlags()
+                    take_flags = flags & (AndroidIntent.FLAG_GRANT_READ_URI_PERMISSION | AndroidIntent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                    AndroidPythonActivity.mActivity.getContentResolver().takePersistableUriPermission(uri, take_flags)
+                except Exception:
+                    pass
+
+                local_path = self.copy_uri_to_local_file(
+                    uri,
+                    default_name=safe_name(title),
+                    required_suffix=required_suffix,
+                    allowed_suffixes=allowed_suffixes,
+                )
+
+                if callable(on_picked):
+                    on_picked(local_path)
+            except Exception as e:
+                traceback.print_exc()
+                self._status(f"{title.capitalize()} error: {e}")
+
+        activity.bind(on_activity_result=_on_activity_result)
+        intent = AndroidIntent(AndroidIntent.ACTION_OPEN_DOCUMENT)
+        intent.addCategory(AndroidIntent.CATEGORY_OPENABLE)
+        intent.addFlags(AndroidIntent.FLAG_GRANT_READ_URI_PERMISSION)
+        intent.addFlags(AndroidIntent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+
+        intent.setType(mime_type or "*/*")
+        AndroidPythonActivity.mActivity.startActivityForResult(intent, request_code)
+
+
+class PdfPageSource:
+    """Read page counts and rasterized page images using the best backend for the platform."""
+    def page_count(self, path):
+        if not path or not os.path.exists(path):
+            raise FileNotFoundError(f"PDF file not found: {path}")
+
+        try:
+            with open(path, "rb") as fh:
+                reader = PdfReader(fh)
+                total = len(reader.pages)
+            if total > 0:
+                return total
+        except Exception:
+            pass
+
+        if platform == "android" and ANDROID_JAVA_AVAILABLE:
+            pfd = None
+            renderer = None
+            try:
+                file_obj = autoclass("java.io.File")(path)
+                pfd = AndroidParcelFileDescriptor.open(file_obj, AndroidParcelFileDescriptor.MODE_READ_ONLY)
+                renderer = AndroidPdfRenderer(pfd)
+                return renderer.getPageCount()
+            finally:
+                try:
+                    if renderer is not None:
+                        renderer.close()
+                except Exception:
+                    pass
+                try:
+                    if pfd is not None:
+                        pfd.close()
+                except Exception:
+                    pass
+
+        if FITZ_AVAILABLE:
+            with fitz.open(path) as doc:
+                return len(doc)
+
+        raise RuntimeError("No PDF page-count backend is available.")
+
+    def render_page_bgr(self, path, page_idx=0, preview_zoom=1.5):
+        if not path or not os.path.exists(path):
+            raise FileNotFoundError(f"PDF file not found: {path}")
+
+        if platform == "android" and ANDROID_JAVA_AVAILABLE:
+            return android_render_pdf_page(path, page_idx=page_idx, preview_zoom=preview_zoom)
+
+        if FITZ_AVAILABLE:
+            with fitz.open(path) as doc:
+                total = len(doc)
+                if total <= 0:
+                    raise ValueError("PDF has no pages.")
+                page_idx = max(0, min(int(page_idx), total - 1))
+                page = doc.load_page(page_idx)
+                mat = fitz.Matrix(float(preview_zoom), float(preview_zoom))
+                pix = page.get_pixmap(matrix=mat, alpha=False)
+                img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
+                if pix.n == 4:
+                    return cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+                return cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+
+        raise RuntimeError("No PDF rendering backend is available.")
+
+
+
 # ============================================================
 # Detection / mapping engine
 # ============================================================
@@ -423,6 +708,8 @@ class MediMapEngine:
 
         self.settings = dict(DEFAULTS)
         self.settings["C_Size"] = list(DEFAULTS["C_Size"])
+        self.pdf_source = PdfPageSource()
+        self.detected_page_idx = None
 
     # --------------------------------------------------------
     # Data loading
@@ -501,6 +788,7 @@ class MediMapEngine:
         self.all_boxes = []
         self.box_types = []
         self.geom = {"names": [], "dob": [], "phil": []}
+        self.detected_page_idx = None
         return total
 
     def total_pages(self):
@@ -512,83 +800,39 @@ class MediMapEngine:
             return 1
 
     def _pdf_page_count(self, path):
-        """Return page count using the most reliable backend available."""
-        if not path or not os.path.exists(path):
-            raise FileNotFoundError(f"PDF file not found: {path}")
-
-        # Prefer pure-Python counting first so Android does not depend on PyMuPDF
-        try:
-            with open(path, "rb") as f:
-                reader = PdfReader(f)
-                total = len(reader.pages)
-            if total > 0:
-                return total
-        except Exception:
-            pass
-
-        if FITZ_AVAILABLE:
-            with fitz.open(path) as doc:
-                return len(doc)
-
-        if platform == "android":
-            if ANDROID_JAVA_AVAILABLE:
-                pfd = None
-                renderer = None
-                try:
-                    file_obj = autoclass("java.io.File")(path)
-                    pfd = AndroidParcelFileDescriptor.open(file_obj, AndroidParcelFileDescriptor.MODE_READ_ONLY)
-                    renderer = AndroidPdfRenderer(pfd)
-                    return renderer.getPageCount()
-                finally:
-                    try:
-                        if renderer is not None:
-                            renderer.close()
-                    except Exception:
-                        pass
-                    try:
-                        if pfd is not None:
-                            pfd.close()
-                    except Exception:
-                        pass
-
-        raise RuntimeError("No PDF page-count backend is available.")
+        return self.pdf_source.page_count(path)
 
     def _render_pdf_page_bgr(self, path, page_idx=0, preview_zoom=1.5):
-        """Render a PDF page to an OpenCV BGR image."""
-        if not path or not os.path.exists(path):
-            raise FileNotFoundError(f"PDF file not found: {path}")
+        return self.pdf_source.render_page_bgr(path, page_idx=page_idx, preview_zoom=preview_zoom)
 
-        if FITZ_AVAILABLE:
-            with fitz.open(path) as doc:
-                total = len(doc)
-                if total <= 0:
-                    raise ValueError("PDF has no pages.")
-                page_idx = max(0, min(int(page_idx), total - 1))
-                page = doc.load_page(page_idx)
-                mat = fitz.Matrix(float(preview_zoom), float(preview_zoom))
-                pix = page.get_pixmap(matrix=mat, alpha=False)
-                img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
-                if pix.n == 4:
-                    img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
-                else:
-                    img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-                return img
 
-        if platform == "android":
-            return android_render_pdf_page(path, page_idx=page_idx, preview_zoom=preview_zoom)
+    def supports_detection_backend(self):
+        """
+        Return True when the app can rasterize PDF pages for detection/preview.
+        Detection is image-first and can use Android PdfRenderer or PyMuPDF.
+        """
+        return bool(ANDROID_JAVA_AVAILABLE or FITZ_AVAILABLE)
 
-        raise RuntimeError("No PDF rendering backend is available.")
-
+    def supports_export_backend(self):
+        """
+        Return True when filled-PDF export is available.
+        Phase 3 export uses reportlab overlays + pypdf merge, so PyMuPDF is optional.
+        """
+        return bool(REPORTLAB_AVAILABLE)
 
     def supports_processing_backend(self):
         """
-        Return True when full PDF processing is available.
-        Full detection/fill/export currently depends on PyMuPDF (fitz).
+        Backward-compatible alias for export-capable processing.
         """
-        return bool(FITZ_AVAILABLE)
+        return self.supports_export_backend()
 
     def android_preview_only_mode(self):
-        return platform == "android" and not self.supports_processing_backend()
+        return platform == "android" and not self.supports_detection_backend()
+
+    def _ensure_detection_for_page(self, page_idx=0):
+        page_idx = int(page_idx)
+        if self.detected_page_idx != page_idx or not self.all_boxes or (page_idx == 0 and not self.geom.get("names")):
+            self.run_detection(page_idx=page_idx)
 
     def get_raw_preview_pixmap(self, page_idx=0, preview_zoom=1.5):
         """Render the raw loaded PDF page without filling or boxes."""
@@ -1016,17 +1260,15 @@ class MediMapEngine:
     def run_detection(self, page_idx=0):
         if not self.pdf_path or not os.path.exists(self.pdf_path):
             raise FileNotFoundError("PDF path is missing or invalid.")
-        if not self.supports_processing_backend():
-            raise RuntimeError("Android native preview is available, but detection still requires the PyMuPDF backend in this build.")
+        if not self.supports_detection_backend():
+            raise RuntimeError("No PDF rasterization backend is available for detection in this build.")
 
-        doc = fitz.open(self.pdf_path)
-        page_obj = doc[page_idx]
-        pix = page_obj.get_pixmap(matrix=fitz.Matrix(ZOOM, ZOOM))
-        img = cv2.imdecode(np.frombuffer(pix.tobytes(), np.uint8), cv2.IMREAD_COLOR)
-
-        if img is None:
-            doc.close()
+        img = self._render_pdf_page_bgr(self.pdf_path, page_idx=page_idx, preview_zoom=ZOOM)
+        if img is None or getattr(img, "size", 0) == 0:
             raise ValueError("Failed to render PDF page into image.")
+
+        if len(img.shape) == 2:
+            img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
 
         h_img, w_img = img.shape[:2]
 
@@ -1228,7 +1470,7 @@ class MediMapEngine:
 
         self._cleanup_field_fragments()
         self._cleanup_line_field_conflicts()
-        doc.close()
+        self.detected_page_idx = int(page_idx)
 
     # --------------------------------------------------------
     # Mapping helpers
@@ -1532,11 +1774,9 @@ class MediMapEngine:
             self._draw_single_rect_text(page, val, target, ox=ox, oy=oy, fs_scale=fs_scale)
 
     # --------------------------------------------------------
-    # Document processing
+    # Document processing / export
     # --------------------------------------------------------
-    def process_doc(self, patient_name, page_idx=0):
-        if not self.supports_processing_backend():
-            raise RuntimeError("Android native preview is available, but PDF filling/export still requires the PyMuPDF backend in this build.")
+    def _get_patient_row(self, patient_name):
         if self.df is None or self.df.empty:
             raise ValueError("DataFrame is empty.")
 
@@ -1545,65 +1785,207 @@ class MediMapEngine:
             raise ValueError(f"Patient not found: {patient_name}")
         if len(matches) > 1:
             raise ValueError(f"Multiple records found for '{patient_name}'. Please make the display name unique.")
+        return matches.iloc[0]
 
-        row = matches.iloc[0]
-        doc = fitz.open(self.pdf_path)
-        page = doc[page_idx]
+    def _coerce_rect(self, rect):
+        if isinstance(rect, fitz.Rect):
+            return rect
+        if isinstance(rect, RectCompat):
+            return rect
+        return fitz.Rect(*rect)
+
+    def _collect_overlay_ops(self, patient_name, page_idx=0):
+        self._ensure_detection_for_page(page_idx=page_idx)
+        row = self._get_patient_row(patient_name)
+        ops = []
 
         if page_idx == 0:
             name_values = [
                 row.get(self.first_col, ""),
                 row.get(self.mid_col, ""),
                 row.get(self.last_col, ""),
-                row.get(self.suf_col, "")
+                row.get(self.suf_col, ""),
             ]
-
             for val, rect in zip(name_values, self.geom.get("names", [])):
-                self.draw_logic(page, val, rect)
+                if str(val or "").strip():
+                    ops.append({
+                        "kind": "text",
+                        "text": str(val),
+                        "rects": [self._coerce_rect(rect)],
+                        "grid": False,
+                        "grid_n": 1,
+                    })
 
             dt = pd.to_datetime(row.get(self.dob_col, ""), errors="coerce")
             if not pd.isna(dt) and self.geom.get("dob"):
                 dob_values = [dt.strftime("%m"), dt.strftime("%d"), dt.strftime("%Y")]
                 dob_grid_n = [2, 2, 4]
-
-                for val, n, rect in zip(dob_values, dob_grid_n, self.geom["dob"][:3]):
-                    self.draw_logic(page, val, rect, is_grid=True, grid_n=n)
+                for val, n, rect in zip(dob_values, dob_grid_n, self.geom.get("dob", [])[:3]):
+                    ops.append({
+                        "kind": "text",
+                        "text": str(val),
+                        "rects": [self._coerce_rect(rect)],
+                        "grid": True,
+                        "grid_n": int(n),
+                    })
 
         for configs in self.custom_mappings.values():
             for c in configs:
                 if c.get("page", 0) != page_idx:
                     continue
 
-                target_rects = self._mapping_rect_list(c)
+                target_rects = [self._coerce_rect(r) for r in self._mapping_rect_list(c)]
                 if not target_rects:
                     continue
 
-                csv_val = str(row.get(c["column"], "")).strip().upper()
-                trigger = str(c.get("trigger", "")).strip().upper()
+                csv_val = str(row.get(c["column"], "")).strip()
+                trigger = str(c.get("trigger", "")).strip()
 
-                if trigger and csv_val == trigger:
-                    target = self._rect_union(target_rects)
-                    fs = target.height * 0.95
-                    p = fitz.Point(
-                        target.x0 + (target.width * 0.15),
-                        target.y1 - (target.height * 0.15)
-                    )
-                    page.insert_text(p, "X", fontsize=fs, fontname="Helvetica-Bold")
+                if trigger and csv_val.upper() == trigger.upper():
+                    ops.append({
+                        "kind": "check",
+                        "rects": target_rects,
+                    })
+                elif not trigger and csv_val:
+                    ops.append({
+                        "kind": "text",
+                        "text": csv_val,
+                        "rects": target_rects,
+                        "grid": bool(c.get("g", False)),
+                        "grid_n": int(c.get("n", 1)),
+                    })
 
-                elif not trigger:
-                    self.draw_logic(
-                        page,
-                        row.get(c["column"], ""),
-                        target_rects,
-                        is_grid=c.get("g", False),
-                        grid_n=c.get("n", 1),
-                        ox=0,
-                        oy=0,
-                        fs_scale=0.65
-                    )
+        return ops
 
-        return doc
+    def _reportlab_baseline_y(self, page_height, rect, oy=0):
+        return float(page_height) - (float(rect.y1) - (float(rect.height) * 0.2) + float(oy))
 
+    def _write_text_op_reportlab(self, c, page_height, text, rects, is_grid=False, grid_n=1, ox=0, oy=0, fs_scale=0.65):
+        val = str(text or "").strip()
+        if not val or val.lower() in ["nan", "none"]:
+            return
+        if val.endswith(".0"):
+            val = val[:-2]
+        val = val.upper()
+
+        rects = sorted([self._coerce_rect(r) for r in rects], key=lambda rr: (round(rr.y0, 3), rr.x0))
+        if not rects:
+            return
+
+        def draw_single(single_val, rect):
+            fs = max(float(rect.height) * fs_scale, 6.0)
+            text_w = rl_string_width(single_val, "Helvetica", fs)
+            x = float(rect.x0) + max((float(rect.width) - float(text_w)) / 2.0, 1.0) + float(ox)
+            y = self._reportlab_baseline_y(page_height, rect, oy=oy)
+            c.setFont("Helvetica", fs)
+            c.drawString(x, y, single_val)
+
+        def draw_grid(grid_val, rect, cells):
+            cells = max(int(cells), 1)
+            fs = max(float(rect.height) * 0.60, 6.0)
+            cell_w = float(rect.width) / cells
+            y = self._reportlab_baseline_y(page_height, rect, oy=oy)
+            c.setFont("Helvetica", fs)
+            for i, ch in enumerate(grid_val[:cells]):
+                x = float(rect.x0) + (i * cell_w) + (cell_w * 0.25) + float(ox)
+                c.drawString(x, y, ch)
+
+        if is_grid and len(rects) > 1:
+            counts = self._allocate_cells_by_width(rects, grid_n)
+            pos = 0
+            for rect, n_cells in zip(rects, counts):
+                seg = val[pos:pos + n_cells]
+                if seg:
+                    draw_grid(seg, rect, n_cells)
+                pos += n_cells
+            return
+
+        target = rects[0] if len(rects) == 1 else self._rect_union(rects)
+        if is_grid:
+            draw_grid(val, target, grid_n)
+        else:
+            draw_single(val, target)
+
+    def _write_check_op_reportlab(self, c, page_height, rects):
+        rects = sorted([self._coerce_rect(r) for r in rects], key=lambda rr: (round(rr.y0, 3), rr.x0))
+        if not rects:
+            return
+        target = rects[0] if len(rects) == 1 else self._rect_union(rects)
+        fs = max(float(target.height) * 0.95, 8.0)
+        x = float(target.x0) + (float(target.width) * 0.15)
+        y = float(page_height) - (float(target.y1) - (float(target.height) * 0.15))
+        c.setFont("Helvetica-Bold", fs)
+        c.drawString(x, y, "X")
+
+    def _build_filled_pdf_bytes(self, patient_name, page_idx=0):
+        if not self.supports_export_backend():
+            raise RuntimeError("PDF export backend is unavailable in this build.")
+        if not self.pdf_path or not os.path.exists(self.pdf_path):
+            raise FileNotFoundError("PDF path is missing or invalid.")
+
+        ops = self._collect_overlay_ops(patient_name, page_idx=page_idx)
+        with open(self.pdf_path, "rb") as fh:
+            reader = PdfReader(fh)
+            total_pages = len(reader.pages)
+            if total_pages <= 0:
+                raise ValueError("PDF has no pages.")
+
+            overlay_buf = io.BytesIO()
+            first_page = reader.pages[0]
+            first_size = (float(first_page.mediabox.width), float(first_page.mediabox.height))
+            c = rl_canvas.Canvas(overlay_buf, pagesize=first_size)
+
+            for i in range(total_pages):
+                page = reader.pages[i]
+                page_w = float(page.mediabox.width)
+                page_h = float(page.mediabox.height)
+                c.setPageSize((page_w, page_h))
+
+                if i == int(page_idx):
+                    for op in ops:
+                        if op.get("kind") == "check":
+                            self._write_check_op_reportlab(c, page_h, op.get("rects", []))
+                        else:
+                            self._write_text_op_reportlab(
+                                c,
+                                page_h,
+                                op.get("text", ""),
+                                op.get("rects", []),
+                                is_grid=bool(op.get("grid", False)),
+                                grid_n=int(op.get("grid_n", 1)),
+                            )
+                c.showPage()
+
+            c.save()
+            overlay_buf.seek(0)
+            overlay_reader = PdfReader(overlay_buf)
+
+            writer = PdfWriter()
+            for i, page in enumerate(reader.pages):
+                if i < len(overlay_reader.pages):
+                    page.merge_page(overlay_reader.pages[i])
+                writer.add_page(page)
+
+            out_buf = io.BytesIO()
+            writer.write(out_buf)
+            return out_buf.getvalue()
+
+    def export_filled_pdf(self, patient_name, out_path, page_idx=0):
+        pdf_bytes = self._build_filled_pdf_bytes(patient_name, page_idx=page_idx)
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        with open(out_path, "wb") as fh:
+            fh.write(pdf_bytes)
+        return out_path
+
+    def process_doc(self, patient_name, page_idx=0):
+        """
+        Backward-compatible helper. On desktops with PyMuPDF, returns an in-memory
+        document object. On Android-safe paths, use export_filled_pdf() instead.
+        """
+        pdf_bytes = self._build_filled_pdf_bytes(patient_name, page_idx=page_idx)
+        if FITZ_AVAILABLE:
+            return fitz.open(stream=pdf_bytes, filetype="pdf")
+        raise RuntimeError("process_doc() requires the optional PyMuPDF runtime. Use export_filled_pdf() for Android-safe export.")
     # --------------------------------------------------------
     # Config helpers
     # --------------------------------------------------------
@@ -1894,18 +2276,87 @@ class MediMapEngine:
         self.apply_config(cfg)
         return cfg
 
+    def _draw_text_op_cv(self, img, text, rects, preview_zoom=1.5, is_grid=False, grid_n=1, ox=0, oy=0, fs_scale=0.65):
+        val = str(text or "").strip()
+        if not val or val.lower() in ["nan", "none"]:
+            return
+        if val.endswith(".0"):
+            val = val[:-2]
+        val = val.upper()
+
+        rects = sorted([self._coerce_rect(r) for r in rects], key=lambda rr: (round(rr.y0, 3), rr.x0))
+        if not rects:
+            return
+
+        def draw_single(single_val, rect):
+            target_w = max(int(rect.width * preview_zoom), 1)
+            target_h = max(int(rect.height * preview_zoom), 1)
+            font_scale = max((target_h * fs_scale) / 30.0, 0.35)
+            thickness = 1 if target_h < 40 else 2
+            (tw, th), _ = cv2.getTextSize(single_val, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
+            x = int((rect.x0 * preview_zoom) + max((target_w - tw) / 2.0, 1.0) + (ox * preview_zoom))
+            y = int((rect.y1 * preview_zoom) - (target_h * 0.2) + (oy * preview_zoom))
+            cv2.putText(img, single_val, (x, y), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), thickness, cv2.LINE_AA)
+
+        def draw_grid(grid_val, rect, cells):
+            cells = max(int(cells), 1)
+            target_h = max(int(rect.height * preview_zoom), 1)
+            font_scale = max((target_h * 0.60) / 30.0, 0.35)
+            thickness = 1 if target_h < 40 else 2
+            cell_w = (rect.width * preview_zoom) / cells
+            y = int((rect.y1 * preview_zoom) - (target_h * 0.2) + (oy * preview_zoom))
+            for i, ch in enumerate(grid_val[:cells]):
+                x = int((rect.x0 * preview_zoom) + (i * cell_w) + (cell_w * 0.25) + (ox * preview_zoom))
+                cv2.putText(img, ch, (x, y), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), thickness, cv2.LINE_AA)
+
+        if is_grid and len(rects) > 1:
+            counts = self._allocate_cells_by_width(rects, grid_n)
+            pos = 0
+            for rect, n_cells in zip(rects, counts):
+                seg = val[pos:pos + n_cells]
+                if seg:
+                    draw_grid(seg, rect, n_cells)
+                pos += n_cells
+            return
+
+        target = rects[0] if len(rects) == 1 else self._rect_union(rects)
+        if is_grid:
+            draw_grid(val, target, grid_n)
+        else:
+            draw_single(val, target)
+
+    def _draw_check_op_cv(self, img, rects, preview_zoom=1.5):
+        rects = sorted([self._coerce_rect(r) for r in rects], key=lambda rr: (round(rr.y0, 3), rr.x0))
+        if not rects:
+            return
+        target = rects[0] if len(rects) == 1 else self._rect_union(rects)
+        x0 = int(target.x0 * preview_zoom)
+        y0 = int(target.y0 * preview_zoom)
+        x1 = int(target.x1 * preview_zoom)
+        y1 = int(target.y1 * preview_zoom)
+        pad = max(1, int(min(x1 - x0, y1 - y0) * 0.18))
+        thickness = 1 if (y1 - y0) < 36 else 2
+        cv2.line(img, (x0 + pad, y0 + pad), (x1 - pad, y1 - pad), (0, 0, 0), thickness, cv2.LINE_AA)
+        cv2.line(img, (x1 - pad, y0 + pad), (x0 + pad, y1 - pad), (0, 0, 0), thickness, cv2.LINE_AA)
+
     def get_processed_preview_pixmap(self, patient_name, page_idx=0, preview_zoom=1.5):
-        if not self.all_boxes:
-            self.run_detection(page_idx=page_idx)
-
-        doc = self.process_doc(patient_name, page_idx=page_idx)
-        page = doc[page_idx]
-        pix = page.get_pixmap(matrix=fitz.Matrix(preview_zoom, preview_zoom))
-        img = cv2.imdecode(np.frombuffer(pix.tobytes("png"), np.uint8), cv2.IMREAD_COLOR)
-
-        doc.close()
-        if img is None:
+        self._ensure_detection_for_page(page_idx=page_idx)
+        img = self.get_raw_preview_pixmap(page_idx=page_idx, preview_zoom=preview_zoom)
+        if img is None or getattr(img, "size", 0) == 0:
             raise ValueError("Failed to build preview image.")
+
+        for op in self._collect_overlay_ops(patient_name, page_idx=page_idx):
+            if op.get("kind") == "check":
+                self._draw_check_op_cv(img, op.get("rects", []), preview_zoom=preview_zoom)
+            else:
+                self._draw_text_op_cv(
+                    img,
+                    op.get("text", ""),
+                    op.get("rects", []),
+                    preview_zoom=preview_zoom,
+                    is_grid=bool(op.get("grid", False)),
+                    grid_n=int(op.get("grid_n", 1)),
+                )
         return img
 
     def get_preview_pixmap_with_boxes(self, patient_name, page_idx=0, preview_zoom=1.5):
@@ -2108,8 +2559,10 @@ class MediMapProLayout(BoxLayout):
 class MediMapProApp(MDApp):
 
     def build(self):
-        self.title = "MediMap Pro"
+        self.title = APP_TITLE
         self.engine = MediMapEngine()
+        self.import_store = LocalImportStore(self.get_app_output_dir)
+        self.android_picker = AndroidDocumentPickerService(self.import_store, status_callback=self.set_status)
 
         if KIVYMD_AVAILABLE and hasattr(self, "theme_cls"):
             try:
@@ -2765,10 +3218,7 @@ class MediMapProApp(MDApp):
         """Return a writable app-controlled directory for generated files/configs."""
         base_dir = getattr(self, "user_data_dir", None)
         if not base_dir:
-            if platform == "android":
-                base_dir = "/sdcard/Download/MediMapPro"
-            else:
-                base_dir = os.path.join(os.path.expanduser("~"), "MediMapPro")
+            base_dir = os.path.join(os.path.expanduser("~"), "MediMapPro")
 
         out_dir = os.path.join(base_dir, "output")
         os.makedirs(out_dir, exist_ok=True)
@@ -3112,7 +3562,15 @@ class MediMapProApp(MDApp):
                 mime_type="*/*",
                 title="data file",
                 on_picked=self._load_dataframe_from_local_path,
-                cancel_message="Data file selection cancelled."
+                cancel_message="Data file selection cancelled.",
+                allowed_suffixes=[".csv", ".xlsx", ".xls"],
+                extra_mime_types=[
+                    "text/csv",
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    "application/vnd.ms-excel",
+                    "text/plain",
+                    "application/octet-stream",
+                ],
             )
 
         content = FileChooserListView(
@@ -3147,11 +3605,13 @@ class MediMapProApp(MDApp):
         if platform == "android":
             return self._open_android_document_picker(
                 request_code=42432,
-                mime_type="application/json",
+                mime_type="*/*",
                 title="config file",
                 on_picked=self._load_config_from_local_path,
                 cancel_message="Config selection cancelled.",
                 required_suffix=".json",
+                allowed_suffixes=[".json"],
+                extra_mime_types=["application/json", "text/plain", "application/octet-stream"],
             )
 
         content = FileChooserListView(
@@ -3194,11 +3654,13 @@ class MediMapProApp(MDApp):
         if platform == "android":
             return self._open_android_document_picker(
                 request_code=42433,
-                mime_type="application/json",
+                mime_type="*/*",
                 title="config file to merge",
                 on_picked=self._merge_config_from_local_path,
                 cancel_message="Merge config selection cancelled.",
                 required_suffix=".json",
+                allowed_suffixes=[".json"],
+                extra_mime_types=["application/json", "text/plain", "application/octet-stream"],
             )
 
         content = FileChooserListView(
@@ -3310,19 +3772,36 @@ class MediMapProApp(MDApp):
             page_idx = self.current_page_idx()
             patient = self.selected_patient()
 
-            if platform == "android" and not self.engine.supports_processing_backend():
+            if platform == "android" and not self.engine.supports_export_backend():
                 raw_img = self.engine.get_raw_preview_pixmap(
                     page_idx=page_idx,
                     preview_zoom=PREVIEW_SCALE
                 )
+                boxes_payload = self._build_preview_boxes_payload(
+                    page_idx=page_idx,
+                    preview_zoom=PREVIEW_SCALE,
+                ) if self.engine.all_boxes else []
                 self.render_preview_image(
                     raw_img,
-                    boxes_payload=[],
+                    boxes_payload=boxes_payload,
                     page_idx=page_idx,
                     preview_zoom=PREVIEW_SCALE,
                 )
                 self._sync_box_selection_ui()
-                self.set_status("Android native PDF preview is available, but detection/filling still requires the PyMuPDF backend in this build.")
+                if patient and self.engine.df is not None and not self.engine.df.empty:
+                    self.set_status(
+                        f"Android detection preview rendered.\n"
+                        f"Page: {page_idx}\n"
+                        f"Boxes: {len(self.engine.all_boxes)}\n"
+                        f"PDF export backend is unavailable in this build."
+                    )
+                else:
+                    self.set_status(
+                        f"Android raw preview rendered.\n"
+                        f"Page: {page_idx}\n"
+                        f"Boxes shown: {len(self.engine.all_boxes)}\n"
+                        f"PDF export backend is unavailable in this build."
+                    )
                 return
 
             if not patient or self.engine.df is None or self.engine.df.empty:
@@ -3414,8 +3893,8 @@ class MediMapProApp(MDApp):
     # --------------------------------------------------------
     def on_generate_single(self, instance):
         try:
-            if platform == "android" and not self.engine.supports_processing_backend():
-                self.set_status("Android native PDF preview works in this build, but PDF filling/export still requires the PyMuPDF backend.")
+            if not self.engine.supports_export_backend():
+                self.set_status("PDF export backend is unavailable in this build.")
                 return
             if not self.engine.pdf_path:
                 self.set_status("Load PDF first.")
@@ -3427,155 +3906,37 @@ class MediMapProApp(MDApp):
                 return
 
             page_idx = self.current_page_idx()
-            doc = self.engine.process_doc(patient, page_idx=page_idx)
-
             out_dir = self.get_app_output_dir()
             out_path = os.path.join(
                 out_dir,
                 f"Filled_{safe_name(patient)}_page_{page_idx + 1}.pdf"
             )
-            
 
-            doc.save(out_path)
-            doc.close()
-
-            self.set_status(f"Generated:\n{out_path}")
+            self.engine.export_filled_pdf(patient, out_path, page_idx=page_idx)
+            self.set_status("Generated:\n" + out_path)
         except Exception as e:
             traceback.print_exc()
-            self.set_status(f"Generate single error:\n{e}")
+            self.set_status("Generate single error:\n" + str(e))
 
-    def _copy_android_uri_to_local_file(self, uri, default_name="selected_input", required_suffix=None):
-        if platform != "android" or not ANDROID_JAVA_AVAILABLE:
-            raise RuntimeError("Android document picker is unavailable.")
+    def _copy_android_uri_to_local_file(self, uri, default_name="selected_input", required_suffix=None, allowed_suffixes=None):
+        return self.android_picker.copy_uri_to_local_file(
+            uri,
+            default_name=default_name,
+            required_suffix=required_suffix,
+            allowed_suffixes=allowed_suffixes,
+        )
 
-        if uri is None:
-            raise ValueError("Android returned no document URI.")
-
-        activity_obj = AndroidPythonActivity.mActivity
-        resolver = activity_obj.getContentResolver()
-
-        if isinstance(uri, str):
-            uri_string = uri.strip()
-        else:
-            try:
-                uri_string = str(uri.toString()).strip()
-            except Exception:
-                uri_string = ""
-
-        if not uri_string:
-            raise ValueError("Android returned an empty document URI.")
-        if not (uri_string.startswith("content://") or uri_string.startswith("file://")):
-            raise ValueError(f"Android returned an invalid document URI: {uri_string}")
-
-        uri = AndroidUri.parse(uri_string)
-
-        display_name = None
-        cursor = None
-        try:
-            OpenableColumns = autoclass("android.provider.OpenableColumns")
-            cursor = resolver.query(uri, None, None, None, None)
-            if cursor is not None and cursor.moveToFirst():
-                idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                if idx >= 0:
-                    display_name = cursor.getString(idx)
-        except Exception:
-            display_name = None
-        finally:
-            try:
-                if cursor is not None:
-                    cursor.close()
-            except Exception:
-                pass
-
-        input_stream = resolver.openInputStream(uri)
-        if input_stream is None:
-            raise ValueError("Unable to open the selected Android document.")
-
-        ByteArray = autoclass("java.lang.reflect.Array")
-        JavaByte = autoclass("java.lang.Byte").TYPE
-        baos = AndroidByteArrayOutputStream()
-        buffer = ByteArray.newInstance(JavaByte, 65536)
-
-        try:
-            while True:
-                count = input_stream.read(buffer)
-                if count == -1:
-                    break
-                baos.write(buffer, 0, count)
-            file_bytes = bytes(baos.toByteArray())
-        finally:
-            try:
-                input_stream.close()
-            except Exception:
-                pass
-
-        if not file_bytes:
-            raise ValueError("Android returned an empty file.")
-
-        filename = safe_name(display_name or default_name)
-        if required_suffix and not filename.lower().endswith(required_suffix.lower()):
-            filename += required_suffix
-
-        out_dir = self.get_app_output_dir()
-        os.makedirs(out_dir, exist_ok=True)
-        out_path = os.path.join(out_dir, filename)
-
-        with open(out_path, "wb") as f:
-            f.write(file_bytes)
-
-        if not os.path.exists(out_path) or os.path.getsize(out_path) <= 0:
-            raise ValueError("Copied file is empty after saving to app storage.")
-
-        if required_suffix and required_suffix.lower() == ".pdf" and not file_bytes.startswith(b"%PDF-"):
-            raise ValueError("Selected file was copied, but it does not start with a valid PDF header.")
-
-        return out_path
-
-    def _open_android_document_picker(self, request_code, mime_type="*/*", title="document", on_picked=None, cancel_message=None, required_suffix=None):
-        if platform != "android" or not ANDROID_JAVA_AVAILABLE:
-            self.set_status("Android system document picker is unavailable.")
-            return
-
-        def _on_activity_result(request_code_result, result_code, intent):
-            if request_code_result != request_code:
-                return
-            activity.unbind(on_activity_result=_on_activity_result)
-
-            if result_code != -1 or intent is None:
-                self.set_status(cancel_message or f"{title.capitalize()} selection cancelled.")
-                return
-
-            try:
-                uri = intent.getData()
-                if uri is None:
-                    raise ValueError(f"No {title} URI was returned by Android.")
-
-                try:
-                    flags = intent.getFlags()
-                    take_flags = flags & (AndroidIntent.FLAG_GRANT_READ_URI_PERMISSION | AndroidIntent.FLAG_GRANT_WRITE_URI_PERMISSION)
-                    AndroidPythonActivity.mActivity.getContentResolver().takePersistableUriPermission(uri, take_flags)
-                except Exception:
-                    pass
-
-                local_path = self._copy_android_uri_to_local_file(
-                    uri,
-                    default_name=safe_name(title),
-                    required_suffix=required_suffix,
-                )
-
-                if callable(on_picked):
-                    on_picked(local_path)
-            except Exception as e:
-                traceback.print_exc()
-                self.set_status(f"{title.capitalize()} error: {e}")
-
-        activity.bind(on_activity_result=_on_activity_result)
-        intent = AndroidIntent(AndroidIntent.ACTION_OPEN_DOCUMENT)
-        intent.addCategory(AndroidIntent.CATEGORY_OPENABLE)
-        intent.setType(mime_type or "*/*")
-        intent.addFlags(AndroidIntent.FLAG_GRANT_READ_URI_PERMISSION)
-        intent.addFlags(AndroidIntent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
-        AndroidPythonActivity.mActivity.startActivityForResult(intent, request_code)
+    def _open_android_document_picker(self, request_code, mime_type="*/*", title="document", on_picked=None, cancel_message=None, required_suffix=None, allowed_suffixes=None, extra_mime_types=None):
+        return self.android_picker.open_document_picker(
+            request_code=request_code,
+            mime_type=mime_type,
+            title=title,
+            on_picked=on_picked,
+            cancel_message=cancel_message,
+            required_suffix=required_suffix,
+            allowed_suffixes=allowed_suffixes,
+            extra_mime_types=extra_mime_types,
+        )
 
     def _load_pdf_from_path(self, path):
         total = self.engine.load_pdf(path)
@@ -3592,7 +3953,7 @@ class MediMapProApp(MDApp):
         self.render_preview_image(raw_img, boxes_payload=[], page_idx=self.current_page_idx(), preview_zoom=PREVIEW_SCALE)
         self._sync_box_selection_ui()
 
-        mode_note = "\nMode: Android native preview fallback" if self.engine.android_preview_only_mode() else ""
+        mode_note = "\nMode: PDF export backend unavailable" if not self.engine.supports_export_backend() else ""
         self.set_status(
             f"PDF Loaded: {os.path.basename(path)}\n"
             f"Pages: {total}\n"
@@ -3605,6 +3966,7 @@ class MediMapProApp(MDApp):
             uri,
             default_name="selected_pdf",
             required_suffix=".pdf",
+            allowed_suffixes=[".pdf"],
         )
 
     def _open_android_pdf_picker(self):
@@ -3615,6 +3977,7 @@ class MediMapProApp(MDApp):
             on_picked=self._load_pdf_from_path,
             cancel_message="PDF selection cancelled.",
             required_suffix=".pdf",
+            allowed_suffixes=[".pdf"],
         )
 
     def _open_legacy_pdf_picker(self):
@@ -3751,8 +4114,8 @@ class MediMapProApp(MDApp):
     def on_generate_batch(self, instance):
         """Processes all rows in the data file and generates PDFs."""
         try:
-            if platform == "android" and not self.engine.supports_processing_backend():
-                self.set_status("Android native PDF preview works in this build, but batch filling/export still requires the PyMuPDF backend.")
+            if not self.engine.supports_export_backend():
+                self.set_status("PDF export backend is unavailable in this build.")
                 return
             if self.engine.df is None or self.engine.df.empty:
                 self.set_status("Load CSV/XLSX first.")
@@ -3768,15 +4131,13 @@ class MediMapProApp(MDApp):
 
             success = 0
             skipped = 0
+            page_idx = self.current_page_idx()
 
             for patient_name in names:
                 try:
-                    doc = self.engine.process_doc(patient_name, page_idx=self.current_page_idx())
                     safe_p_name = "".join(c if c.isalnum() or c in (" ", "-", "_") else "_" for c in patient_name).strip()
-                    
                     out_path = os.path.join(out_dir, f"Filled_{safe_p_name or 'Unknown'}.pdf")
-                    doc.save(out_path)
-                    doc.close()
+                    self.engine.export_filled_pdf(patient_name, out_path, page_idx=page_idx)
                     success += 1
                 except Exception:
                     skipped += 1
@@ -3784,7 +4145,7 @@ class MediMapProApp(MDApp):
             self.set_status(f"Batch done.\nFolder: {out_dir}\nSuccess: {success} | Skipped: {skipped}")
         except Exception as e:
             traceback.print_exc()
-            self.set_status(f"Batch Error: {e}")
+            self.set_status("Batch Error: " + str(e))
 
 
 if __name__ == "__main__":
