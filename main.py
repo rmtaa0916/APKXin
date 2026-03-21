@@ -577,7 +577,7 @@ class AndroidDocumentPickerService:
             activity.unbind(on_activity_result=_on_activity_result)
 
             if result_code != -1 or intent is None:
-                self._status(cancel_message or f"{title.capitalize()} selection cancelled.")
+                Clock.schedule_once(lambda dt, m=(cancel_message or f"{title.capitalize()} selection cancelled."): self._status(m), 0)
                 return
 
             try:
@@ -592,6 +592,7 @@ class AndroidDocumentPickerService:
                 except Exception:
                     pass
 
+                Clock.schedule_once(lambda dt, t=title: self._status(f"Importing {t}..."), 0)
                 local_path = self.copy_uri_to_local_file(
                     uri,
                     default_name=safe_name(title),
@@ -600,10 +601,10 @@ class AndroidDocumentPickerService:
                 )
 
                 if callable(on_picked):
-                    on_picked(local_path)
+                    Clock.schedule_once(lambda dt, p=local_path: on_picked(p), 0)
             except Exception as e:
                 traceback.print_exc()
-                self._status(f"{title.capitalize()} error: {e}")
+                Clock.schedule_once(lambda dt, m=f"{title.capitalize()} error: {e}": self._status(m), 0)
 
         activity.bind(on_activity_result=_on_activity_result)
         intent = AndroidIntent(AndroidIntent.ACTION_OPEN_DOCUMENT)
@@ -2392,8 +2393,6 @@ class MediMapEngine:
 class InteractivePreview(Image):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.allow_stretch = False
-        self.keep_ratio = True
         self.size = (dp(1), dp(1))
         self.boxes_payload = []
         self.selected_ids = set()
@@ -2415,6 +2414,7 @@ class InteractivePreview(Image):
         if img_bgr is None:
             self.texture = None
             self.canvas.after.clear()
+            self.canvas.ask_update()
             return
         rgba = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGBA)
         texture = Texture.create(size=(rgba.shape[1], rgba.shape[0]), colorfmt="rgba")
@@ -2422,6 +2422,8 @@ class InteractivePreview(Image):
         texture.flip_vertical()
         self.texture = texture
         self._redraw_overlay()
+        self.canvas.ask_update()
+        Clock.schedule_once(lambda dt: self._redraw_overlay(), 0)
 
     def set_boxes_payload(self, boxes_payload, selected_ids=None, preview_zoom=1.0, page_idx=0):
         self.boxes_payload = list(boxes_payload or [])
@@ -2859,7 +2861,7 @@ class MediMapProApp(MDApp):
         appbar.add_widget(brand_wrap)
 
         status_chip = Label(
-            text="Ready • Load CSV/XLSX, Google Sheet URL, and PDF to begin",
+            text="Ready • Import a PDF, then refresh or run detect",
             color=palette["text"],
             size_hint=(1 if is_mobile else 0.42, None),
             height=dp(36) if is_mobile else dp(42),
@@ -3103,9 +3105,11 @@ class MediMapProApp(MDApp):
         controls_scroll.add_widget(controls)
         controls_wrap.add_widget(controls_scroll)
 
-        preview_outer = BoxLayout(orientation="vertical", spacing=gap, size_hint=(1, 0.44) if is_mobile else (0.56,1))
+        preview_outer = BoxLayout(orientation="vertical", spacing=gap, size_hint=(1, None) if is_mobile else (0.56,1))
         preview_card, preview_body = make_card("Live Preview", "Interactive canvas for detection review, mapping, and patient output preview.")
         preview_card.size_hint_y = 1
+        if is_mobile:
+            preview_outer.height = max(dp(340), Window.height * 0.40)
         preview_card.bind(minimum_height=preview_card.setter("height"))
         preview_toolbar = GridLayout(cols=2 if is_mobile else 4, spacing=dp(8), size_hint_y=None, height=row_h if not is_mobile else 2*row_h+dp(8))
         for txt, cb, tone in [
@@ -3120,10 +3124,12 @@ class MediMapProApp(MDApp):
         preview_body.add_widget(preview_toolbar)
 
         preview_shell = BoxLayout(orientation="vertical", spacing=dp(8), padding=dp(8), size_hint_y=None)
-        preview_shell.height = max(dp(320), Window.height * 0.42) if is_mobile else dp(860)
+        preview_shell.height = max(dp(260), Window.height * 0.30) if is_mobile else dp(860)
         style_card(preview_shell, palette["preview_bg"], radius=dp(24))
         preview_wrap = ScrollView(do_scroll_x=True, do_scroll_y=True, bar_width=dp(6), scroll_type=["bars", "content"])
+        self.preview_wrap = preview_wrap
         preview_stack = BoxLayout(orientation="vertical", spacing=dp(8), size_hint_y=None)
+        self.preview_stack = preview_stack
         preview_stack.bind(minimum_height=preview_stack.setter("height"))
         self.preview = InteractivePreview(size_hint=(None, None))
         self.preview.bind(texture=self._update_preview_size)
@@ -3157,13 +3163,30 @@ class MediMapProApp(MDApp):
         instance.text_size = value
 
     def _update_preview_size(self, instance, texture):
-        if texture:
-            if platform == "android":
-                max_w = max(dp(220), Window.width - dp(56))
-                scale = min(1.0, max_w / float(texture.width))
-                self.preview.size = (texture.width * scale, texture.height * scale)
-            else:
-                self.preview.size = texture.size
+        if not texture:
+            return
+        if platform == "android":
+            max_w = max(dp(220), Window.width - dp(40))
+            max_h = max(dp(180), Window.height * 0.26)
+            scale = min(1.0, max_w / float(texture.width), max_h / float(texture.height))
+            self.preview.size = (max(dp(1), texture.width * scale), max(dp(1), texture.height * scale))
+        else:
+            self.preview.size = texture.size
+        if getattr(self, "preview_stack", None) is not None:
+            self.preview_stack.do_layout()
+
+    def _post_preview_refresh(self, *args):
+        try:
+            tex = getattr(self.preview, "texture", None)
+            if tex is not None:
+                self._update_preview_size(self.preview, tex)
+            self.preview._redraw_overlay()
+            self.preview.canvas.ask_update()
+            if getattr(self, "preview_wrap", None) is not None:
+                self.preview_wrap.scroll_x = 0
+                self.preview_wrap.scroll_y = 1
+        except Exception:
+            pass
 
     def set_status(self, text):
         self.status_lbl.text = text
@@ -3309,6 +3332,8 @@ class MediMapProApp(MDApp):
             texture.blit_buffer(buf, colorfmt="rgba", bufferfmt="ubyte")
             texture.flip_vertical()
             self.preview.texture = texture
+        Clock.schedule_once(self._post_preview_refresh, 0)
+        Clock.schedule_once(self._post_preview_refresh, 0.05)
 
     def _build_preview_boxes_payload(self, page_idx, preview_zoom):
         payload = []
@@ -3939,27 +3964,24 @@ class MediMapProApp(MDApp):
         )
 
     def _load_pdf_from_path(self, path):
-        total = self.engine.load_pdf(path)
+        try:
+            self.set_status(f"Loading PDF...\n{os.path.basename(path)}")
+            total = self.engine.load_pdf(path)
 
-        cur_idx = self.current_page_idx()
-        max_idx = max(total - 1, 0)
-        if cur_idx > max_idx:
-            self.page_input.text = "0"
+            cur_idx = self.current_page_idx()
+            max_idx = max(total - 1, 0)
+            if cur_idx > max_idx:
+                self.page_input.text = "0"
 
-        raw_img = self.engine.get_raw_preview_pixmap(
-            page_idx=self.current_page_idx(),
-            preview_zoom=PREVIEW_SCALE
-        )
-        self.render_preview_image(raw_img, boxes_payload=[], page_idx=self.current_page_idx(), preview_zoom=PREVIEW_SCALE)
-        self._sync_box_selection_ui()
-
-        mode_note = "\nMode: PDF export backend unavailable" if not self.engine.supports_export_backend() else ""
-        self.set_status(
-            f"PDF Loaded: {os.path.basename(path)}\n"
-            f"Pages: {total}\n"
-            f"Showing raw template page: {self.current_page_idx()}"
-            f"{mode_note}"
-        )
+            self.set_status(
+                f"PDF loaded: {os.path.basename(path)}\n"
+                f"Pages: {total}\n"
+                f"Rendering preview..."
+            )
+            Clock.schedule_once(lambda dt: self._finish_pdf_load_preview(path, total), 0.05)
+        except Exception as e:
+            traceback.print_exc()
+            self.set_status(f"PDF Error: {e}")
 
     def _copy_android_uri_to_local_pdf(self, uri):
         return self._copy_android_uri_to_local_file(
@@ -4033,11 +4055,14 @@ class MediMapProApp(MDApp):
                 preview_zoom=PREVIEW_SCALE
             )
             self._sync_box_selection_ui()
+            Clock.schedule_once(self._post_preview_refresh, 0.05)
 
+            mode_note = "\nMode: export is limited in this build" if not self.engine.supports_export_backend() else ""
             self.set_status(
                 f"PDF Loaded: {os.path.basename(path)}\n"
                 f"Pages: {total}\n"
                 f"Showing raw template page: {page_idx}"
+                f"{mode_note}"
             )
         except Exception as e:
             traceback.print_exc()
