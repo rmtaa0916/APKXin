@@ -574,8 +574,13 @@ class AndroidDocumentPickerService:
             if normalized and not any(lower_name.endswith(s) for s in normalized):
                 raise ValueError(f"Selected file must end with one of: {', '.join(normalized)}")
 
-        if required_suffix and required_suffix.lower() == ".pdf" and not file_bytes.startswith(b"%PDF-"):
-            raise ValueError("Selected file was copied, but it does not start with a valid PDF header.")
+        if required_suffix and required_suffix.lower() == ".pdf":
+            pdf_pos = file_bytes.find(b"%PDF-")
+            if pdf_pos == -1 or pdf_pos > 1024:
+                head = repr(file_bytes[:24])
+                raise ValueError(f"Selected file was copied, but it does not contain a valid PDF header. First bytes: {head}")
+            if pdf_pos > 0:
+                file_bytes = file_bytes[pdf_pos:]
 
         return self.import_store.save_bytes(
             file_bytes,
@@ -2650,82 +2655,48 @@ class MediMapProApp(MDApp):
             return widget
 
         def make_card(title, subtitle=None):
-            if KIVYMD_AVAILABLE and MDCard is not None:
-                card = MDCard(
-                    orientation="vertical",
-                    padding=dp(14),
-                    spacing=dp(10),
-                    radius=[dp(24)] * 4,
-                    elevation=4,
-                    size_hint_y=None,
-                    md_bg_color=palette["surface"],
-                )
-                card.bind(minimum_height=card.setter("height"))
+            card = BoxLayout(orientation="vertical", spacing=dp(8), padding=dp(12), size_hint_y=None)
+            card.bind(minimum_height=card.setter("height"))
+            style_card(card, palette["surface"])
 
-                head = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(2))
-                head.height = dp(48) if subtitle else dp(28)
-                ttl_cls = MDLabel if MDLabel is not None else Label
-                ttl = ttl_cls(
-                    text=title,
-                    theme_text_color="Custom" if MDLabel is not None else None,
-                    text_color=palette["text"] if MDLabel is not None else None,
-                    size_hint_y=None,
-                    height=dp(24),
-                    halign="left",
-                    valign="middle",
-                    font_style="Subtitle1" if MDLabel is not None else None,
-                )
-                if hasattr(ttl, "bind") and not MDLabel is ttl_cls:
-                    ttl.bind(size=self._sync_label_text_size)
-                head.add_widget(ttl)
-                if subtitle:
-                    sub = ttl_cls(
-                        text=subtitle,
-                        theme_text_color="Custom" if MDLabel is not None else None,
-                        text_color=palette["muted"] if MDLabel is not None else None,
-                        size_hint_y=None,
-                        height=dp(18),
-                        halign="left",
-                        valign="middle",
-                        font_style="Caption" if MDLabel is not None else None,
-                    )
-                    if hasattr(sub, "bind") and not MDLabel is ttl_cls:
-                        sub.bind(size=self._sync_label_text_size)
-                    head.add_widget(sub)
-                card.add_widget(head)
+            head = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(3))
+            head.bind(minimum_height=head.setter("height"))
 
-                body = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
-                body.bind(minimum_height=body.setter("height"))
-                card.add_widget(body)
-                return card, body
-
-            wrap = BoxLayout(orientation="vertical", spacing=dp(8), padding=dp(12), size_hint_y=None)
-            wrap.bind(minimum_height=wrap.setter("height"))
-            style_card(wrap, palette["surface"])
-
-            head = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(2))
-            head.height = dp(44) if subtitle else dp(28)
             ttl = Label(
-                text=title, markup=False, bold=True, color=palette["text"],
-                size_hint_y=None, height=dp(24), halign="left", valign="middle",
-                font_size=dp(16) if is_mobile else dp(15)
+                text=title,
+                markup=False,
+                bold=True,
+                color=palette["text"],
+                size_hint_y=None,
+                height=dp(24),
+                halign="left",
+                valign="middle",
+                font_size=dp(16) if is_mobile else dp(15),
             )
             ttl.bind(size=self._sync_label_text_size)
+            self._bind_auto_height_label(ttl, min_height=dp(22), extra_pad=dp(2))
             head.add_widget(ttl)
+
             if subtitle:
                 sub = Label(
-                    text=subtitle, color=palette["muted"],
-                    size_hint_y=None, height=dp(18), halign="left", valign="middle",
-                    font_size=dp(12)
+                    text=subtitle,
+                    color=palette["muted"],
+                    size_hint_y=None,
+                    height=dp(18),
+                    halign="left",
+                    valign="middle",
+                    font_size=dp(11) if is_mobile else dp(12),
                 )
                 sub.bind(size=self._sync_label_text_size)
+                self._bind_auto_height_label(sub, min_height=dp(16), extra_pad=dp(2))
                 head.add_widget(sub)
-            wrap.add_widget(head)
+
+            card.add_widget(head)
 
             body = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
             body.bind(minimum_height=body.setter("height"))
-            wrap.add_widget(body)
-            return wrap, body
+            card.add_widget(body)
+            return card, body
 
         def make_button(text, tone="primary", icon=None):
             colors = {
@@ -2862,52 +2833,61 @@ class MediMapProApp(MDApp):
             orientation="vertical" if is_mobile else "horizontal",
             spacing=dp(10) if is_mobile else dp(14),
             size_hint_y=None,
-            height=dp(108) if is_mobile else dp(74),
-            padding=[dp(14), dp(10), dp(14), dp(10)],
+            height=dp(92) if is_mobile else dp(80),
+            padding=[dp(14), dp(12), dp(14), dp(12)],
         )
         style_card(appbar, palette["surface"], radius=dp(26))
 
-        brand_wrap = BoxLayout(orientation="vertical", spacing=dp(2))
+        brand_wrap = BoxLayout(orientation="vertical", spacing=dp(4), size_hint_y=None)
+        brand_wrap.bind(minimum_height=brand_wrap.setter("height"))
         hero_title = Label(
             text="MediMap Pro",
             color=palette["text"],
             bold=True,
             size_hint_y=None,
-            height=dp(28),
+            height=dp(30),
             halign="left",
             valign="middle",
-            font_size=dp(24) if is_mobile else dp(20),
+            font_size=dp(22) if is_mobile else dp(20),
         )
         hero_title.bind(size=self._sync_label_text_size)
+        self._bind_auto_height_label(hero_title, min_height=dp(26), extra_pad=dp(2))
         brand_wrap.add_widget(hero_title)
 
         hero_sub = Label(
-            text="Medical-tech PDF automation with interactive mapping and Android-native fallback preview.",
+            text=("Import files, preview pages, detect fields, and export filled PDFs." if is_mobile else "Medical-tech PDF automation with interactive mapping and Android-native fallback preview."),
             color=palette["muted"],
             size_hint_y=None,
-            height=dp(20),
+            height=dp(22),
             halign="left",
             valign="middle",
-            font_size=dp(11.5),
+            font_size=dp(10.5) if is_mobile else dp(11.5),
         )
         hero_sub.bind(size=self._sync_label_text_size)
+        self._bind_auto_height_label(hero_sub, min_height=dp(18), extra_pad=dp(2))
         brand_wrap.add_widget(hero_sub)
         appbar.add_widget(brand_wrap)
 
         status_chip = Label(
-            text="Ready • Import a PDF, then refresh or run detect",
+            text=("Ready • Open a PDF to begin" if is_mobile else "Ready • Import a PDF, then refresh or run detect"),
             color=palette["text"],
-            size_hint=(1 if is_mobile else 0.42, None),
-            height=dp(36) if is_mobile else dp(42),
-            halign="center",
+            size_hint=(1, None) if is_mobile else (0.42, None),
+            height=dp(44) if is_mobile else dp(42),
+            halign="left" if is_mobile else "center",
             valign="middle",
             font_size=dp(10.5) if is_mobile else dp(11),
+            padding=(dp(12), dp(0)),
         )
         status_chip.bind(size=self._sync_label_text_size)
+        self._bind_auto_height_label(status_chip, min_height=dp(38), extra_pad=dp(10))
         style_card(status_chip, palette["chip"], radius=dp(18))
         self.status_lbl = status_chip
-        appbar.add_widget(status_chip)
-        root.add_widget(appbar)
+        if is_mobile:
+            root.add_widget(appbar)
+            root.add_widget(status_chip)
+        else:
+            appbar.add_widget(status_chip)
+            root.add_widget(appbar)
 
         self.mobile_flow_lbl = None
         if is_mobile:
@@ -2915,7 +2895,7 @@ class MediMapProApp(MDApp):
                 orientation="vertical",
                 spacing=dp(4),
                 size_hint_y=None,
-                height=dp(82),
+                height=dp(74),
                 padding=[dp(14), dp(12), dp(14), dp(12)],
             )
             style_card(mobile_flow_card, palette["surface_alt"], radius=dp(24))
@@ -3026,7 +3006,7 @@ class MediMapProApp(MDApp):
         controls = GridLayout(cols=1, spacing=gap, size_hint_y=None)
         controls.bind(minimum_height=controls.setter("height"))
 
-        files_card, files_body = make_card("Workspace", "Open data, templates, and saved presets")
+        files_card, files_body = make_card("Workspace", "Open files and presets" if is_mobile else "Open data, templates, and saved presets")
         file_grid = GridLayout(cols=2 if is_mobile else 3, spacing=dp(8), size_hint_y=None)
         file_buttons = [
             ("Load PDF", self.on_load_pdf, "primary"),
@@ -3048,7 +3028,7 @@ class MediMapProApp(MDApp):
         else:
             controls.add_widget(files_card)
 
-        nav_card, nav_body = make_card("Session", "Choose a patient, move pages, detect, and refresh")
+        nav_card, nav_body = make_card("Session", "Pick patient, page, and actions" if is_mobile else "Choose a patient, move pages, detect, and refresh")
         self.patient_spinner = make_spinner("Select Patient")
         self.patient_spinner.bind(text=self.on_patient_change)
         nav_body.add_widget(labeled_field("Patient", self.patient_spinner, "Active data row for preview and export"))
@@ -3086,7 +3066,7 @@ class MediMapProApp(MDApp):
         else:
             controls.add_widget(nav_card)
 
-        detect_card, detect_body = make_card("Detection", "Field, line, checkbox, and extent thresholds")
+        detect_card, detect_body = make_card("Detection", "Tune detection thresholds" if is_mobile else "Field, line, checkbox, and extent thresholds")
         explain = Label(text="F = field sizing  •  Line = answer lines  •  C = checkbox tuning  •  Ext = contour extent limits",
                         color=palette["muted"], size_hint_y=None, height=dp(18), halign="left", valign="middle", font_size=dp(11))
         explain.bind(size=self._sync_label_text_size)
@@ -3149,7 +3129,7 @@ class MediMapProApp(MDApp):
         else:
             controls.add_widget(detect_card)
 
-        map_card, map_body = make_card("Mapping", "Assign values to selected boxes directly from preview")
+        map_card, map_body = make_card("Mapping", "Assign values to selected boxes" if is_mobile else "Assign values to selected boxes directly from preview")
         self.box_ids_input = make_input("", "0,1,2")
         self.column_spinner = make_spinner("Select Column")
         self.trigger_input = make_input("", "Trigger")
@@ -3170,7 +3150,7 @@ class MediMapProApp(MDApp):
         else:
             controls.add_widget(map_card)
 
-        export_card, export_body = make_card("Export", "Generate patient output files")
+        export_card, export_body = make_card("Export", "Generate output PDFs" if is_mobile else "Generate patient output files")
         out_grid = GridLayout(cols=1 if is_mobile else 2, spacing=dp(8), size_hint_y=None, height=(2*row_h+dp(8)) if is_mobile else row_h)
         self.btn_generate_one = make_button("Generate Single PDF", tone="accent")
         self.btn_generate_one.bind(on_release=self.on_generate_single)
@@ -3196,7 +3176,7 @@ class MediMapProApp(MDApp):
             controls.add_widget(export_card)
 
         if is_mobile:
-            mobile_controls_card, mobile_controls_body = make_card("Controls", "Switch sections to keep the screen lighter and easier to navigate")
+            mobile_controls_card, mobile_controls_body = make_card("Controls", "Use tabs to move step by step" if is_mobile else "Switch sections to keep the screen lighter and easier to navigate")
             tabs = _make_mobile_section_tabs(["Files", "Session", "Detection", "Mapping", "Export"])
             mobile_controls_body.add_widget(tabs)
             self._mobile_section_host = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
@@ -3208,10 +3188,10 @@ class MediMapProApp(MDApp):
         controls_wrap.add_widget(controls_scroll)
 
         preview_outer = BoxLayout(orientation="vertical", spacing=gap, size_hint=(1, None) if is_mobile else (0.56,1))
-        preview_card, preview_body = make_card("Live Preview", "Interactive canvas for detection review, mapping, and patient output preview.")
+        preview_card, preview_body = make_card("Live Preview", "Preview pages and tap boxes" if is_mobile else "Interactive canvas for detection review, mapping, and patient output preview.")
         preview_card.size_hint_y = 1
         if is_mobile:
-            preview_outer.height = max(dp(340), Window.height * 0.40)
+            preview_outer.height = max(dp(300), Window.height * 0.34)
         preview_card.bind(minimum_height=preview_card.setter("height"))
         preview_toolbar = GridLayout(cols=2 if is_mobile else 4, spacing=dp(8), size_hint_y=None, height=row_h if not is_mobile else 2*row_h+dp(8))
         for txt, cb, tone in [
@@ -3226,7 +3206,7 @@ class MediMapProApp(MDApp):
         preview_body.add_widget(preview_toolbar)
 
         preview_shell = BoxLayout(orientation="vertical", spacing=dp(8), padding=dp(8), size_hint_y=None)
-        preview_shell.height = max(dp(260), Window.height * 0.30) if is_mobile else dp(860)
+        preview_shell.height = max(dp(220), Window.height * 0.24) if is_mobile else dp(860)
         style_card(preview_shell, palette["preview_bg"], radius=dp(24))
         preview_wrap = ScrollView(do_scroll_x=True, do_scroll_y=True, bar_width=dp(6), scroll_type=["bars", "content"])
         self.preview_wrap = preview_wrap
@@ -3238,8 +3218,9 @@ class MediMapProApp(MDApp):
         self.preview.box_tap_callback = self.on_preview_box_tap
         self.preview.hover_callback = self.on_preview_box_hover
         self.preview_info = Label(text="Interactive preview ready. Tap a box to select it.", color=palette["text"],
-                                  size_hint_y=None, height=dp(44), halign="left", valign="middle", font_size=dp(12))
+                                  size_hint_y=None, height=dp(36), halign="left", valign="middle", font_size=dp(11))
         self.preview_info.bind(size=self._sync_label_text_size)
+        self._bind_auto_height_label(self.preview_info, min_height=dp(34), extra_pad=dp(8))
         style_card(self.preview_info, palette["chip"], radius=dp(18))
         preview_stack.add_widget(self.preview_info)
         preview_stack.add_widget(self.preview)
@@ -3265,12 +3246,34 @@ class MediMapProApp(MDApp):
     def _sync_label_text_size(self, instance, value):
         instance.text_size = value
 
+    def _bind_auto_height_label(self, instance, min_height=0, extra_pad=0):
+        def _upd(*_):
+            try:
+                instance.text_size = (max(1, instance.width), None)
+            except Exception:
+                return
+            try:
+                instance.texture_update()
+                tex_h = instance.texture_size[1]
+            except Exception:
+                tex_h = 0
+            try:
+                instance.height = max(min_height, tex_h + extra_pad)
+            except Exception:
+                pass
+        try:
+            instance.bind(width=_upd, text=_upd)
+        except Exception:
+            pass
+        Clock.schedule_once(lambda dt: _upd(), 0)
+        return instance
+
     def _update_preview_size(self, instance, texture):
         if not texture:
             return
         if platform == "android":
             max_w = max(dp(220), Window.width - dp(40))
-            max_h = max(dp(180), Window.height * 0.26)
+            max_h = max(dp(200), Window.height * 0.30)
             scale = min(1.0, max_w / float(texture.width), max_h / float(texture.height))
             self.preview.size = (max(dp(1), texture.width * scale), max(dp(1), texture.height * scale))
         else:
