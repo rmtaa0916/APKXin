@@ -11,11 +11,8 @@ import base64
 import zipfile
 import traceback
 import re
-import ssl
-import urllib.request
 from urllib.parse import urlparse, parse_qs
 from functools import partial
-from types import SimpleNamespace
 
 # -------------------------------------------------------------------
 # Python 3.10+ compatibility patch for older reportlab builds
@@ -28,64 +25,16 @@ if not hasattr(base64, "encodestring"):
     base64.encodestring = base64.encodebytes
 
 import cv2
-try:
-    import fitz
-except Exception:
-    fitz = None
+import fitz
 import numpy as np
 import pandas as pd
 
 from pypdf import PdfReader, PdfWriter
 
-try:
-    from reportlab.pdfgen import canvas as rl_canvas
-    from reportlab.pdfbase.pdfmetrics import stringWidth as rl_string_width
-    REPORTLAB_AVAILABLE = True
-except Exception:
-    rl_canvas = None
-    REPORTLAB_AVAILABLE = False
-
-    def rl_string_width(text, font_name, font_size):
-        return len(str(text or "")) * float(font_size) * 0.6
-
-class RectCompat:
-    """Minimal rectangle compatibility layer used when PyMuPDF is unavailable."""
-    __slots__ = ("x0", "y0", "x1", "y1")
-
-    def __init__(self, x0=0.0, y0=0.0, x1=0.0, y1=0.0):
-        self.x0 = float(x0)
-        self.y0 = float(y0)
-        self.x1 = float(x1)
-        self.y1 = float(y1)
-
-    @property
-    def width(self):
-        return self.x1 - self.x0
-
-    @property
-    def height(self):
-        return self.y1 - self.y0
-
-    def __iter__(self):
-        yield self.x0
-        yield self.y0
-        yield self.x1
-        yield self.y1
-
-    def __repr__(self):
-        return f"RectCompat({self.x0}, {self.y0}, {self.x1}, {self.y1})"
-
-if fitz is None:
-    fitz = SimpleNamespace(Rect=RectCompat)
-elif not hasattr(fitz, "Rect"):
-    fitz.Rect = RectCompat
-
 from kivy.app import App
 from kivy.clock import Clock
 from kivy.core.image import Image as CoreImage
-from kivy.core.text import Label as CoreLabel
-from kivy.core.window import Window
-from kivy.graphics import Color, Line, Rectangle, RoundedRectangle
+from kivy.graphics import Color, Line, Rectangle
 from kivy.graphics.texture import Texture
 from kivy.metrics import dp
 from kivy.properties import StringProperty, NumericProperty, BooleanProperty, ListProperty, ObjectProperty
@@ -101,125 +50,7 @@ from kivy.uix.scrollview import ScrollView
 from kivy.uix.slider import Slider
 from kivy.uix.spinner import Spinner
 from kivy.uix.textinput import TextInput
-from kivy.uix.widget import Widget
 from kivy.utils import platform
-
-try:
-    from kivymd.app import MDApp
-    from kivymd.uix.card import MDCard
-    from kivymd.uix.button import MDRaisedButton, MDFlatButton, MDRectangleFlatButton
-    from kivymd.uix.textfield import MDTextField
-    from kivymd.uix.label import MDLabel
-    from kivymd.uix.selectioncontrol import MDCheckbox, MDSwitch
-    KIVYMD_AVAILABLE = True
-except Exception:
-    MDApp = App
-    MDCard = None
-    MDRaisedButton = None
-    MDFlatButton = None
-    MDRectangleFlatButton = None
-    MDTextField = None
-    MDLabel = None
-    MDCheckbox = None
-    MDSwitch = None
-    KIVYMD_AVAILABLE = False
-
-FITZ_AVAILABLE = bool(hasattr(fitz, "open") and hasattr(fitz, "Rect"))
-
-if platform == "android":
-    try:
-        from jnius import autoclass
-        from android import activity
-        AndroidPythonActivity = autoclass("org.kivy.android.PythonActivity")
-        AndroidIntent = autoclass("android.content.Intent")
-        AndroidBitmap = autoclass("android.graphics.Bitmap")
-        AndroidBitmapConfig = autoclass("android.graphics.Bitmap$Config")
-        AndroidCompressFormat = autoclass("android.graphics.Bitmap$CompressFormat")
-        AndroidPdfRenderer = autoclass("android.graphics.pdf.PdfRenderer")
-        AndroidParcelFileDescriptor = autoclass("android.os.ParcelFileDescriptor")
-        AndroidUri = autoclass("android.net.Uri")
-        AndroidByteArrayOutputStream = autoclass("java.io.ByteArrayOutputStream")
-        try:
-            AndroidUriCopyHelper = autoclass("org.medimap.medimappro.UriCopyHelper")
-        except Exception:
-            AndroidUriCopyHelper = None
-        ANDROID_JAVA_AVAILABLE = True
-    except Exception:
-        AndroidPythonActivity = None
-        AndroidIntent = None
-        AndroidBitmap = None
-        AndroidPdfRenderer = None
-        AndroidParcelFileDescriptor = None
-        AndroidUri = None
-        AndroidByteArrayOutputStream = None
-        AndroidBitmapConfig = None
-        AndroidCompressFormat = None
-        AndroidUriCopyHelper = None
-        ANDROID_JAVA_AVAILABLE = False
-    try:
-        from androidssystemfilechooser import uri_to_stream, uri_to_filename, uri_to_extension
-        ANDROID_SYSTEM_FILE_CHOOSER_AVAILABLE = True
-    except Exception:
-        uri_to_stream = None
-        uri_to_filename = None
-        uri_to_extension = None
-        ANDROID_SYSTEM_FILE_CHOOSER_AVAILABLE = False
-else:
-    ANDROID_JAVA_AVAILABLE = False
-    AndroidUriCopyHelper = None
-    uri_to_stream = None
-    uri_to_filename = None
-    uri_to_extension = None
-    ANDROID_SYSTEM_FILE_CHOOSER_AVAILABLE = False
-
-
-def android_render_pdf_page(path, page_idx=0, preview_zoom=1.5):
-    """Render a PDF page on Android using the native PdfRenderer API."""
-    if platform != "android" or not ANDROID_JAVA_AVAILABLE:
-        raise RuntimeError("Android PdfRenderer is unavailable.")
-
-    pfd = None
-    renderer = None
-    page = None
-    try:
-        file_obj = autoclass("java.io.File")(path)
-        pfd = AndroidParcelFileDescriptor.open(file_obj, AndroidParcelFileDescriptor.MODE_READ_ONLY)
-        renderer = AndroidPdfRenderer(pfd)
-        total = renderer.getPageCount()
-        if total <= 0:
-            raise ValueError("PDF has no pages.")
-        page_idx = max(0, min(int(page_idx), total - 1))
-        page = renderer.openPage(page_idx)
-
-        width = max(1, int(page.getWidth() * float(preview_zoom)))
-        height = max(1, int(page.getHeight() * float(preview_zoom)))
-        bitmap = AndroidBitmap.createBitmap(width, height, AndroidBitmapConfig.ARGB_8888)
-        bitmap.eraseColor(-1)
-        page.render(bitmap, None, None, AndroidPdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-
-        baos = AndroidByteArrayOutputStream()
-        bitmap.compress(AndroidCompressFormat.PNG, 100, baos)
-        png_bytes = bytes(baos.toByteArray())
-        img = cv2.imdecode(np.frombuffer(png_bytes, np.uint8), cv2.IMREAD_COLOR)
-        if img is None:
-            raise ValueError("Android PdfRenderer returned an unreadable image.")
-        return img
-    finally:
-        try:
-            if page is not None:
-                page.close()
-        except Exception:
-            pass
-        try:
-            if renderer is not None:
-                renderer.close()
-        except Exception:
-            pass
-        try:
-            if pfd is not None:
-                pfd.close()
-        except Exception:
-            pass
 
 
 # ============================================================
@@ -227,12 +58,8 @@ def android_render_pdf_page(path, page_idx=0, preview_zoom=1.5):
 # ============================================================
 APP_TITLE = "MediMap Pro: Intelligent Form Automator"
 CONFIG_FILENAME = "medimap_config.json"
-if platform == "android":
-    ZOOM = 2.4
-    PREVIEW_SCALE = 1.35
-else:
-    ZOOM = 4.0
-    PREVIEW_SCALE = 2.2
+ZOOM = 4.0
+PREVIEW_SCALE = 2.2
 
 DEFAULTS = {
     "F_Area": 500,
@@ -387,539 +214,6 @@ def gsheet_url_to_csv_export(url):
     gid = extract_gsheet_gid(url)
     return f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
 
-
-def _looks_like_ssl_cert_failure(exc):
-    msg = str(exc or "").lower()
-    return (
-        "certificate verify failed" in msg or
-        "unable to get local issuer certificate" in msg or
-        "self signed certificate" in msg or
-        "hostname" in msg and "doesn't match" in msg
-    )
-
-
-def download_url_bytes(url, timeout=30):
-    """Download bytes from a URL with a cautious Android SSL fallback."""
-    headers = {
-        "User-Agent": "Mozilla/5.0 MediMapPro/1.0",
-        "Accept": "text/csv,text/plain,application/octet-stream,*/*",
-    }
-
-    verified_contexts = []
-    try:
-        import certifi
-        verified_contexts.append(ssl.create_default_context(cafile=certifi.where()))
-    except Exception:
-        pass
-    try:
-        verified_contexts.append(ssl.create_default_context())
-    except Exception:
-        pass
-
-    if not verified_contexts:
-        verified_contexts = [None]
-
-    last_error = None
-    req = urllib.request.Request(url, headers=headers)
-
-    for ctx in verified_contexts:
-        try:
-            if ctx is None:
-                with urllib.request.urlopen(req, timeout=timeout) as resp:
-                    return resp.read()
-            with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
-                return resp.read()
-        except Exception as e:
-            last_error = e
-
-    if platform == "android" and last_error is not None and _looks_like_ssl_cert_failure(last_error):
-        try:
-            insecure_ctx = ssl._create_unverified_context()
-            with urllib.request.urlopen(req, timeout=timeout, context=insecure_ctx) as resp:
-                return resp.read()
-        except Exception as e:
-            last_error = e
-
-    if last_error is not None:
-        raise last_error
-    raise RuntimeError("Failed to download URL data.")
-
-
-def load_google_sheet_dataframe(url):
-    csv_url = gsheet_url_to_csv_export(url)
-    try:
-        raw = download_url_bytes(csv_url, timeout=30)
-    except Exception as e:
-        if _looks_like_ssl_cert_failure(e):
-            raise ValueError(
-                "Android could not verify Google Sheets SSL certificates for this connection. "
-                "Try again on a different network, or download/export the sheet as CSV/XLSX and load the file directly. "
-                f"Details: {e}"
-            )
-        raise
-    if not raw:
-        raise ValueError("Google Sheet export returned an empty response.")
-
-    sniff = raw[:512].lower()
-    if b"<html" in sniff or b"<!doctype html" in sniff:
-        raise ValueError(
-            "Google Sheet export returned HTML instead of CSV. "
-            "Make sure the sheet and selected tab are shared/accessible."
-        )
-
-    try:
-        return pd.read_csv(io.BytesIO(raw), dtype=str).fillna("")
-    except Exception:
-        try:
-            return pd.read_csv(io.StringIO(raw.decode("utf-8-sig")), dtype=str).fillna("")
-        except Exception as e:
-            raise ValueError(f"Downloaded Google Sheet data could not be parsed as CSV. Details: {e}")
-
-
-
-class LocalImportStore:
-    """Manage app-private imported files and generated outputs."""
-    def __init__(self, base_dir_getter):
-        self._base_dir_getter = base_dir_getter
-
-    def get_output_dir(self):
-        base_dir = self._base_dir_getter()
-        os.makedirs(base_dir, exist_ok=True)
-        return base_dir
-
-    def get_import_dir(self):
-        out_dir = os.path.join(self.get_output_dir(), "imports")
-        os.makedirs(out_dir, exist_ok=True)
-        return out_dir
-
-    def build_local_path(self, display_name=None, default_name="selected_input", required_suffix=None):
-        filename = safe_name(display_name or default_name)
-        if required_suffix and not filename.lower().endswith(required_suffix.lower()):
-            filename += required_suffix
-        return os.path.join(self.get_import_dir(), filename)
-
-    def save_bytes(self, payload, display_name=None, default_name="selected_input", required_suffix=None):
-        if not payload:
-            raise ValueError("Imported file is empty.")
-        out_path = self.build_local_path(display_name=display_name, default_name=default_name, required_suffix=required_suffix)
-        with open(out_path, "wb") as fh:
-            fh.write(payload)
-        if not os.path.exists(out_path) or os.path.getsize(out_path) <= 0:
-            raise ValueError("Copied file is empty after saving to app storage.")
-        return out_path
-
-
-class AndroidDocumentPickerService:
-    """Android Storage Access Framework helpers for import-style document picking."""
-    def __init__(self, import_store, status_callback=None):
-        self.import_store = import_store
-        self.status_callback = status_callback
-
-    def _status(self, message):
-        if callable(self.status_callback):
-            self.status_callback(message)
-
-
-    def _coerce_binary_payload(self, payload):
-        if payload is None:
-            return b""
-        if isinstance(payload, bytes):
-            return payload
-        if isinstance(payload, bytearray):
-            return bytes(payload)
-        if isinstance(payload, memoryview):
-            return payload.tobytes()
-        try:
-            return bytes(payload)
-        except Exception:
-            pass
-        try:
-            return bytes(((int(b) + 256) % 256) for b in payload)
-        except Exception:
-            return b""
-
-    def _looks_like_invalid_zero_payload(self, data):
-        if not data:
-            return True
-        sample = data[: min(len(data), 64)]
-        return bool(sample) and all(b == 0 for b in sample)
-
-    def _read_uri_bytes_via_androidsystemfilechooser(self, uri, display_name=None):
-        if not (ANDROID_SYSTEM_FILE_CHOOSER_AVAILABLE and callable(uri_to_stream)):
-            return b"", display_name
-        try:
-            if not display_name and callable(uri_to_filename):
-                display_name = uri_to_filename(uri)
-        except Exception:
-            pass
-
-        try:
-            stream = uri_to_stream(uri)
-        except Exception:
-            return b"", display_name
-
-        try:
-            payload = stream.read()
-            data = self._coerce_binary_payload(payload)
-            return data, display_name
-        finally:
-            try:
-                stream.close()
-            except Exception:
-                pass
-
-    def _read_uri_bytes_via_pfd(self, resolver, uri):
-        pfd = None
-        fd = None
-        try:
-            pfd = resolver.openFileDescriptor(uri, "r")
-            if pfd is None:
-                return b""
-            fd = pfd.detachFd()
-            chunks = []
-            while True:
-                chunk = os.read(fd, 65536)
-                if not chunk:
-                    break
-                chunks.append(chunk)
-            return b"".join(chunks)
-        except Exception:
-            return b""
-        finally:
-            try:
-                if fd is not None:
-                    os.close(fd)
-            except Exception:
-                pass
-            try:
-                if pfd is not None:
-                    pfd.close()
-            except Exception:
-                pass
-
-    def _read_uri_bytes_via_inputstream(self, resolver, uri):
-        input_stream = None
-        baos = None
-        try:
-            input_stream = resolver.openInputStream(uri)
-            if input_stream is None:
-                return b""
-            baos = AndroidByteArrayOutputStream()
-            ByteArray = autoclass("java.lang.reflect.Array")
-            JavaByte = autoclass("java.lang.Byte").TYPE
-            buffer = ByteArray.newInstance(JavaByte, 65536)
-            while True:
-                count = input_stream.read(buffer)
-                if count == -1:
-                    break
-                if count > 0:
-                    baos.write(buffer, 0, count)
-            return self._coerce_binary_payload(baos.toByteArray())
-        except Exception:
-            return b""
-        finally:
-            try:
-                if input_stream is not None:
-                    input_stream.close()
-            except Exception:
-                pass
-            try:
-                if baos is not None:
-                    baos.close()
-            except Exception:
-                pass
-
-
-    def _resolve_display_name_native(self, context_obj, uri_string, default_name):
-        if platform != "android" or AndroidUriCopyHelper is None:
-            return None
-        try:
-            name = AndroidUriCopyHelper.resolveDisplayName(context_obj, uri_string, default_name or "")
-            if name:
-                return str(name)
-        except Exception:
-            pass
-        return None
-
-    def _copy_uri_to_local_file_native(self, context_obj, uri_string, out_path):
-        if platform != "android" or AndroidUriCopyHelper is None:
-            return False
-        try:
-            ok = AndroidUriCopyHelper.copyUriToPath(context_obj, uri_string, out_path)
-            return bool(ok)
-        except Exception:
-            return False
-
-
-    def copy_uri_to_local_file(self, uri, default_name="selected_input", required_suffix=None, allowed_suffixes=None):
-        if platform != "android" or not ANDROID_JAVA_AVAILABLE:
-            raise RuntimeError("Android document picker is unavailable.")
-        if uri is None:
-            raise ValueError("Android returned no document URI.")
-
-        activity_obj = AndroidPythonActivity.mActivity
-        resolver = activity_obj.getContentResolver()
-
-        if isinstance(uri, str):
-            uri_string = uri.strip()
-        else:
-            try:
-                uri_string = str(uri.toString()).strip()
-            except Exception:
-                uri_string = ""
-
-        if not uri_string:
-            raise ValueError("Android returned an empty document URI.")
-        if not (uri_string.startswith("content://") or uri_string.startswith("file://")):
-            raise ValueError(f"Android returned an invalid document URI: {uri_string}")
-
-        uri = AndroidUri.parse(uri_string)
-
-        display_name = self._resolve_display_name_native(activity_obj, uri_string, default_name)
-
-        if not display_name:
-            cursor = None
-            try:
-                OpenableColumns = autoclass("android.provider.OpenableColumns")
-                cursor = resolver.query(uri, None, None, None, None)
-                if cursor is not None and cursor.moveToFirst():
-                    idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                    if idx >= 0:
-                        display_name = cursor.getString(idx)
-            except Exception:
-                display_name = None
-            finally:
-                try:
-                    if cursor is not None:
-                        cursor.close()
-                except Exception:
-                    pass
-
-        if (not display_name) and ANDROID_SYSTEM_FILE_CHOOSER_AVAILABLE and callable(uri_to_extension):
-            try:
-                inferred_ext = uri_to_extension(uri)
-                if inferred_ext:
-                    display_name = f"{safe_name(default_name)}.{str(inferred_ext).lstrip('.')}"
-            except Exception:
-                pass
-
-        lower_name = str(display_name or default_name or "").lower()
-        if allowed_suffixes:
-            normalized = [str(s).lower() for s in allowed_suffixes if s]
-            if normalized and not any(lower_name.endswith(s) for s in normalized):
-                raise ValueError(f"Selected file must end with one of: {', '.join(normalized)}")
-
-        target_path = self.import_store.build_local_path(
-            display_name=display_name,
-            default_name=default_name,
-            required_suffix=required_suffix,
-        )
-
-        native_ok = self._copy_uri_to_local_file_native(activity_obj, uri_string, target_path)
-        read_backend = "nativehelper" if native_ok else "none"
-
-        file_bytes = b""
-        if native_ok and os.path.exists(target_path):
-            try:
-                with open(target_path, "rb") as fh:
-                    file_bytes = fh.read()
-            except Exception:
-                file_bytes = b""
-
-        if (not file_bytes) or self._looks_like_invalid_zero_payload(file_bytes):
-            if os.path.exists(target_path):
-                try:
-                    os.remove(target_path)
-                except Exception:
-                    pass
-
-            chooser_bytes, display_name = self._read_uri_bytes_via_androidsystemfilechooser(uri, display_name=display_name)
-            if chooser_bytes and not self._looks_like_invalid_zero_payload(chooser_bytes):
-                file_bytes = chooser_bytes
-                read_backend = "androidssystemfilechooser"
-
-            if (not file_bytes) or self._looks_like_invalid_zero_payload(file_bytes):
-                fd_bytes = self._read_uri_bytes_via_pfd(resolver, uri)
-                if fd_bytes and not self._looks_like_invalid_zero_payload(fd_bytes):
-                    file_bytes = fd_bytes
-                    read_backend = "pfd"
-
-            if (not file_bytes) or self._looks_like_invalid_zero_payload(file_bytes):
-                stream_bytes = self._read_uri_bytes_via_inputstream(resolver, uri)
-                if stream_bytes and not self._looks_like_invalid_zero_payload(stream_bytes):
-                    file_bytes = stream_bytes
-                    read_backend = "inputstream"
-
-            if (not file_bytes) or self._looks_like_invalid_zero_payload(file_bytes):
-                sample = repr((file_bytes or b"")[:32])
-                raise ValueError(
-                    "Android returned an unreadable file payload. "
-                    f"Backend={read_backend}; first bytes={sample}"
-                )
-
-            target_path = self.import_store.save_bytes(
-                file_bytes,
-                display_name=display_name,
-                default_name=default_name,
-                required_suffix=required_suffix,
-            )
-            try:
-                with open(target_path, "rb") as fh:
-                    file_bytes = fh.read()
-            except Exception:
-                file_bytes = b""
-
-        if required_suffix and required_suffix.lower() == ".pdf":
-            pdf_pos = file_bytes.find(b"%PDF-")
-            if pdf_pos == -1 or pdf_pos > 1024:
-                head = repr(file_bytes[:32])
-                raise ValueError(
-                    "Selected file was copied, but it does not contain a valid PDF header. "
-                    f"Backend={read_backend}; first bytes: {head}"
-                )
-            if pdf_pos > 0:
-                file_bytes = file_bytes[pdf_pos:]
-                with open(target_path, "wb") as fh:
-                    fh.write(file_bytes)
-
-        if not os.path.exists(target_path) or os.path.getsize(target_path) <= 0:
-            raise ValueError(f"Imported file is missing or empty after copy. Backend={read_backend}")
-
-        return target_path
-
-
-    def open_document_picker(self, request_code, mime_type="*/*", title="document", on_picked=None, cancel_message=None, required_suffix=None, allowed_suffixes=None, extra_mime_types=None):
-        if platform != "android" or not ANDROID_JAVA_AVAILABLE:
-            self._status("Android system document picker is unavailable.")
-            return
-
-        def _on_activity_result(request_code_result, result_code, intent):
-            if request_code_result != request_code:
-                return
-            activity.unbind(on_activity_result=_on_activity_result)
-
-            if result_code != -1 or intent is None:
-                Clock.schedule_once(lambda dt, m=(cancel_message or f"{title.capitalize()} selection cancelled."): self._status(m), 0)
-                return
-
-            try:
-                uri = intent.getData()
-                if uri is None:
-                    raise ValueError(f"No {title} URI was returned by Android.")
-
-                try:
-                    flags = intent.getFlags()
-                    take_flags = flags & (AndroidIntent.FLAG_GRANT_READ_URI_PERMISSION | AndroidIntent.FLAG_GRANT_WRITE_URI_PERMISSION)
-                    AndroidPythonActivity.mActivity.getContentResolver().takePersistableUriPermission(uri, take_flags)
-                except Exception:
-                    pass
-
-                Clock.schedule_once(lambda dt, t=title: self._status(f"Importing {t}..."), 0)
-                local_path = self.copy_uri_to_local_file(
-                    uri,
-                    default_name=safe_name(title),
-                    required_suffix=required_suffix,
-                    allowed_suffixes=allowed_suffixes,
-                )
-
-                if callable(on_picked):
-                    Clock.schedule_once(lambda dt, p=local_path: on_picked(p), 0)
-            except Exception as e:
-                traceback.print_exc()
-                Clock.schedule_once(lambda dt, m=f"{title.capitalize()} error: {e}": self._status(m), 0)
-
-        activity.bind(on_activity_result=_on_activity_result)
-        intent = AndroidIntent(AndroidIntent.ACTION_OPEN_DOCUMENT)
-        intent.addCategory(AndroidIntent.CATEGORY_OPENABLE)
-        intent.addFlags(AndroidIntent.FLAG_GRANT_READ_URI_PERMISSION)
-        intent.addFlags(AndroidIntent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
-
-        effective_mime = mime_type or "*/*"
-        if extra_mime_types:
-            try:
-                mime_candidates = [str(m).strip() for m in extra_mime_types if str(m).strip()]
-                if mime_candidates:
-                    effective_mime = "*/*"
-                    try:
-                        intent.putExtra(AndroidIntent.EXTRA_MIME_TYPES, mime_candidates)
-                    except Exception:
-                        try:
-                            intent.putExtra("android.intent.extra.MIME_TYPES", mime_candidates)
-                        except Exception:
-                            pass
-            except Exception:
-                pass
-
-        intent.setType(effective_mime)
-        AndroidPythonActivity.mActivity.startActivityForResult(intent, request_code)
-
-
-class PdfPageSource:
-    """Read page counts and rasterized page images using the best backend for the platform."""
-    def page_count(self, path):
-        if not path or not os.path.exists(path):
-            raise FileNotFoundError(f"PDF file not found: {path}")
-
-        try:
-            with open(path, "rb") as fh:
-                reader = PdfReader(fh)
-                total = len(reader.pages)
-            if total > 0:
-                return total
-        except Exception:
-            pass
-
-        if platform == "android" and ANDROID_JAVA_AVAILABLE:
-            pfd = None
-            renderer = None
-            try:
-                file_obj = autoclass("java.io.File")(path)
-                pfd = AndroidParcelFileDescriptor.open(file_obj, AndroidParcelFileDescriptor.MODE_READ_ONLY)
-                renderer = AndroidPdfRenderer(pfd)
-                return renderer.getPageCount()
-            finally:
-                try:
-                    if renderer is not None:
-                        renderer.close()
-                except Exception:
-                    pass
-                try:
-                    if pfd is not None:
-                        pfd.close()
-                except Exception:
-                    pass
-
-        if FITZ_AVAILABLE:
-            with fitz.open(path) as doc:
-                return len(doc)
-
-        raise RuntimeError("No PDF page-count backend is available.")
-
-    def render_page_bgr(self, path, page_idx=0, preview_zoom=1.5):
-        if not path or not os.path.exists(path):
-            raise FileNotFoundError(f"PDF file not found: {path}")
-
-        if platform == "android" and ANDROID_JAVA_AVAILABLE:
-            return android_render_pdf_page(path, page_idx=page_idx, preview_zoom=preview_zoom)
-
-        if FITZ_AVAILABLE:
-            with fitz.open(path) as doc:
-                total = len(doc)
-                if total <= 0:
-                    raise ValueError("PDF has no pages.")
-                page_idx = max(0, min(int(page_idx), total - 1))
-                page = doc.load_page(page_idx)
-                mat = fitz.Matrix(float(preview_zoom), float(preview_zoom))
-                pix = page.get_pixmap(matrix=mat, alpha=False)
-                img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
-                if pix.n == 4:
-                    return cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
-                return cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-
-        raise RuntimeError("No PDF rendering backend is available.")
-
-
-
 # ============================================================
 # Detection / mapping engine
 # ============================================================
@@ -947,8 +241,6 @@ class MediMapEngine:
 
         self.settings = dict(DEFAULTS)
         self.settings["C_Size"] = list(DEFAULTS["C_Size"])
-        self.pdf_source = PdfPageSource()
-        self.detected_page_idx = None
 
     # --------------------------------------------------------
     # Data loading
@@ -964,8 +256,9 @@ class MediMapEngine:
         # ---------------------------------------------
         if src.startswith("http://") or src.startswith("https://"):
             if "docs.google.com/spreadsheets" in src:
+                csv_url = gsheet_url_to_csv_export(src)
                 try:
-                    df = load_google_sheet_dataframe(src)
+                    df = pd.read_csv(csv_url, dtype=str).fillna("")
                 except Exception as e:
                     raise ValueError(
                         "Failed to load Google Sheet from URL. "
@@ -1017,9 +310,10 @@ class MediMapEngine:
             raise FileNotFoundError(f"PDF file not found: {path}")
 
         try:
-            total = self._pdf_page_count(path)
-            if total <= 0:
-                raise ValueError("PDF has no pages.")
+            with fitz.open(path) as doc:
+                total = len(doc)
+                if total <= 0:
+                    raise ValueError("PDF has no pages.")
         except Exception as e:
             raise ValueError(f"Failed to open PDF: {e}")
 
@@ -1027,57 +321,35 @@ class MediMapEngine:
         self.all_boxes = []
         self.box_types = []
         self.geom = {"names": [], "dob": [], "phil": []}
-        self.detected_page_idx = None
         return total
 
     def total_pages(self):
         if not self.pdf_path or not os.path.exists(self.pdf_path):
             return 1
         try:
-            return max(self._pdf_page_count(self.pdf_path), 1)
+            with fitz.open(self.pdf_path) as doc:
+                return max(len(doc), 1)
         except Exception:
             return 1
-
-    def _pdf_page_count(self, path):
-        return self.pdf_source.page_count(path)
-
-    def _render_pdf_page_bgr(self, path, page_idx=0, preview_zoom=1.5):
-        return self.pdf_source.render_page_bgr(path, page_idx=page_idx, preview_zoom=preview_zoom)
-
-
-    def supports_detection_backend(self):
-        """
-        Return True when the app can rasterize PDF pages for detection/preview.
-        Detection is image-first and can use Android PdfRenderer or PyMuPDF.
-        """
-        return bool(ANDROID_JAVA_AVAILABLE or FITZ_AVAILABLE)
-
-    def supports_export_backend(self):
-        """
-        Return True when filled-PDF export is available.
-        Phase 3 export uses reportlab overlays + pypdf merge, so PyMuPDF is optional.
-        """
-        return bool(REPORTLAB_AVAILABLE)
-
-    def supports_processing_backend(self):
-        """
-        Backward-compatible alias for export-capable processing.
-        """
-        return self.supports_export_backend()
-
-    def android_preview_only_mode(self):
-        return platform == "android" and not self.supports_detection_backend()
-
-    def _ensure_detection_for_page(self, page_idx=0):
-        page_idx = int(page_idx)
-        if self.detected_page_idx != page_idx or not self.all_boxes or (page_idx == 0 and not self.geom.get("names")):
-            self.run_detection(page_idx=page_idx)
 
     def get_raw_preview_pixmap(self, page_idx=0, preview_zoom=1.5):
         """Render the raw loaded PDF page without filling or boxes."""
         if not self.pdf_path or not os.path.exists(self.pdf_path):
             raise FileNotFoundError("PDF path is missing or invalid.")
-        return self._render_pdf_page_bgr(self.pdf_path, page_idx=page_idx, preview_zoom=preview_zoom)
+
+        with fitz.open(self.pdf_path) as doc:
+            total = len(doc)
+            if total <= 0:
+                raise ValueError("PDF has no pages.")
+            page_idx = max(0, min(int(page_idx), total - 1))
+            page = doc[page_idx]
+            pix = page.get_pixmap(matrix=fitz.Matrix(preview_zoom, preview_zoom))
+            img = cv2.imdecode(np.frombuffer(pix.tobytes("png"), np.uint8), cv2.IMREAD_COLOR)
+
+        if img is None:
+            raise ValueError("Failed to render raw PDF preview image.")
+
+        return img
 
 
 
@@ -1499,15 +771,15 @@ class MediMapEngine:
     def run_detection(self, page_idx=0):
         if not self.pdf_path or not os.path.exists(self.pdf_path):
             raise FileNotFoundError("PDF path is missing or invalid.")
-        if not self.supports_detection_backend():
-            raise RuntimeError("No PDF rasterization backend is available for detection in this build.")
 
-        img = self._render_pdf_page_bgr(self.pdf_path, page_idx=page_idx, preview_zoom=ZOOM)
-        if img is None or getattr(img, "size", 0) == 0:
+        doc = fitz.open(self.pdf_path)
+        page_obj = doc[page_idx]
+        pix = page_obj.get_pixmap(matrix=fitz.Matrix(ZOOM, ZOOM))
+        img = cv2.imdecode(np.frombuffer(pix.tobytes(), np.uint8), cv2.IMREAD_COLOR)
+
+        if img is None:
+            doc.close()
             raise ValueError("Failed to render PDF page into image.")
-
-        if len(img.shape) == 2:
-            img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
 
         h_img, w_img = img.shape[:2]
 
@@ -1666,19 +938,17 @@ class MediMapEngine:
                 0.60 <= aspect <= 1.60
             ):
                 for fx, fy, fw, fh in self.find_checkbox_rects_in_roi(bin_checks, x, y, w, h):
-                    self._append_box_unique(
-                        fitz.Rect(fx / ZOOM, fy / ZOOM, (fx + fw) / ZOOM, (fy + fh) / ZOOM),
-                        "check",
-                        iou_thresh=0.45
+                    self.all_boxes.append(
+                        fitz.Rect(fx / ZOOM, fy / ZOOM, (fx + fw) / ZOOM, (fy + fh) / ZOOM)
                     )
+                    self.box_types.append("check")
 
             elif max(w, h) <= int(red_roi_max_val) and min(w, h) >= checkbox_min_sz:
                 for fx, fy, fw, fh in self.find_checkbox_rects_in_roi(bin_checks, x, y, w, h):
-                    self._append_box_unique(
-                        fitz.Rect(fx / ZOOM, fy / ZOOM, (fx + fw) / ZOOM, (fy + fh) / ZOOM),
-                        "check",
-                        iou_thresh=0.45
+                    self.all_boxes.append(
+                        fitz.Rect(fx / ZOOM, fy / ZOOM, (fx + fw) / ZOOM, (fy + fh) / ZOOM)
                     )
+                    self.box_types.append("check")
 
         # --- field detection
         nf2, _, sf2, _ = cv2.connectedComponentsWithStats(bin_fields)
@@ -1709,7 +979,7 @@ class MediMapEngine:
 
         self._cleanup_field_fragments()
         self._cleanup_line_field_conflicts()
-        self.detected_page_idx = int(page_idx)
+        doc.close()
 
     # --------------------------------------------------------
     # Mapping helpers
@@ -2013,218 +1283,74 @@ class MediMapEngine:
             self._draw_single_rect_text(page, val, target, ox=ox, oy=oy, fs_scale=fs_scale)
 
     # --------------------------------------------------------
-    # Document processing / export
+    # Document processing
     # --------------------------------------------------------
-    def _get_patient_row(self, patient_name):
+    def process_doc(self, patient_name, page_idx=0):
         if self.df is None or self.df.empty:
             raise ValueError("DataFrame is empty.")
 
         matches = self.df[self.df["_DISPLAY_NAME"] == patient_name]
         if matches.empty:
             raise ValueError(f"Patient not found: {patient_name}")
-        if len(matches) > 1:
-            raise ValueError(f"Multiple records found for '{patient_name}'. Please make the display name unique.")
-        return matches.iloc[0]
 
-    def _coerce_rect(self, rect):
-        if isinstance(rect, fitz.Rect):
-            return rect
-        if isinstance(rect, RectCompat):
-            return rect
-        return fitz.Rect(*rect)
-
-    def _collect_overlay_ops(self, patient_name, page_idx=0):
-        self._ensure_detection_for_page(page_idx=page_idx)
-        row = self._get_patient_row(patient_name)
-        ops = []
+        row = matches.iloc[0]
+        doc = fitz.open(self.pdf_path)
+        page = doc[page_idx]
 
         if page_idx == 0:
             name_values = [
                 row.get(self.first_col, ""),
                 row.get(self.mid_col, ""),
                 row.get(self.last_col, ""),
-                row.get(self.suf_col, ""),
+                row.get(self.suf_col, "")
             ]
+
             for val, rect in zip(name_values, self.geom.get("names", [])):
-                if str(val or "").strip():
-                    ops.append({
-                        "kind": "text",
-                        "text": str(val),
-                        "rects": [self._coerce_rect(rect)],
-                        "grid": False,
-                        "grid_n": 1,
-                    })
+                self.draw_logic(page, val, rect)
 
             dt = pd.to_datetime(row.get(self.dob_col, ""), errors="coerce")
             if not pd.isna(dt) and self.geom.get("dob"):
                 dob_values = [dt.strftime("%m"), dt.strftime("%d"), dt.strftime("%Y")]
                 dob_grid_n = [2, 2, 4]
-                for val, n, rect in zip(dob_values, dob_grid_n, self.geom.get("dob", [])[:3]):
-                    ops.append({
-                        "kind": "text",
-                        "text": str(val),
-                        "rects": [self._coerce_rect(rect)],
-                        "grid": True,
-                        "grid_n": int(n),
-                    })
+
+                for val, n, rect in zip(dob_values, dob_grid_n, self.geom["dob"][:3]):
+                    self.draw_logic(page, val, rect, is_grid=True, grid_n=n)
 
         for configs in self.custom_mappings.values():
             for c in configs:
                 if c.get("page", 0) != page_idx:
                     continue
 
-                target_rects = [self._coerce_rect(r) for r in self._mapping_rect_list(c)]
+                target_rects = self._mapping_rect_list(c)
                 if not target_rects:
                     continue
 
-                csv_val = str(row.get(c["column"], "")).strip()
-                trigger = str(c.get("trigger", "")).strip()
+                csv_val = str(row.get(c["column"], "")).strip().upper()
+                trigger = str(c.get("trigger", "")).strip().upper()
 
-                if trigger and csv_val.upper() == trigger.upper():
-                    ops.append({
-                        "kind": "check",
-                        "rects": target_rects,
-                    })
-                elif not trigger and csv_val:
-                    ops.append({
-                        "kind": "text",
-                        "text": csv_val,
-                        "rects": target_rects,
-                        "grid": bool(c.get("g", False)),
-                        "grid_n": int(c.get("n", 1)),
-                    })
+                if trigger and csv_val == trigger:
+                    target = self._rect_union(target_rects)
+                    fs = target.height * 0.95
+                    p = fitz.Point(
+                        target.x0 + (target.width * 0.15),
+                        target.y1 - (target.height * 0.15)
+                    )
+                    page.insert_text(p, "X", fontsize=fs, fontname="Helvetica-Bold")
 
-        return ops
+                elif not trigger:
+                    self.draw_logic(
+                        page,
+                        row.get(c["column"], ""),
+                        target_rects,
+                        is_grid=c.get("g", False),
+                        grid_n=c.get("n", 1),
+                        ox=0,
+                        oy=0,
+                        fs_scale=0.65
+                    )
 
-    def _reportlab_baseline_y(self, page_height, rect, oy=0):
-        return float(page_height) - (float(rect.y1) - (float(rect.height) * 0.2) + float(oy))
+        return doc
 
-    def _write_text_op_reportlab(self, c, page_height, text, rects, is_grid=False, grid_n=1, ox=0, oy=0, fs_scale=0.65):
-        val = str(text or "").strip()
-        if not val or val.lower() in ["nan", "none"]:
-            return
-        if val.endswith(".0"):
-            val = val[:-2]
-        val = val.upper()
-
-        rects = sorted([self._coerce_rect(r) for r in rects], key=lambda rr: (round(rr.y0, 3), rr.x0))
-        if not rects:
-            return
-
-        def draw_single(single_val, rect):
-            fs = max(float(rect.height) * fs_scale, 6.0)
-            text_w = rl_string_width(single_val, "Helvetica", fs)
-            x = float(rect.x0) + max((float(rect.width) - float(text_w)) / 2.0, 1.0) + float(ox)
-            y = self._reportlab_baseline_y(page_height, rect, oy=oy)
-            c.setFont("Helvetica", fs)
-            c.drawString(x, y, single_val)
-
-        def draw_grid(grid_val, rect, cells):
-            cells = max(int(cells), 1)
-            fs = max(float(rect.height) * 0.60, 6.0)
-            cell_w = float(rect.width) / cells
-            y = self._reportlab_baseline_y(page_height, rect, oy=oy)
-            c.setFont("Helvetica", fs)
-            for i, ch in enumerate(grid_val[:cells]):
-                x = float(rect.x0) + (i * cell_w) + (cell_w * 0.25) + float(ox)
-                c.drawString(x, y, ch)
-
-        if is_grid and len(rects) > 1:
-            counts = self._allocate_cells_by_width(rects, grid_n)
-            pos = 0
-            for rect, n_cells in zip(rects, counts):
-                seg = val[pos:pos + n_cells]
-                if seg:
-                    draw_grid(seg, rect, n_cells)
-                pos += n_cells
-            return
-
-        target = rects[0] if len(rects) == 1 else self._rect_union(rects)
-        if is_grid:
-            draw_grid(val, target, grid_n)
-        else:
-            draw_single(val, target)
-
-    def _write_check_op_reportlab(self, c, page_height, rects):
-        rects = sorted([self._coerce_rect(r) for r in rects], key=lambda rr: (round(rr.y0, 3), rr.x0))
-        if not rects:
-            return
-        target = rects[0] if len(rects) == 1 else self._rect_union(rects)
-        fs = max(float(target.height) * 0.95, 8.0)
-        x = float(target.x0) + (float(target.width) * 0.15)
-        y = float(page_height) - (float(target.y1) - (float(target.height) * 0.15))
-        c.setFont("Helvetica-Bold", fs)
-        c.drawString(x, y, "X")
-
-    def _build_filled_pdf_bytes(self, patient_name, page_idx=0):
-        if not self.supports_export_backend():
-            raise RuntimeError("PDF export backend is unavailable in this build.")
-        if not self.pdf_path or not os.path.exists(self.pdf_path):
-            raise FileNotFoundError("PDF path is missing or invalid.")
-
-        ops = self._collect_overlay_ops(patient_name, page_idx=page_idx)
-        with open(self.pdf_path, "rb") as fh:
-            reader = PdfReader(fh)
-            total_pages = len(reader.pages)
-            if total_pages <= 0:
-                raise ValueError("PDF has no pages.")
-
-            overlay_buf = io.BytesIO()
-            first_page = reader.pages[0]
-            first_size = (float(first_page.mediabox.width), float(first_page.mediabox.height))
-            c = rl_canvas.Canvas(overlay_buf, pagesize=first_size)
-
-            for i in range(total_pages):
-                page = reader.pages[i]
-                page_w = float(page.mediabox.width)
-                page_h = float(page.mediabox.height)
-                c.setPageSize((page_w, page_h))
-
-                if i == int(page_idx):
-                    for op in ops:
-                        if op.get("kind") == "check":
-                            self._write_check_op_reportlab(c, page_h, op.get("rects", []))
-                        else:
-                            self._write_text_op_reportlab(
-                                c,
-                                page_h,
-                                op.get("text", ""),
-                                op.get("rects", []),
-                                is_grid=bool(op.get("grid", False)),
-                                grid_n=int(op.get("grid_n", 1)),
-                            )
-                c.showPage()
-
-            c.save()
-            overlay_buf.seek(0)
-            overlay_reader = PdfReader(overlay_buf)
-
-            writer = PdfWriter()
-            for i, page in enumerate(reader.pages):
-                if i < len(overlay_reader.pages):
-                    page.merge_page(overlay_reader.pages[i])
-                writer.add_page(page)
-
-            out_buf = io.BytesIO()
-            writer.write(out_buf)
-            return out_buf.getvalue()
-
-    def export_filled_pdf(self, patient_name, out_path, page_idx=0):
-        pdf_bytes = self._build_filled_pdf_bytes(patient_name, page_idx=page_idx)
-        os.makedirs(os.path.dirname(out_path), exist_ok=True)
-        with open(out_path, "wb") as fh:
-            fh.write(pdf_bytes)
-        return out_path
-
-    def process_doc(self, patient_name, page_idx=0):
-        """
-        Backward-compatible helper. On desktops with PyMuPDF, returns an in-memory
-        document object. On Android-safe paths, use export_filled_pdf() instead.
-        """
-        pdf_bytes = self._build_filled_pdf_bytes(patient_name, page_idx=page_idx)
-        if FITZ_AVAILABLE:
-            return fitz.open(stream=pdf_bytes, filetype="pdf")
-        raise RuntimeError("process_doc() requires the optional PyMuPDF runtime. Use export_filled_pdf() for Android-safe export.")
     # --------------------------------------------------------
     # Config helpers
     # --------------------------------------------------------
@@ -2515,91 +1641,18 @@ class MediMapEngine:
         self.apply_config(cfg)
         return cfg
 
-    def _draw_text_op_cv(self, img, text, rects, preview_zoom=1.5, is_grid=False, grid_n=1, ox=0, oy=0, fs_scale=0.65):
-        val = str(text or "").strip()
-        if not val or val.lower() in ["nan", "none"]:
-            return
-        if val.endswith(".0"):
-            val = val[:-2]
-        val = val.upper()
-
-        rects = sorted([self._coerce_rect(r) for r in rects], key=lambda rr: (round(rr.y0, 3), rr.x0))
-        if not rects:
-            return
-
-        def draw_single(single_val, rect):
-            target_w = max(int(rect.width * preview_zoom), 1)
-            target_h = max(int(rect.height * preview_zoom), 1)
-            font_scale = max((target_h * fs_scale) / 30.0, 0.35)
-            thickness = 1 if target_h < 40 else 2
-            (tw, th), _ = cv2.getTextSize(single_val, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
-            x = int((rect.x0 * preview_zoom) + max((target_w - tw) / 2.0, 1.0) + (ox * preview_zoom))
-            y = int((rect.y1 * preview_zoom) - (target_h * 0.2) + (oy * preview_zoom))
-            cv2.putText(img, single_val, (x, y), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), thickness, cv2.LINE_AA)
-
-        def draw_grid(grid_val, rect, cells):
-            cells = max(int(cells), 1)
-            target_h = max(int(rect.height * preview_zoom), 1)
-            font_scale = max((target_h * 0.60) / 30.0, 0.35)
-            thickness = 1 if target_h < 40 else 2
-            cell_w = (rect.width * preview_zoom) / cells
-            y = int((rect.y1 * preview_zoom) - (target_h * 0.2) + (oy * preview_zoom))
-            for i, ch in enumerate(grid_val[:cells]):
-                x = int((rect.x0 * preview_zoom) + (i * cell_w) + (cell_w * 0.25) + (ox * preview_zoom))
-                cv2.putText(img, ch, (x, y), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), thickness, cv2.LINE_AA)
-
-        if is_grid and len(rects) > 1:
-            counts = self._allocate_cells_by_width(rects, grid_n)
-            pos = 0
-            for rect, n_cells in zip(rects, counts):
-                seg = val[pos:pos + n_cells]
-                if seg:
-                    draw_grid(seg, rect, n_cells)
-                pos += n_cells
-            return
-
-        target = rects[0] if len(rects) == 1 else self._rect_union(rects)
-        if is_grid:
-            draw_grid(val, target, grid_n)
-        else:
-            draw_single(val, target)
-
-    def _draw_check_op_cv(self, img, rects, preview_zoom=1.5):
-        rects = sorted([self._coerce_rect(r) for r in rects], key=lambda rr: (round(rr.y0, 3), rr.x0))
-        if not rects:
-            return
-        target = rects[0] if len(rects) == 1 else self._rect_union(rects)
-        x0 = int(target.x0 * preview_zoom)
-        y0 = int(target.y0 * preview_zoom)
-        x1 = int(target.x1 * preview_zoom)
-        y1 = int(target.y1 * preview_zoom)
-        pad = max(1, int(min(x1 - x0, y1 - y0) * 0.18))
-        thickness = 1 if (y1 - y0) < 36 else 2
-        cv2.line(img, (x0 + pad, y0 + pad), (x1 - pad, y1 - pad), (0, 0, 0), thickness, cv2.LINE_AA)
-        cv2.line(img, (x1 - pad, y0 + pad), (x0 + pad, y1 - pad), (0, 0, 0), thickness, cv2.LINE_AA)
-
-    def get_processed_preview_pixmap(self, patient_name, page_idx=0, preview_zoom=1.5):
-        self._ensure_detection_for_page(page_idx=page_idx)
-        img = self.get_raw_preview_pixmap(page_idx=page_idx, preview_zoom=preview_zoom)
-        if img is None or getattr(img, "size", 0) == 0:
-            raise ValueError("Failed to build preview image.")
-
-        for op in self._collect_overlay_ops(patient_name, page_idx=page_idx):
-            if op.get("kind") == "check":
-                self._draw_check_op_cv(img, op.get("rects", []), preview_zoom=preview_zoom)
-            else:
-                self._draw_text_op_cv(
-                    img,
-                    op.get("text", ""),
-                    op.get("rects", []),
-                    preview_zoom=preview_zoom,
-                    is_grid=bool(op.get("grid", False)),
-                    grid_n=int(op.get("grid_n", 1)),
-                )
-        return img
-
     def get_preview_pixmap_with_boxes(self, patient_name, page_idx=0, preview_zoom=1.5):
-        img = self.get_processed_preview_pixmap(patient_name, page_idx=page_idx, preview_zoom=preview_zoom)
+        if not self.all_boxes:
+            self.run_detection(page_idx=page_idx)
+
+        doc = self.process_doc(patient_name, page_idx=page_idx)
+        page = doc[page_idx]
+        pix = page.get_pixmap(matrix=fitz.Matrix(preview_zoom, preview_zoom))
+        img = cv2.imdecode(np.frombuffer(pix.tobytes("png"), np.uint8), cv2.IMREAD_COLOR)
+
+        if img is None:
+            doc.close()
+            raise ValueError("Failed to build preview image.")
 
         for i, r in enumerate(self.all_boxes):
             x0 = int(r.x0 * preview_zoom)
@@ -2609,17 +1662,34 @@ class MediMapEngine:
 
             box_type = self.box_types[i]
             if box_type == "check":
-                color = (0, 0, 255)
+                color = (0, 0, 255)      # red
             elif box_type == "line":
-                color = (0, 215, 255)
+                color = (0, 215, 255)    # yellow-ish
             else:
-                color = (0, 255, 0)
+                color = (0, 255, 0)      # green
 
             cv2.rectangle(img, (x0, y0), (x1, y1), color, 2)
-            label = str(i)
-            cv2.rectangle(img, (x0, max(0, y0 - 14)), (x0 + 20, y0), (0, 0, 0), -1)
-            cv2.putText(img, label, (x0 + 2, y0 - 3), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1, cv2.LINE_AA)
 
+            label = str(i)
+            cv2.rectangle(
+                img,
+                (x0, max(0, y0 - 14)),
+                (x0 + 20, y0),
+                (0, 0, 0),
+                -1
+            )
+            cv2.putText(
+                img,
+                label,
+                (x0 + 2, y0 - 3),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.35,
+                (255, 255, 255),
+                1,
+                cv2.LINE_AA
+            )
+
+        doc.close()
         return img
 
 # =========================
@@ -2628,1028 +1698,424 @@ class MediMapEngine:
 # Paste this BELOW Part 3
 # =========================
 
-class InteractivePreview(Image):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.size = (dp(1), dp(1))
-        self.boxes_payload = []
-        self.selected_ids = set()
-        self.hovered_box_id = None
-        self.preview_zoom = 1.0
-        self.page_idx = 0
-        self.box_tap_callback = None
-        self.hover_callback = None
-        self._mouse_bound = False
-        self.bind(texture=self._redraw_overlay, size=self._redraw_overlay, pos=self._redraw_overlay)
-        if platform != "android":
-            Window.bind(mouse_pos=self._on_mouse_pos)
-            self._mouse_bound = True
-
-    def on_parent(self, *args):
-        self._redraw_overlay()
-
-    def set_texture_from_bgr(self, img_bgr):
-        if img_bgr is None:
-            self.texture = None
-            self.canvas.after.clear()
-            self.canvas.ask_update()
-            return
-        rgba = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGBA)
-        texture = Texture.create(size=(rgba.shape[1], rgba.shape[0]), colorfmt="rgba")
-        texture.blit_buffer(rgba.tobytes(), colorfmt="rgba", bufferfmt="ubyte")
-        texture.flip_vertical()
-        self.texture = texture
-        self._redraw_overlay()
-        self.canvas.ask_update()
-        Clock.schedule_once(lambda dt: self._redraw_overlay(), 0)
-
-    def set_boxes_payload(self, boxes_payload, selected_ids=None, preview_zoom=1.0, page_idx=0):
-        self.boxes_payload = list(boxes_payload or [])
-        self.preview_zoom = float(preview_zoom or 1.0)
-        self.page_idx = int(page_idx or 0)
-        self.selected_ids = set(selected_ids or [])
-        self.hovered_box_id = None
-        self._redraw_overlay()
-
-    def set_selected_ids(self, selected_ids):
-        self.selected_ids = set(selected_ids or [])
-        self._redraw_overlay()
-
-    def clear_boxes(self):
-        self.boxes_payload = []
-        self.selected_ids = set()
-        self.hovered_box_id = None
-        self._redraw_overlay()
-
-    def _get_display_rect(self):
-        tex = self.texture
-        if not tex or tex.width <= 0 or tex.height <= 0:
-            return None
-        widget_w, widget_h = self.width, self.height
-        tex_w, tex_h = tex.width, tex.height
-        scale = min(widget_w / float(tex_w), widget_h / float(tex_h))
-        draw_w = tex_w * scale
-        draw_h = tex_h * scale
-        x = self.x + (widget_w - draw_w) / 2.0
-        y = self.y + (widget_h - draw_h) / 2.0
-        return x, y, draw_w, draw_h
-
-    def _box_color(self, box_type, selected=False, hovered=False):
-        if selected:
-            return (0.15, 0.85, 1.0, 1.0)
-        if hovered:
-            return (1.0, 0.6, 0.0, 1.0)
-        if box_type == "check":
-            return (1.0, 0.15, 0.15, 1.0)
-        if box_type == "line":
-            return (1.0, 0.85, 0.1, 1.0)
-        return (0.1, 1.0, 0.3, 1.0)
-
-    def _draw_label(self, x, y, text):
-        core = CoreLabel(text=str(text), font_size=12)
-        core.refresh()
-        tex = core.texture
-        pad_x, pad_y = 4, 2
-        bg_w = tex.width + pad_x * 2
-        bg_h = tex.height + pad_y * 2
-        Rectangle(pos=(x, y - bg_h), size=(bg_w, bg_h))
-        Color(1, 1, 1, 1)
-        Rectangle(texture=tex, pos=(x + pad_x, y - bg_h + pad_y), size=tex.size)
-
-    def _redraw_overlay(self, *args):
-        self.canvas.after.clear()
-        disp = self._get_display_rect()
-        if not disp:
-            return
-        dx, dy, dw, dh = disp
-        tex = self.texture
-        sx = dw / float(max(tex.width, 1))
-        sy = dh / float(max(tex.height, 1))
-        with self.canvas.after:
-            for box in self.boxes_payload:
-                x = dx + box["x"] * sx
-                y = dy + (tex.height - (box["y"] + box["h"])) * sy
-                w = max(1.0, box["w"] * sx)
-                h = max(1.0, box["h"] * sy)
-                selected = box["id"] in self.selected_ids
-                hovered = (box["id"] == self.hovered_box_id)
-                Color(*self._box_color(box.get("t", "field"), selected=selected, hovered=hovered))
-                Line(rectangle=(x, y, w, h), width=3.2 if selected else (2.4 if hovered else 1.35))
-                Color(0, 0, 0, 0.88)
-                self._draw_label(x, y + h, box["id"])
-
-    def _touch_to_image_point(self, touch):
-        disp = self._get_display_rect()
-        tex = self.texture
-        if not disp or not tex:
-            return None
-        dx, dy, dw, dh = disp
-        if not (dx <= touch.x <= dx + dw and dy <= touch.y <= dy + dh):
-            return None
-        img_x = (touch.x - dx) * tex.width / float(max(dw, 1))
-        img_y = tex.height - ((touch.y - dy) * tex.height / float(max(dh, 1)))
-        return img_x, img_y
-
-    def _find_hit_box(self, img_x, img_y):
-        hits = []
-        for box in self.boxes_payload:
-            if box["x"] <= img_x <= box["x"] + box["w"] and box["y"] <= img_y <= box["y"] + box["h"]:
-                hits.append(box)
-        if not hits:
-            return None
-        hits.sort(key=lambda b: (b["id"], b["w"] * b["h"]))
-        return hits[0]
-
-    def on_touch_down(self, touch):
-        if not self.collide_point(*touch.pos):
-            return super().on_touch_down(touch)
-        pt = self._touch_to_image_point(touch)
-        if pt is None:
-            return super().on_touch_down(touch)
-        hit = self._find_hit_box(*pt)
-        if hit is not None:
-            if callable(self.box_tap_callback):
-                self.box_tap_callback(hit)
-            return True
-        return super().on_touch_down(touch)
-
-    def _on_mouse_pos(self, _window, pos):
-        if platform == "android" or not self.get_root_window():
-            return
-        local = self.to_widget(*pos)
-        class Dummy: pass
-        d = Dummy(); d.x=local[0]; d.y=local[1]
-        pt = self._touch_to_image_point(d)
-        new_hover = None
-        if pt is not None:
-            hit = self._find_hit_box(*pt)
-            if hit is not None:
-                new_hover = hit["id"]
-                if callable(self.hover_callback):
-                    self.hover_callback(hit)
-        if new_hover != self.hovered_box_id:
-            self.hovered_box_id = new_hover
-            self._redraw_overlay()
-
-
 class MediMapProLayout(BoxLayout):
     pass
 
 
-class MediMapProApp(MDApp):
-
+class MediMapProApp(App):
     def build(self):
-        self.title = APP_TITLE
+        self.title = "MediMap Pro"
         self.engine = MediMapEngine()
-        self.import_store = LocalImportStore(self.get_app_output_dir)
-        self.android_picker = AndroidDocumentPickerService(self.import_store, status_callback=self.set_status)
-
-        if KIVYMD_AVAILABLE and hasattr(self, "theme_cls"):
-            try:
-                self.theme_cls.theme_style = "Dark"
-                self.theme_cls.primary_palette = "Blue"
-                self.theme_cls.accent_palette = "Teal"
-                if hasattr(self.theme_cls, "material_style"):
-                    self.theme_cls.material_style = "M3"
-            except Exception:
-                pass
-
-        is_mobile = (platform == "android")
-        pad = dp(12) if is_mobile else dp(14)
-        gap = dp(10) if is_mobile else dp(12)
-        row_h = dp(52) if is_mobile else dp(46)
-        input_h = dp(52) if is_mobile else dp(44)
-
-        palette = {
-            "bg": (0.055, 0.075, 0.11, 1),
-            "surface": (0.085, 0.105, 0.145, 1),
-            "surface_alt": (0.11, 0.135, 0.185, 1),
-            "surface_soft": (0.135, 0.16, 0.215, 1),
-            "primary": (0.24, 0.48, 0.96, 1),
-            "primary_soft": (0.16, 0.24, 0.38, 1),
-            "accent": (0.10, 0.78, 0.63, 1),
-            "accent_soft": (0.10, 0.28, 0.24, 1),
-            "text": (0.93, 0.96, 1.0, 1),
-            "muted": (0.60, 0.68, 0.80, 1),
-            "border": (0.18, 0.24, 0.34, 1),
-            "preview_bg": (0.06, 0.08, 0.11, 1),
-            "chip": (0.13, 0.18, 0.27, 1),
-            "danger": (0.87, 0.33, 0.41, 1),
-        }
-        Window.clearcolor = palette["bg"]
-
-        def style_card(widget, color=None, radius=dp(22)):
-            color = color or palette["surface"]
-            with widget.canvas.before:
-                widget._card_bg_color = Color(*color)
-                widget._card_bg = RoundedRectangle(radius=[radius] * 4)
-                widget._card_border_color = Color(*palette["border"])
-                widget._card_border = Line(rounded_rectangle=[0, 0, 0, 0, radius], width=1.1)
-            def _upd(*_):
-                widget._card_bg.pos = widget.pos
-                widget._card_bg.size = widget.size
-                widget._card_border.rounded_rectangle = [widget.x, widget.y, widget.width, widget.height, radius]
-            widget.bind(pos=_upd, size=_upd)
-            _upd()
-            return widget
-
-        def make_card(title, subtitle=None):
-            card = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(12), size_hint_y=None)
-            card.bind(minimum_height=card.setter("height"))
-            style_card(card, palette["surface"])
-
-            head = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(3))
-            if is_mobile:
-                head.bind(minimum_height=head.setter("height"))
-            else:
-                head.height = dp(44) if subtitle else dp(24)
-
-            ttl = Label(
-                text=title,
-                markup=False,
-                bold=True,
-                color=palette["text"],
-                size_hint_y=None,
-                height=dp(24),
-                halign="left",
-                valign="middle",
-                font_size=dp(16) if is_mobile else dp(15),
-            )
-            ttl.bind(size=self._sync_label_text_size)
-            if is_mobile:
-                self._bind_auto_height_label(ttl, min_height=dp(22), extra_pad=dp(2))
-            head.add_widget(ttl)
-
-            if subtitle:
-                sub = Label(
-                    text=subtitle,
-                    color=palette["muted"],
-                    size_hint_y=None,
-                    height=dp(18),
-                    halign="left",
-                    valign="middle",
-                    font_size=dp(11) if is_mobile else dp(11),
-                )
-                sub.bind(size=self._sync_label_text_size)
-                if is_mobile:
-                    self._bind_auto_height_label(sub, min_height=dp(16), extra_pad=dp(2))
-                head.add_widget(sub)
-
-            card.add_widget(head)
-
-            body = GridLayout(cols=1, spacing=dp(10), size_hint_y=None)
-            body.bind(minimum_height=body.setter("height"))
-            card.add_widget(body)
-            return card, body
-
-        def make_button(text, tone="primary", icon=None):
-            colors = {
-                "primary": palette["primary"],
-                "soft": palette["primary_soft"],
-                "accent": palette["accent"],
-                "plain": palette["surface_soft"],
-            }
-            label = text if not icon else f"{icon}  {text}"
-            if KIVYMD_AVAILABLE and MDRaisedButton is not None:
-                if tone in ("primary", "accent"):
-                    btn = MDRaisedButton(
-                        text=label,
-                        size_hint_y=None,
-                        height=row_h,
-                        md_bg_color=colors.get(tone, palette["primary"]),
-                        text_color=(1, 1, 1, 1),
-                        elevation=1,
-                    )
-                elif tone == "plain":
-                    btn = MDRectangleFlatButton(
-                        text=label,
-                        size_hint_y=None,
-                        height=row_h,
-                        line_color=palette["border"],
-                        text_color=palette["text"],
-                    )
-                else:
-                    btn = MDFlatButton(
-                        text=label,
-                        size_hint_y=None,
-                        height=row_h,
-                        theme_text_color="Custom",
-                        text_color=palette["text"],
-                    )
-                return btn
-
-            txt_color = (1,1,1,1) if tone in ("primary","accent") else palette["text"]
-            btn = Button(
-                text=label,
-                size_hint_y=None, height=row_h,
-                background_normal="", background_down="",
-                background_color=colors.get(tone, palette["primary"]),
-                color=txt_color, font_size=dp(14) if is_mobile else dp(13),
-            )
-            return btn
-
-        def make_input(default="", hint="", input_filter=None):
-            if KIVYMD_AVAILABLE and MDTextField is not None:
-                field = MDTextField(
-                    text=str(default),
-                    hint_text=hint,
-                    mode="fill",
-                    size_hint_y=None,
-                    height=input_h + dp(8),
-                    helper_text_mode="on_focus",
-                )
-                try:
-                    field.fill_color_normal = palette["surface_alt"]
-                    field.fill_color_focus = palette["surface_alt"]
-                    field.line_color_normal = palette["border"]
-                    field.line_color_focus = palette["primary"]
-                    field.text_color_normal = palette["text"]
-                    field.text_color_focus = palette["text"]
-                    field.hint_text_color_normal = palette["muted"]
-                    field.hint_text_color_focus = palette["primary"]
-                except Exception:
-                    pass
-                if input_filter is not None:
-                    try:
-                        field.input_filter = input_filter
-                    except Exception:
-                        pass
-                return field
-
-            kwargs = dict(text=str(default), hint_text=hint, multiline=False,
-                          size_hint_y=None, height=input_h, font_size=dp(14), write_tab=False,
-                          background_normal="", background_active="",
-                          background_color=palette["surface_alt"], foreground_color=palette["text"],
-                          cursor_color=palette["primary"], padding=[dp(12), dp(14), dp(12), dp(14)])
-            if input_filter is not None:
-                kwargs["input_filter"] = input_filter
-            return TextInput(**kwargs)
-
-        def make_spinner(text, values=()):
-            return Spinner(text=text, values=list(values), size_hint_y=None, height=input_h,
-                           font_size=dp(14), background_normal="", background_color=palette["surface_alt"],
-                           color=palette["text"])
-
-        def labeled_field(label_text, widget, helper=None):
-            box = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(4))
-            extra = dp(18) if helper else 0
-            box.height = dp(24) + widget.height + extra
-            lbl = Label(text=label_text, color=palette["text"], size_hint_y=None,
-                        height=dp(20), halign="left", valign="middle", font_size=dp(12))
-            lbl.bind(size=self._sync_label_text_size)
-            box.add_widget(lbl)
-            box.add_widget(widget)
-            if helper:
-                hlp = Label(text=helper, color=palette["muted"], size_hint_y=None,
-                            height=dp(16), halign="left", valign="middle", font_size=dp(10))
-                hlp.bind(size=self._sync_label_text_size)
-                box.add_widget(hlp)
-            return box
-
-        def labeled_checkbox(label_text, checkbox, helper=None):
-            row = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(34), spacing=dp(10))
-            checkbox.size_hint = (None, None)
-            checkbox.size = (dp(36), dp(24))
-            row.add_widget(checkbox)
-            lbl_cls = MDLabel if KIVYMD_AVAILABLE and MDLabel is not None else Label
-            lbl_kwargs = dict(text=label_text, halign="left", valign="middle")
-            if lbl_cls is Label:
-                lbl_kwargs.update(color=palette["text"], font_size=dp(13))
-            else:
-                lbl_kwargs.update(theme_text_color="Custom", text_color=palette["text"], font_style="Body1")
-            lbl = lbl_cls(**lbl_kwargs)
-            if lbl_cls is Label:
-                lbl.bind(size=self._sync_label_text_size)
-            row.add_widget(lbl)
-            if helper:
-                wrap = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(2))
-                wrap.height = dp(54)
-                wrap.add_widget(row)
-                sub = Label(text=helper, color=palette["muted"], size_hint_y=None, height=dp(14), halign="left", valign="middle", font_size=dp(10))
-                sub.bind(size=self._sync_label_text_size)
-                wrap.add_widget(sub)
-                return wrap
-            return row
-
-        root = BoxLayout(orientation="vertical", spacing=gap, padding=pad)
-
-        appbar = BoxLayout(
-            orientation="vertical" if is_mobile else "horizontal",
-            spacing=dp(10) if is_mobile else dp(14),
-            size_hint_y=None,
-            height=dp(92) if is_mobile else dp(88),
-            padding=[dp(14), dp(12), dp(14), dp(12)],
+    
+        root = BoxLayout(orientation="horizontal", spacing=10, padding=10)
+    
+        # =========================================
+        # LEFT PANEL WRAP
+        # =========================================
+        left_wrap = BoxLayout(
+            orientation="vertical",
+            size_hint_x=0.42
         )
-        style_card(appbar, palette["surface"], radius=dp(26))
-
-        brand_wrap = BoxLayout(orientation="vertical", spacing=dp(4), size_hint_y=None, size_hint_x=1)
-        brand_wrap.bind(minimum_height=brand_wrap.setter("height"))
-        hero_title = Label(
-            text="MediMap Pro",
-            color=palette["text"],
-            bold=True,
+    
+        left_scroll = ScrollView(
+            do_scroll_x=False,
+            do_scroll_y=True,
+            bar_width=10,
+            scroll_type=["bars", "content"]
+        )
+    
+        left = GridLayout(
+            cols=1,
+            spacing=8,
             size_hint_y=None,
-            height=dp(30),
+            padding=(0, 0, 4, 0)
+        )
+        left.bind(minimum_height=left.setter("height"))
+    
+        # -----------------------------
+        # Status section
+        # -----------------------------
+        status_box = BoxLayout(
+            orientation="vertical",
+            size_hint_y=None,
+            height=82,
+            spacing=2
+        )
+    
+        status_title = Label(
+            text="[b]MediMap Pro[/b]",
+            markup=True,
+            size_hint_y=None,
+            height=30,
             halign="left",
-            valign="middle",
-            font_size=dp(22) if is_mobile else dp(20),
+            valign="middle"
         )
-        hero_title.bind(size=self._sync_label_text_size)
-        if is_mobile:
-            self._bind_auto_height_label(hero_title, min_height=dp(26), extra_pad=dp(2))
-        brand_wrap.add_widget(hero_title)
-
-        hero_sub = Label(
-            text=("Import files, preview pages, detect fields, and export filled PDFs." if is_mobile else "Medical-tech PDF automation with guided preview, detection, mapping, and export."),
-            color=palette["muted"],
+        status_title.bind(size=self._sync_label_text_size)
+        status_box.add_widget(status_title)
+    
+        self.status_lbl = Label(
+            text="Load CSV/XLSX, Google Sheet URL, and PDF to begin",
             size_hint_y=None,
-            height=dp(22),
+            height=50,
             halign="left",
-            valign="middle",
-            font_size=dp(10.5) if is_mobile else dp(11.5),
+            valign="top"
         )
-        hero_sub.bind(size=self._sync_label_text_size)
-        if is_mobile:
-            self._bind_auto_height_label(hero_sub, min_height=dp(18), extra_pad=dp(2))
-        brand_wrap.add_widget(hero_sub)
-        appbar.add_widget(brand_wrap)
-
-        status_chip = Label(
-            text=("Ready • Open a PDF to begin" if is_mobile else "Ready • Import a PDF, then refresh or run detect"),
-            color=palette["text"],
-            size_hint=(1, None) if is_mobile else (None, None),
-            height=dp(44) if is_mobile else dp(48),
-            halign="left" if is_mobile else "center",
-            valign="middle",
-            font_size=dp(10.5) if is_mobile else dp(11),
-            padding=(dp(12), dp(0)),
+        self.status_lbl.bind(size=self._sync_label_text_size)
+        status_box.add_widget(self.status_lbl)
+    
+        left.add_widget(status_box)
+    
+        # -----------------------------
+        # Files title
+        # -----------------------------
+        files_title = Label(
+            text="[b]Files[/b]",
+            markup=True,
+            size_hint_y=None,
+            height=24,
+            halign="left",
+            valign="middle"
         )
-        status_chip.bind(size=self._sync_label_text_size)
-        self._bind_auto_height_label(status_chip, min_height=dp(38), extra_pad=dp(10))
-        style_card(status_chip, palette["chip"], radius=dp(18))
-        self.status_lbl = status_chip
-        if is_mobile:
-            root.add_widget(appbar)
-            root.add_widget(status_chip)
-        else:
-            status_chip.width = dp(420)
-            appbar.add_widget(status_chip)
-            root.add_widget(appbar)
-
-        self.mobile_flow_lbl = None
-        if is_mobile:
-            mobile_flow_card = BoxLayout(
-                orientation="vertical",
-                spacing=dp(4),
-                size_hint_y=None,
-                height=dp(74),
-                padding=[dp(14), dp(12), dp(14), dp(12)],
-            )
-            style_card(mobile_flow_card, palette["surface_alt"], radius=dp(24))
-
-            flow_title = Label(
-                text="Next step",
-                color=palette["muted"],
-                size_hint_y=None,
-                height=dp(18),
-                halign="left",
-                valign="middle",
-                font_size=dp(11),
-            )
-            flow_title.bind(size=self._sync_label_text_size)
-            mobile_flow_card.add_widget(flow_title)
-
-            self.mobile_flow_lbl = Label(
-                text="Start in 1 Files. Open a PDF first.",
-                color=palette["text"],
-                bold=True,
-                size_hint_y=None,
-                height=dp(28),
-                halign="left",
-                valign="middle",
-                font_size=dp(14),
-            )
-            self.mobile_flow_lbl.bind(size=self._sync_label_text_size)
-            mobile_flow_card.add_widget(self.mobile_flow_lbl)
-            root.add_widget(mobile_flow_card)
-
-        main = BoxLayout(orientation="vertical" if is_mobile else "horizontal", spacing=dp(10) if is_mobile else dp(16))
-
-        self._mobile_section_buttons = {}
-        self._mobile_section_cards = {}
-        self._mobile_section_host = None
-        self._mobile_active_section = None
-        self._desktop_section_buttons = {}
-        self._desktop_section_cards = {}
-        self._desktop_section_host = None
-        self._desktop_active_section = None
-
-        def _style_mobile_section_button(btn, active=False):
-            bg = palette["primary"] if active else palette["surface_soft"]
-            fg = (1, 1, 1, 1) if active else palette["text"]
-            if hasattr(btn, "md_bg_color"):
-                try:
-                    btn.md_bg_color = bg
-                except Exception:
-                    pass
-                try:
-                    btn.text_color = fg
-                except Exception:
-                    pass
-            else:
-                btn.background_normal = ""
-                btn.background_down = ""
-                btn.background_color = bg
-                btn.color = fg
-
-        def _show_mobile_section(section_key):
-            if not is_mobile or self._mobile_section_host is None:
-                return
-            section_card = self._mobile_section_cards.get(section_key)
-            if section_card is None:
-                return
-            self._mobile_section_host.clear_widgets()
-            self._mobile_section_host.add_widget(section_card)
-            self._mobile_active_section = section_key
-            for key, btn in self._mobile_section_buttons.items():
-                _style_mobile_section_button(btn, active=(key == section_key))
-
-        self._show_mobile_section = _show_mobile_section
-
-        def _style_desktop_section_button(btn, active=False):
-            bg = palette["primary"] if active else palette["surface_soft"]
-            fg = (1, 1, 1, 1) if active else palette["text"]
-            btn.background_normal = ""
-            btn.background_down = ""
-            btn.background_color = bg
-            btn.color = fg
-
-        def _show_desktop_section(section_key):
-            if is_mobile or self._desktop_section_host is None:
-                return
-            section_card = self._desktop_section_cards.get(section_key)
-            if section_card is None:
-                return
-            self._desktop_section_host.clear_widgets()
-            self._desktop_section_host.add_widget(section_card)
-            self._desktop_active_section = section_key
-            for key, btn in self._desktop_section_buttons.items():
-                _style_desktop_section_button(btn, active=(key == section_key))
-
-        self._show_desktop_section = _show_desktop_section
-
-        def _make_desktop_section_tabs(section_names):
-            wrap = GridLayout(cols=len(section_names), spacing=dp(8), size_hint_y=None, height=row_h)
-            for name in section_names:
-                btn = Button(
-                    text=name,
-                    size_hint_y=None,
-                    height=row_h,
-                    background_normal="",
-                    background_down="",
-                    background_color=palette["surface_soft"],
-                    color=palette["text"],
-                    font_size=dp(12),
-                )
-                btn.bind(on_release=lambda inst, n=name: _show_desktop_section(n))
-                self._desktop_section_buttons[name] = btn
-                wrap.add_widget(btn)
-            return wrap
-
-        def _make_mobile_section_tabs(section_names):
-            tabs_wrap = BoxLayout(orientation="vertical", spacing=dp(8), size_hint_y=None)
-            rows = []
-            if len(section_names) <= 3:
-                rows = [section_names]
-            else:
-                rows = [section_names[:3], section_names[3:]]
-            total_h = len(rows) * row_h + max(len(rows) - 1, 0) * dp(8)
-            tabs_wrap.height = total_h
-
-            for row_names in rows:
-                row = GridLayout(cols=max(1, len(row_names)), spacing=dp(8), size_hint_y=None, height=row_h)
-                display_map = {
-                    "Files": "1 Files",
-                    "Session": "2 Session",
-                    "Detection": "3 Detect",
-                    "Mapping": "4 Mapping",
-                    "Export": "5 Export",
-                }
-                for name in row_names:
-                    btn = Button(
-                        text=display_map.get(name, name),
-                        size_hint_y=None,
-                        height=row_h,
-                        background_normal="",
-                        background_down="",
-                        background_color=palette["surface_soft"],
-                        color=palette["text"],
-                        font_size=dp(13),
-                    )
-                    btn.bind(on_release=lambda inst, n=name: _show_mobile_section(n))
-                    self._mobile_section_buttons[name] = btn
-                    row.add_widget(btn)
-                tabs_wrap.add_widget(row)
-            return tabs_wrap
-
-        controls_wrap = BoxLayout(orientation="vertical", size_hint=(1, 0.56) if is_mobile else (0.40, 1))
-        controls_scroll = ScrollView(do_scroll_x=False, do_scroll_y=True, bar_width=dp(6), scroll_type=["bars", "content"])
-        controls = GridLayout(cols=1, spacing=gap, size_hint_y=None)
-        controls.bind(minimum_height=controls.setter("height"))
-
-        files_card, files_body = make_card("Workspace", "Open files and presets" if is_mobile else "Open data, templates, and saved presets")
-        file_grid = GridLayout(cols=2 if is_mobile else 3, spacing=dp(8), size_hint_y=None)
-        file_buttons = [
-            ("Load PDF", self.on_load_pdf, "primary"),
-            ("Load CSV/XLSX", self.on_load_csv, "soft"),
-            ("Load GSheet", self.on_load_gsheet_url, "soft"),
-            ("Load Config", self.on_load_config, "plain"),
-            ("Merge Mappings", self.on_merge_config, "plain"),
-            ("Save Config", self.on_save_config, "accent"),
-        ]
-        rows = (len(file_buttons) + file_grid.cols - 1) // file_grid.cols
-        file_grid.height = rows * row_h + max(rows-1,0) * dp(8)
-        for txt, cb, tone in file_buttons:
-            btn = make_button(txt, tone=tone)
-            btn.bind(on_release=cb)
-            file_grid.add_widget(btn)
-        files_body.add_widget(file_grid)
-        if is_mobile:
-            self._mobile_section_cards["Files"] = files_card
-        else:
-            self._desktop_section_cards["Workspace"] = files_card
-
-        nav_card, nav_body = make_card("Session", "Pick patient, page, and actions" if is_mobile else "Choose a patient, move pages, detect, and refresh")
-        self.patient_spinner = make_spinner("Select Patient")
+        files_title.bind(size=self._sync_label_text_size)
+        left.add_widget(files_title)
+    
+        # -----------------------------
+        # File chooser
+        # -----------------------------
+        self.file_chooser = FileChooserListView(
+            path="/sdcard/Download" if platform == "android" else os.path.expanduser("~"),
+            size_hint_y=None,
+            height=240
+        )
+        left.add_widget(self.file_chooser)
+    
+        # -----------------------------
+        # File action buttons row 1
+        # -----------------------------
+        file_btn_row_1 = GridLayout(
+            cols=3,
+            size_hint_y=None,
+            height=44,
+            spacing=6
+        )
+    
+        self.btn_load_pdf = Button(text="Load PDF")
+        self.btn_load_pdf.bind(on_release=self.on_load_pdf)
+        file_btn_row_1.add_widget(self.btn_load_pdf)
+    
+        self.btn_load_csv = Button(text="Load CSV/XLSX")
+        self.btn_load_csv.bind(on_release=self.on_load_csv)
+        file_btn_row_1.add_widget(self.btn_load_csv)
+    
+        self.btn_load_gsheet = Button(text="Load Google Sheet URL")
+        self.btn_load_gsheet.bind(on_release=self.on_load_gsheet_url)
+        file_btn_row_1.add_widget(self.btn_load_gsheet)
+    
+        left.add_widget(file_btn_row_1)
+    
+        # -----------------------------
+        # File action buttons row 2
+        # -----------------------------
+        file_btn_row_2 = GridLayout(
+            cols=3,
+            size_hint_y=None,
+            height=44,
+            spacing=6
+        )
+    
+        self.btn_load_cfg = Button(text="Load Config")
+        self.btn_load_cfg.bind(on_release=self.on_load_config)
+        file_btn_row_2.add_widget(self.btn_load_cfg)
+    
+        self.btn_merge_cfg = Button(text="Merge Config")
+        self.btn_merge_cfg.bind(on_release=self.on_merge_config)
+        file_btn_row_2.add_widget(self.btn_merge_cfg)
+    
+        self.btn_save_cfg = Button(text="Save Config")
+        self.btn_save_cfg.bind(on_release=self.on_save_config)
+        file_btn_row_2.add_widget(self.btn_save_cfg)
+    
+        left.add_widget(file_btn_row_2)
+    
+        # -----------------------------
+        # Navigation title
+        # -----------------------------
+        nav_title = Label(
+            text="[b]Navigation[/b]",
+            markup=True,
+            size_hint_y=None,
+            height=24,
+            halign="left",
+            valign="middle"
+        )
+        nav_title.bind(size=self._sync_label_text_size)
+        left.add_widget(nav_title)
+    
+        # -----------------------------
+        # Navigation row 1
+        # -----------------------------
+        nav_row_1 = BoxLayout(size_hint_y=None, height=44, spacing=6)
+    
+        self.patient_spinner = Spinner(
+            text="Select Patient",
+            values=[],
+            size_hint_x=0.56
+        )
         self.patient_spinner.bind(text=self.on_patient_change)
-        nav_body.add_widget(labeled_field("Patient", self.patient_spinner, "Active data row for preview and export"))
-        nav_grid = GridLayout(cols=3, spacing=dp(8), size_hint_y=None, height=row_h)
-        self.page_input = make_input("0", "Page", input_filter="int")
-        self.btn_prev = make_button("Prev", tone="plain")
-        self.btn_next = make_button("Next", tone="plain")
+        nav_row_1.add_widget(self.patient_spinner)
+    
+        self.page_input = TextInput(
+            text="0",
+            multiline=False,
+            hint_text="Page",
+            size_hint_x=0.12
+        )
+        nav_row_1.add_widget(self.page_input)
+    
+        self.btn_prev = Button(text="Prev", size_hint_x=0.16)
         self.btn_prev.bind(on_release=self.on_prev_page)
+        nav_row_1.add_widget(self.btn_prev)
+    
+        self.btn_next = Button(text="Next", size_hint_x=0.16)
         self.btn_next.bind(on_release=self.on_next_page)
-        nav_grid.add_widget(self.page_input)
-        nav_grid.add_widget(self.btn_prev)
-        nav_grid.add_widget(self.btn_next)
-        nav_body.add_widget(labeled_field("Page", nav_grid, "Preview uses zero-based page index"))
-        action_grid = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=row_h)
-        self.btn_detect = make_button("Run Detect", tone="accent")
+        nav_row_1.add_widget(self.btn_next)
+    
+        left.add_widget(nav_row_1)
+    
+        # -----------------------------
+        # Navigation row 2
+        # -----------------------------
+        nav_row_2 = GridLayout(cols=2, size_hint_y=None, height=44, spacing=6)
+    
+        self.btn_detect = Button(text="Run Detect")
         self.btn_detect.bind(on_release=self.on_run_detect)
-        self.btn_preview = make_button("Refresh Preview", tone="primary")
+        nav_row_2.add_widget(self.btn_detect)
+    
+        self.btn_preview = Button(text="Refresh Preview")
         self.btn_preview.bind(on_release=self.on_preview)
-        action_grid.add_widget(self.btn_detect)
-        action_grid.add_widget(self.btn_preview)
-        nav_body.add_widget(action_grid)
-        self.backend_note_lbl = Label(
-            text="",
-            color=palette["muted"],
+        nav_row_2.add_widget(self.btn_preview)
+    
+        left.add_widget(nav_row_2)
+    
+        # -----------------------------
+        # Detection Settings title
+        # -----------------------------
+        settings_title = Label(
+            text="[b]Detection Settings[/b]",
+            markup=True,
             size_hint_y=None,
-            height=dp(40),
+            height=24,
             halign="left",
-            valign="middle",
-            font_size=dp(11),
+            valign="middle"
         )
-        self.backend_note_lbl.bind(size=self._sync_label_text_size)
-        nav_body.add_widget(self.backend_note_lbl)
-        if is_mobile:
-            self._mobile_section_cards["Session"] = nav_card
-        else:
-            self._desktop_section_cards["Session"] = nav_card
-
-        detect_card, detect_body = make_card("Detection", "Tune detection thresholds" if is_mobile else "Field, line, checkbox, and extent thresholds")
-        explain = Label(text="F = field sizing  •  Line = answer lines  •  C = checkbox tuning  •  Ext = contour extent limits",
-                        color=palette["muted"], size_hint_y=None, height=dp(18), halign="left", valign="middle", font_size=dp(11))
-        explain.bind(size=self._sync_label_text_size)
-        detect_body.add_widget(explain)
-
-        self.f_area = make_input(DEFAULTS["F_Area"], "500", input_filter="int")
-        self.f_minw = make_input(DEFAULTS["F_MinW"], "15", input_filter="int")
-        self.f_minh = make_input(DEFAULTS["F_MinH"], "35", input_filter="int")
-        self.f_close = make_input(DEFAULTS["F_Close"], "1", input_filter="int")
-        self.line_minw = make_input(DEFAULTS["Line_MinW"], "100", input_filter="int")
-        self.line_maxw = make_input(DEFAULTS["Line_MaxW"], "1680", input_filter="int")
-        self.c_strict = make_input(DEFAULTS["C_Strict"], "40", input_filter="int")
-        self.c_size_min = make_input(DEFAULTS["C_Size"][0], "14", input_filter="int")
-        self.c_size_max = make_input(DEFAULTS["C_Size"][1], "65", input_filter="int")
-        self.c_border = make_input(DEFAULTS["C_Border"], "0.10")
-        self.c_inner = make_input(DEFAULTS["C_Inner"], "0.40")
-        self.roi_max = make_input(DEFAULTS["ROI_Max"], "200", input_filter="int")
-        self.c_open = make_input(DEFAULTS["C_Open"], "1", input_filter="int")
-        self.c_close = make_input(DEFAULTS["C_Close"], "0", input_filter="int")
-        self.c_band = make_input(DEFAULTS["C_BandPct"], "0.18")
-        self.c_aspect = make_input(DEFAULTS["C_AspectTol"], "0.10")
-        self.ext_low = make_input(DEFAULTS["Ext_Low"], "0.04")
-        self.ext_high = make_input(DEFAULTS["Ext_High"], "0.60")
-        self.c_fill = make_input(DEFAULTS["C_FillMin"], "0.45")
-        self.c_eps = make_input(DEFAULTS["C_Eps"], "0.04")
-        self.use_extent_chk = (MDSwitch(active=bool(DEFAULTS["Use_Extent"])) if KIVYMD_AVAILABLE and MDSwitch is not None else CheckBox(active=bool(DEFAULTS["Use_Extent"])))
-
-        detection_fields = [
-            labeled_field("Field Area", self.f_area, "Minimum contour area kept as a field"),
-            labeled_field("Field Min Width", self.f_minw),
-            labeled_field("Field Min Height", self.f_minh),
-            labeled_field("Field Close", self.f_close, "Morph close kernel for field cleanup"),
-            labeled_field("Line Min Width", self.line_minw),
-            labeled_field("Line Max Width", self.line_maxw),
-            labeled_field("Checkbox Strict", self.c_strict, "Higher values tighten checkbox rules"),
-            labeled_field("Checkbox Min Size", self.c_size_min),
-            labeled_field("Checkbox Max Size", self.c_size_max),
-            labeled_field("Border Fill", self.c_border),
-            labeled_field("Inner Fill", self.c_inner),
-            labeled_field("ROI Max", self.roi_max),
-            labeled_field("Checkbox Open", self.c_open),
-            labeled_field("Checkbox Close", self.c_close),
-            labeled_field("Band %", self.c_band),
-            labeled_field("Aspect Tolerance", self.c_aspect),
-            labeled_field("Extent Low", self.ext_low),
-            labeled_field("Extent High", self.ext_high),
-            labeled_field("Fill Min", self.c_fill),
-            labeled_field("Approx Eps", self.c_eps),
-            labeled_checkbox("Use Extent", self.use_extent_chk, "Use contour extent as an extra checkbox filter"),
-        ]
-        det_grid = GridLayout(cols=2 if is_mobile else 3, spacing=dp(8), size_hint_y=None)
-        rows = (len(detection_fields)+det_grid.cols-1)//det_grid.cols
-        max_cell_h = max(w.height for w in detection_fields)
-        det_grid.height = rows * max_cell_h + max(rows-1,0)*dp(8)
-        for w in detection_fields:
-            det_grid.add_widget(w)
-        detect_body.add_widget(det_grid)
-        if is_mobile:
-            self._mobile_section_cards["Detection"] = detect_card
-        else:
-            self._desktop_section_cards["Detection"] = detect_card
-
-        map_card, map_body = make_card("Mapping", "Assign values to selected boxes" if is_mobile else "Assign values to selected boxes directly from preview")
-        self.box_ids_input = make_input("", "0,1,2")
-        self.column_spinner = make_spinner("Select Column")
-        self.trigger_input = make_input("", "Trigger")
-        self.grid_flag_chk = (MDSwitch(active=False) if KIVYMD_AVAILABLE and MDSwitch is not None else CheckBox(active=False))
-        self.grid_n_input = make_input("1", "1", input_filter="int")
-        map_body.add_widget(labeled_field("Selected Box IDs", self.box_ids_input, "Click boxes in preview to add or remove them"))
-        map_body.add_widget(labeled_field("Column", self.column_spinner, "Data column written into the selected target"))
-        map_body.add_widget(labeled_field("Trigger", self.trigger_input, "Leave blank for text fill, use value for checkbox X mark"))
-        map_opts = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=max(dp(48), self.grid_n_input.height))
-        map_opts.add_widget(labeled_checkbox("Is Grid?", self.grid_flag_chk, "Split characters across boxes or cells"))
-        map_opts.add_widget(labeled_field("Grid N", self.grid_n_input, "Characters or cells to distribute"))
-        map_body.add_widget(map_opts)
-        self.btn_assign = make_button("Assign Mapping", tone="primary")
+        settings_title.bind(size=self._sync_label_text_size)
+        left.add_widget(settings_title)
+    
+        # A
+        ctl2 = GridLayout(cols=3, size_hint_y=None, height=44, spacing=6)
+        self.f_area = TextInput(text=str(DEFAULTS["F_Area"]), multiline=False, hint_text="F_Area")
+        self.f_minw = TextInput(text=str(DEFAULTS["F_MinW"]), multiline=False, hint_text="F_MinW")
+        self.f_minh = TextInput(text=str(DEFAULTS["F_MinH"]), multiline=False, hint_text="F_MinH")
+        ctl2.add_widget(self.f_area)
+        ctl2.add_widget(self.f_minw)
+        ctl2.add_widget(self.f_minh)
+        left.add_widget(ctl2)
+    
+        # B
+        ctl2b = GridLayout(cols=3, size_hint_y=None, height=44, spacing=6)
+        self.f_close = TextInput(text=str(DEFAULTS["F_Close"]), multiline=False, hint_text="F_Close")
+        self.line_minw = TextInput(text=str(DEFAULTS["Line_MinW"]), multiline=False, hint_text="Line_MinW")
+        self.line_maxw = TextInput(text=str(DEFAULTS["Line_MaxW"]), multiline=False, hint_text="Line_MaxW")
+        ctl2b.add_widget(self.f_close)
+        ctl2b.add_widget(self.line_minw)
+        ctl2b.add_widget(self.line_maxw)
+        left.add_widget(ctl2b)
+    
+        # C
+        ctl3 = GridLayout(cols=3, size_hint_y=None, height=44, spacing=6)
+        self.c_strict = TextInput(text=str(DEFAULTS["C_Strict"]), multiline=False, hint_text="C_Strict")
+        self.c_size_min = TextInput(text=str(DEFAULTS["C_Size"][0]), multiline=False, hint_text="C_Size_Min")
+        self.c_size_max = TextInput(text=str(DEFAULTS["C_Size"][1]), multiline=False, hint_text="C_Size_Max")
+        ctl3.add_widget(self.c_strict)
+        ctl3.add_widget(self.c_size_min)
+        ctl3.add_widget(self.c_size_max)
+        left.add_widget(ctl3)
+    
+        # D
+        ctl3b = GridLayout(cols=3, size_hint_y=None, height=44, spacing=6)
+        self.c_border = TextInput(text=str(DEFAULTS["C_Border"]), multiline=False, hint_text="C_Border")
+        self.c_inner = TextInput(text=str(DEFAULTS["C_Inner"]), multiline=False, hint_text="C_Inner")
+        self.roi_max = TextInput(text=str(DEFAULTS["ROI_Max"]), multiline=False, hint_text="ROI_Max")
+        ctl3b.add_widget(self.c_border)
+        ctl3b.add_widget(self.c_inner)
+        ctl3b.add_widget(self.roi_max)
+        left.add_widget(ctl3b)
+    
+        # E
+        ctl4 = GridLayout(cols=3, size_hint_y=None, height=44, spacing=6)
+        self.c_open = TextInput(text=str(DEFAULTS["C_Open"]), multiline=False, hint_text="C_Open")
+        self.c_close = TextInput(text=str(DEFAULTS["C_Close"]), multiline=False, hint_text="C_Close")
+        self.c_band = TextInput(text=str(DEFAULTS["C_BandPct"]), multiline=False, hint_text="C_BandPct")
+        ctl4.add_widget(self.c_open)
+        ctl4.add_widget(self.c_close)
+        ctl4.add_widget(self.c_band)
+        left.add_widget(ctl4)
+    
+        # F
+        ctl4b = GridLayout(cols=3, size_hint_y=None, height=44, spacing=6)
+        self.c_aspect = TextInput(text=str(DEFAULTS["C_AspectTol"]), multiline=False, hint_text="C_AspectTol")
+        self.ext_low = TextInput(text=str(DEFAULTS["Ext_Low"]), multiline=False, hint_text="Ext_Low")
+        self.ext_high = TextInput(text=str(DEFAULTS["Ext_High"]), multiline=False, hint_text="Ext_High")
+        ctl4b.add_widget(self.c_aspect)
+        ctl4b.add_widget(self.ext_low)
+        ctl4b.add_widget(self.ext_high)
+        left.add_widget(ctl4b)
+    
+        # G
+        ctl4c = GridLayout(cols=3, size_hint_y=None, height=44, spacing=6)
+        self.c_fill = TextInput(text=str(DEFAULTS["C_FillMin"]), multiline=False, hint_text="C_FillMin")
+        self.c_eps = TextInput(text=str(DEFAULTS["C_Eps"]), multiline=False, hint_text="C_Eps")
+        self.use_extent = TextInput(text="0", multiline=False, hint_text="Use_Extent 0/1")
+        ctl4c.add_widget(self.c_fill)
+        ctl4c.add_widget(self.c_eps)
+        ctl4c.add_widget(self.use_extent)
+        left.add_widget(ctl4c)
+    
+        # -----------------------------
+        # Mapping title
+        # -----------------------------
+        mapping_title = Label(
+            text="[b]Mapping[/b]",
+            markup=True,
+            size_hint_y=None,
+            height=24,
+            halign="left",
+            valign="middle"
+        )
+        mapping_title.bind(size=self._sync_label_text_size)
+        left.add_widget(mapping_title)
+    
+        map_row_1 = BoxLayout(size_hint_y=None, height=44, spacing=6)
+    
+        self.box_ids_input = TextInput(
+            multiline=False,
+            hint_text="Box IDs",
+            size_hint_x=0.24
+        )
+        map_row_1.add_widget(self.box_ids_input)
+    
+        self.column_spinner = Spinner(
+            text="Select Column",
+            values=[],
+            size_hint_x=0.46
+        )
+        map_row_1.add_widget(self.column_spinner)
+    
+        self.trigger_input = TextInput(
+            multiline=False,
+            hint_text="Trigger",
+            size_hint_x=0.30
+        )
+        map_row_1.add_widget(self.trigger_input)
+    
+        left.add_widget(map_row_1)
+    
+        map_row_2 = BoxLayout(size_hint_y=None, height=44, spacing=6)
+    
+        self.grid_flag_input = TextInput(
+            text="0",
+            multiline=False,
+            hint_text="Grid 0/1",
+            size_hint_x=0.18
+        )
+        map_row_2.add_widget(self.grid_flag_input)
+    
+        self.grid_n_input = TextInput(
+            text="1",
+            multiline=False,
+            hint_text="Grid N",
+            size_hint_x=0.18
+        )
+        map_row_2.add_widget(self.grid_n_input)
+    
+        self.btn_assign = Button(
+            text="Assign Mapping",
+            size_hint_x=0.64
+        )
         self.btn_assign.bind(on_release=self.on_assign_mapping)
-        map_body.add_widget(self.btn_assign)
-        if is_mobile:
-            self._mobile_section_cards["Mapping"] = map_card
-        else:
-            self._desktop_section_cards["Mapping"] = map_card
-
-        export_card, export_body = make_card("Export", "Generate output PDFs" if is_mobile else "Generate patient output files")
-        out_grid = GridLayout(cols=1 if is_mobile else 2, spacing=dp(8), size_hint_y=None, height=(2*row_h+dp(8)) if is_mobile else row_h)
-        self.btn_generate_one = make_button("Generate Single PDF", tone="accent")
-        self.btn_generate_one.bind(on_release=self.on_generate_single)
-        self.btn_generate_batch = make_button("Generate Batch PDFs", tone="plain")
-        self.btn_generate_batch.bind(on_release=self.on_generate_batch)
-        out_grid.add_widget(self.btn_generate_one)
-        out_grid.add_widget(self.btn_generate_batch)
-        export_body.add_widget(out_grid)
-        self.export_note_lbl = Label(
-            text="",
-            color=palette["muted"],
+        map_row_2.add_widget(self.btn_assign)
+    
+        left.add_widget(map_row_2)
+    
+        # -----------------------------
+        # Output title
+        # -----------------------------
+        output_title = Label(
+            text="[b]Output[/b]",
+            markup=True,
             size_hint_y=None,
-            height=dp(42),
+            height=24,
             halign="left",
-            valign="middle",
-            font_size=dp(11),
+            valign="middle"
         )
-        self.export_note_lbl.bind(size=self._sync_label_text_size)
-        export_body.add_widget(self.export_note_lbl)
-        if is_mobile:
-            self._mobile_section_cards["Export"] = export_card
-        else:
-            self._desktop_section_cards["Export"] = export_card
-
-        selection_card, selection_body = make_card("Selection", "Inspect the currently selected box or mapping target")
-        selection_summary = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=dp(112))
-        self.inspector_selected_lbl = Label(text="None", color=palette["text"], size_hint_y=None, height=dp(20), halign="left", valign="middle", font_size=dp(12))
-        self.inspector_selected_lbl.bind(size=self._sync_label_text_size)
-        self.inspector_count_lbl = Label(text="0", color=palette["text"], size_hint_y=None, height=dp(20), halign="left", valign="middle", font_size=dp(12))
-        self.inspector_count_lbl.bind(size=self._sync_label_text_size)
-        selection_summary.add_widget(labeled_field("Selected IDs", self.inspector_selected_lbl, "Click preview boxes to inspect them"))
-        selection_summary.add_widget(labeled_field("Selection Count", self.inspector_count_lbl))
-        selection_body.add_widget(selection_summary)
-        self.inspector_box_lbl = Label(text="No selection", color=palette["text"], size_hint_y=None, height=dp(40), halign="left", valign="middle", font_size=dp(12))
-        self.inspector_box_lbl.bind(size=self._sync_label_text_size)
-        self._bind_auto_height_label(self.inspector_box_lbl, min_height=dp(36), extra_pad=dp(6))
-        selection_body.add_widget(labeled_field("Selected Box", self.inspector_box_lbl))
-        self.inspector_mapping_lbl = Label(text="Choose a box in the preview to inspect or map it.", color=palette["muted"], size_hint_y=None, height=dp(40), halign="left", valign="middle", font_size=dp(11))
-        self.inspector_mapping_lbl.bind(size=self._sync_label_text_size)
-        self._bind_auto_height_label(self.inspector_mapping_lbl, min_height=dp(36), extra_pad=dp(6))
-        selection_body.add_widget(labeled_field("Current Mapping", self.inspector_mapping_lbl))
-        clear_row = GridLayout(cols=1, spacing=dp(8), size_hint_y=None, height=row_h)
-        self.btn_clear_mapping = make_button("Clear Selected Mapping", tone="plain")
-        self.btn_clear_mapping.bind(on_release=self.on_clear_selected_mapping)
-        clear_row.add_widget(self.btn_clear_mapping)
-        selection_body.add_widget(clear_row)
-        self._desktop_right_section_cards = {}
-        self._desktop_right_section_buttons = {}
-        self._desktop_right_section_host = None
-        self._desktop_right_active_section = None
-
-        def _style_desktop_right_button(btn, active=False):
-            bg = palette["primary"] if active else palette["surface_soft"]
-            fg = (1, 1, 1, 1) if active else palette["text"]
-            btn.background_normal = ""
-            btn.background_down = ""
-            btn.background_color = bg
-            btn.color = fg
-
-        def _show_desktop_right_section(section_key):
-            if is_mobile or self._desktop_right_section_host is None:
-                return
-            section_card = self._desktop_right_section_cards.get(section_key)
-            if section_card is None:
-                return
-            self._desktop_right_section_host.clear_widgets()
-            self._desktop_right_section_host.add_widget(section_card)
-            self._desktop_right_active_section = section_key
-            for key, btn in self._desktop_right_section_buttons.items():
-                _style_desktop_right_button(btn, active=(key == section_key))
-
-        self._show_desktop_right_section = _show_desktop_right_section
-
-        def _make_desktop_right_tabs(section_names):
-            wrap = GridLayout(cols=len(section_names), spacing=dp(6), size_hint_y=None, height=dp(40))
-            for name in section_names:
-                btn = Button(text=name, size_hint_y=None, height=dp(40), background_normal="", background_down="", background_color=palette["surface_soft"], color=palette["text"], font_size=dp(11.5))
-                btn.bind(on_release=lambda inst, n=name: _show_desktop_right_section(n))
-                self._desktop_right_section_buttons[name] = btn
-                wrap.add_widget(btn)
-            return wrap
-
-        if is_mobile:
-            mobile_controls_card, mobile_controls_body = make_card("Controls", "Use tabs to move step by step")
-            tabs = _make_mobile_section_tabs(["Files", "Session", "Detection", "Mapping", "Export"])
-            mobile_controls_body.add_widget(tabs)
-            self._mobile_section_host = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
-            self._mobile_section_host.bind(minimum_height=self._mobile_section_host.setter("height"))
-            mobile_controls_body.add_widget(self._mobile_section_host)
-            controls.add_widget(mobile_controls_card)
-            Clock.schedule_once(lambda dt: _show_mobile_section("Files"), 0)
-            controls_scroll.add_widget(controls)
-            controls_wrap.add_widget(controls_scroll)
-
-            preview_outer = BoxLayout(orientation="vertical", spacing=gap, size_hint=(1, None))
-            preview_card, preview_body = make_card("Live Preview", "Preview pages and tap boxes")
-            preview_card.size_hint_y = 1
-            preview_outer.height = max(dp(300), Window.height * 0.34)
-            preview_card.bind(minimum_height=preview_card.setter("height"))
-            preview_toolbar = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=2*row_h+dp(8))
-            for txt, cb, tone in [("Refresh", self.on_preview, "primary"), ("Detect", self.on_run_detect, "accent"), ("Prev", self.on_prev_page, "plain"), ("Next", self.on_next_page, "plain")]:
-                b = make_button(txt, tone=tone)
-                b.bind(on_release=cb)
-                preview_toolbar.add_widget(b)
-            preview_body.add_widget(preview_toolbar)
-            self.preview_shell = BoxLayout(orientation="vertical", spacing=dp(8), padding=dp(8), size_hint_y=None)
-            self.preview_shell.height = max(dp(220), Window.height * 0.24)
-            style_card(self.preview_shell, palette["preview_bg"], radius=dp(24))
-            preview_wrap = ScrollView(do_scroll_x=True, do_scroll_y=True, bar_width=dp(6), scroll_type=["bars", "content"])
-            self.preview_wrap = preview_wrap
-            preview_stack = BoxLayout(orientation="vertical", spacing=dp(8), size_hint_y=None)
-            self.preview_stack = preview_stack
-            preview_stack.bind(minimum_height=preview_stack.setter("height"))
-            self.preview = InteractivePreview(size_hint=(None, None))
-            self.preview.bind(texture=self._update_preview_size)
-            self.preview.box_tap_callback = self.on_preview_box_tap
-            self.preview.hover_callback = self.on_preview_box_hover
-            self.preview_info = Label(text="Interactive preview ready. Tap a box to select it.", color=palette["text"], size_hint_y=None, height=dp(36), halign="left", valign="middle", font_size=dp(11))
-            self.preview_info.bind(size=self._sync_label_text_size)
-            self._bind_auto_height_label(self.preview_info, min_height=dp(34), extra_pad=dp(8))
-            style_card(self.preview_info, palette["chip"], radius=dp(18))
-            preview_stack.add_widget(self.preview_info)
-            preview_stack.add_widget(self.preview)
-            preview_wrap.add_widget(preview_stack)
-            self.preview_shell.add_widget(preview_wrap)
-            preview_body.add_widget(self.preview_shell)
-            preview_outer.add_widget(preview_card)
-            main.add_widget(controls_wrap)
-            main.add_widget(preview_outer)
-        else:
-            left_wrap = BoxLayout(orientation="vertical", size_hint=(0.23, 1), spacing=dp(10))
-            left_scroll = ScrollView(do_scroll_x=False, do_scroll_y=True, bar_width=dp(5), scroll_type=["bars", "content"])
-            left_body = GridLayout(cols=1, spacing=dp(10), size_hint_y=None)
-            left_body.bind(minimum_height=left_body.setter("height"))
-            desktop_controls_card, desktop_controls_body = make_card("Document & Detection", "Compact desktop controls")
-            tabs = _make_desktop_section_tabs(["Workspace", "Session", "Detection"])
-            desktop_controls_body.add_widget(tabs)
-            self._desktop_section_host = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
-            self._desktop_section_host.bind(minimum_height=self._desktop_section_host.setter("height"))
-            desktop_controls_body.add_widget(self._desktop_section_host)
-            left_body.add_widget(desktop_controls_card)
-            self._desktop_section_cards["Workspace"] = files_card
-            self._desktop_section_cards["Session"] = nav_card
-            self._desktop_section_cards["Detection"] = detect_card
-            left_scroll.add_widget(left_body)
-            left_wrap.add_widget(left_scroll)
-            Clock.schedule_once(lambda dt: _show_desktop_section("Workspace"), 0)
-
-            center_wrap = BoxLayout(orientation="vertical", size_hint=(0.57, 1), spacing=dp(10))
-            toolbar = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(44), spacing=dp(8))
-            self.btn_open_pdf_toolbar = make_button("Open PDF", tone="primary")
-            self.btn_open_pdf_toolbar.bind(on_release=self.on_load_pdf)
-            self.btn_open_data_toolbar = make_button("Open Data", tone="soft")
-            self.btn_open_data_toolbar.bind(on_release=self.on_load_csv)
-            self.btn_toolbar_detect = make_button("Detect", tone="accent")
-            self.btn_toolbar_detect.bind(on_release=self.on_run_detect)
-            self.btn_toolbar_refresh = make_button("Refresh", tone="primary")
-            self.btn_toolbar_refresh.bind(on_release=self.on_preview)
-            self.btn_toolbar_prev = make_button("Prev", tone="plain")
-            self.btn_toolbar_prev.bind(on_release=self.on_prev_page)
-            self.btn_toolbar_next = make_button("Next", tone="plain")
-            self.btn_toolbar_next.bind(on_release=self.on_next_page)
-            self.btn_zoom_out = make_button("−", tone="plain")
-            self.btn_zoom_out.bind(on_release=lambda *_: self._zoom_preview("out"))
-            zoom_chip = BoxLayout(orientation="horizontal", size_hint=(None, None), size=(dp(84), dp(44)), padding=[dp(12), dp(10), dp(12), dp(10)])
-            style_card(zoom_chip, palette["chip"], radius=dp(16))
-            self.zoom_chip_lbl = Label(text="100%", color=palette["text"], halign="center", valign="middle", font_size=dp(12))
-            self.zoom_chip_lbl.bind(size=self._sync_label_text_size)
-            zoom_chip.add_widget(self.zoom_chip_lbl)
-            self.btn_zoom_in = make_button("+", tone="plain")
-            self.btn_zoom_in.bind(on_release=lambda *_: self._zoom_preview("in"))
-            self.btn_zoom_reset = make_button("100%", tone="plain")
-            self.btn_zoom_reset.bind(on_release=lambda *_: self._zoom_preview("reset"))
-            self.btn_fit_width = make_button("Fit Width", tone="plain")
-            self.btn_fit_width.bind(on_release=self._fit_preview_width)
-            self.btn_fit_page = make_button("Fit Page", tone="plain")
-            self.btn_fit_page.bind(on_release=self._fit_preview_page)
-            self.btn_toolbar_export = make_button("Export", tone="accent")
-            self.btn_toolbar_export.bind(on_release=self.on_generate_single)
-            for w in [self.btn_open_pdf_toolbar, self.btn_open_data_toolbar, self.btn_toolbar_detect, self.btn_toolbar_refresh, self.btn_toolbar_prev, self.btn_toolbar_next, self.btn_zoom_out, zoom_chip, self.btn_zoom_in, self.btn_zoom_reset, self.btn_fit_width, self.btn_fit_page, self.btn_toolbar_export]:
-                toolbar.add_widget(w)
-            center_wrap.add_widget(toolbar)
-
-            preview_card, preview_body = make_card("Preview Canvas", "Hover boxes, zoom, map, and export from the live document")
-            preview_card.size_hint_y = 1
-            self.preview_shell = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(8), size_hint_y=None)
-            self.preview_shell.height = max(dp(620), Window.height - dp(220))
-            style_card(self.preview_shell, palette["preview_bg"], radius=dp(24))
-            preview_wrap = ScrollView(do_scroll_x=True, do_scroll_y=True, bar_width=dp(6), scroll_type=["bars", "content"])
-            self.preview_wrap = preview_wrap
-            preview_stack = BoxLayout(orientation="vertical", spacing=dp(6), size_hint_y=None)
-            self.preview_stack = preview_stack
-            preview_stack.bind(minimum_height=preview_stack.setter("height"))
-            self.preview = InteractivePreview(size_hint=(None, None))
-            self.preview.bind(texture=self._update_preview_size)
-            self.preview.box_tap_callback = self.on_preview_box_tap
-            self.preview.hover_callback = self.on_preview_box_hover
-            self.preview_info = Label(text="Preview ready. Hover or click boxes to inspect them.", color=palette["text"], size_hint_y=None, height=dp(32), halign="left", valign="middle", font_size=dp(11))
-            self.preview_info.bind(size=self._sync_label_text_size)
-            style_card(self.preview_info, palette["chip"], radius=dp(16))
-            preview_stack.add_widget(self.preview_info)
-            preview_stack.add_widget(self.preview)
-            preview_wrap.add_widget(preview_stack)
-            self.preview_shell.add_widget(preview_wrap)
-            preview_body.add_widget(self.preview_shell)
-            center_wrap.add_widget(preview_card)
-
-            right_wrap = BoxLayout(orientation="vertical", size_hint=(0.20, 1), spacing=dp(10))
-            right_card, right_body = make_card("Inspector", "Selection, mapping, and export")
-            right_tabs = _make_desktop_right_tabs(["Selection", "Mapping", "Export"])
-            right_body.add_widget(right_tabs)
-            self._desktop_right_section_host = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
-            self._desktop_right_section_host.bind(minimum_height=self._desktop_right_section_host.setter("height"))
-            right_body.add_widget(self._desktop_right_section_host)
-            right_wrap.add_widget(right_card)
-            self._desktop_right_section_cards["Selection"] = selection_card
-            self._desktop_right_section_cards["Mapping"] = map_card
-            self._desktop_right_section_cards["Export"] = export_card
-            Clock.schedule_once(lambda dt: _show_desktop_right_section("Selection"), 0)
-
-            main.add_widget(left_wrap)
-            main.add_widget(center_wrap)
-            main.add_widget(right_wrap)
-
-            bottom_status = BoxLayout(orientation="horizontal", spacing=dp(10), size_hint_y=None, height=dp(42), padding=[dp(12), dp(8), dp(12), dp(8)])
-            style_card(bottom_status, palette["surface_alt"], radius=dp(18))
-            def _status_piece(width_hint=0.2):
-                lbl = Label(text="", color=palette["muted"], halign="left", valign="middle", size_hint=(width_hint, 1), font_size=dp(11))
-                lbl.bind(size=self._sync_label_text_size)
-                return lbl
-            self.statusbar_file_lbl = _status_piece(0.26)
-            self.statusbar_page_lbl = _status_piece(0.13)
-            self.statusbar_patient_lbl = _status_piece(0.24)
-            self.statusbar_boxes_lbl = _status_piece(0.17)
-            self.statusbar_ready_lbl = _status_piece(0.20)
-            for lbl in [self.statusbar_file_lbl, self.statusbar_page_lbl, self.statusbar_patient_lbl, self.statusbar_boxes_lbl, self.statusbar_ready_lbl]:
-                bottom_status.add_widget(lbl)
-            self.desktop_status_detail_lbl = self.status_lbl
-            self.status_lbl.size_hint = (None, None)
-            self.status_lbl.width = dp(420)
-            root.add_widget(main)
-            root.add_widget(bottom_status)
-            Clock.schedule_once(lambda dt: self._bind_desktop_shortcuts(), 0)
-
-        if is_mobile:
-            root.add_widget(main)
-        Clock.schedule_once(lambda dt: self.refresh_backend_capabilities_ui(), 0)
-
+        output_title.bind(size=self._sync_label_text_size)
+        left.add_widget(output_title)
+    
+        out_row = GridLayout(cols=2, size_hint_y=None, height=46, spacing=6)
+    
+        self.btn_generate_one = Button(text="Generate Single PDF")
+        self.btn_generate_one.bind(on_release=self.on_generate_single)
+        out_row.add_widget(self.btn_generate_one)
+    
+        self.btn_generate_batch = Button(text="Generate Batch PDFs")
+        self.btn_generate_batch.bind(on_release=self.on_generate_batch)
+        out_row.add_widget(self.btn_generate_batch)
+    
+        left.add_widget(out_row)
+    
+        left_scroll.add_widget(left)
+        left_wrap.add_widget(left_scroll)
+    
+        # =========================================
+        # RIGHT PANEL
+        # =========================================
+        right = BoxLayout(
+            orientation="vertical",
+            size_hint_x=0.58,
+            spacing=6
+        )
+    
+        preview_title = Label(
+            text="[b]Preview[/b]",
+            markup=True,
+            size_hint_y=None,
+            height=24,
+            halign="left",
+            valign="middle"
+        )
+        preview_title.bind(size=self._sync_label_text_size)
+        right.add_widget(preview_title)
+    
+        preview_wrap = ScrollView(
+            do_scroll_x=True,
+            do_scroll_y=True,
+            bar_width=10,
+            scroll_type=["bars", "content"]
+        )
+    
+        self.preview = Image(
+            size_hint=(None, None),
+            allow_stretch=False,
+            keep_ratio=True
+        )
+        self.preview.bind(texture=self._update_preview_size)
+    
+        preview_wrap.add_widget(self.preview)
+        right.add_widget(preview_wrap)
+    
+        root.add_widget(left_wrap)
+        root.add_widget(right)
+    
         return root
 
     # --------------------------------------------------------
@@ -3658,307 +2124,17 @@ class MediMapProApp(MDApp):
     def _sync_label_text_size(self, instance, value):
         instance.text_size = value
 
-    def _bind_auto_height_label(self, instance, min_height=0, extra_pad=0):
-        def _upd(*_):
-            try:
-                instance.text_size = (max(1, instance.width), None)
-            except Exception:
-                return
-            try:
-                instance.texture_update()
-                tex_h = instance.texture_size[1]
-            except Exception:
-                tex_h = 0
-            try:
-                instance.height = max(min_height, tex_h + extra_pad)
-            except Exception:
-                pass
-        try:
-            instance.bind(width=_upd, text=_upd)
-        except Exception:
-            pass
-        Clock.schedule_once(lambda dt: _upd(), 0)
-        return instance
-
     def _update_preview_size(self, instance, texture):
-        if not texture:
-            return
-        if platform == "android":
-            max_w = max(dp(220), Window.width - dp(40))
-            max_h = max(dp(200), Window.height * 0.30)
-            scale = min(1.0, max_w / float(texture.width), max_h / float(texture.height))
-            self.preview.size = (max(dp(1), texture.width * scale), max(dp(1), texture.height * scale))
-        else:
-            mode = getattr(self, "desktop_zoom_mode", "manual")
-            zoom = float(getattr(self, "desktop_zoom_factor", 1.0) or 1.0)
-            shell = getattr(self, "preview_shell", None)
-            avail_w = max(dp(260), (shell.width if shell is not None else Window.width * 0.58) - dp(26))
-            avail_h = max(dp(260), (shell.height if shell is not None else Window.height - dp(240)) - dp(34))
-
-            if mode == "fit_width":
-                scale = avail_w / float(max(texture.width, 1))
-            elif mode == "fit_page":
-                scale = min(avail_w / float(max(texture.width, 1)), avail_h / float(max(texture.height, 1)))
-            else:
-                scale = zoom
-
-            scale = max(0.2, min(float(scale), 6.0))
-            self.preview.size = (max(dp(1), texture.width * scale), max(dp(1), texture.height * scale))
-            self.desktop_zoom_factor = scale
-            if hasattr(self, "zoom_chip_lbl") and self.zoom_chip_lbl is not None:
-                self.zoom_chip_lbl.text = f"{int(round(scale * 100))}%"
-        if getattr(self, "preview_stack", None) is not None:
-            self.preview_stack.do_layout()
-
-    def _apply_preview_zoom(self, mode=None, scale=None):
-        if platform == "android":
-            return
-        if mode is not None:
-            self.desktop_zoom_mode = mode
-        if scale is not None:
-            self.desktop_zoom_factor = max(0.2, min(float(scale), 6.0))
-        tex = getattr(getattr(self, "preview", None), "texture", None)
-        if tex is not None:
-            self._update_preview_size(self.preview, tex)
-            Clock.schedule_once(lambda dt: self._post_preview_refresh(), 0)
-
-    def _zoom_preview(self, direction):
-        if platform == "android":
-            return
-        current = float(getattr(self, "desktop_zoom_factor", 1.0) or 1.0)
-        if direction == "in":
-            current *= 1.15
-        elif direction == "out":
-            current /= 1.15
-        else:
-            current = 1.0
-        self._apply_preview_zoom(mode="manual", scale=current)
-
-    def _fit_preview_width(self, *_):
-        self._apply_preview_zoom(mode="fit_width")
-
-    def _fit_preview_page(self, *_):
-        self._apply_preview_zoom(mode="fit_page")
-
-    def _update_selection_inspector(self):
-        ids = sorted(set(int(x) for x in getattr(self.engine, "selected_box_ids", []) if isinstance(x, int) or str(x).isdigit()))
-        if hasattr(self, "inspector_selected_lbl") and self.inspector_selected_lbl is not None:
-            self.inspector_selected_lbl.text = (", ".join(str(i) for i in ids) if ids else "None")
-        if hasattr(self, "inspector_count_lbl") and self.inspector_count_lbl is not None:
-            self.inspector_count_lbl.text = str(len(ids))
-
-        if not ids:
-            box_text = "No selection"
-            mapping_text = "Choose a box in the preview to inspect or map it."
-        else:
-            first = ids[0]
-            box_type = self.engine.box_types[first] if first < len(self.engine.box_types) else "field"
-            rect = self.engine.all_boxes[first] if first < len(self.engine.all_boxes) else None
-            rect_text = ""
-            if rect is not None:
-                rect_text = f" | ({int(rect.x0)}, {int(rect.y0)}) → ({int(rect.x1)}, {int(rect.y1)})"
-            box_text = f"Box {first} • {box_type}{rect_text}"
-            mapping = self.engine.describe_box_mapping(first, self.current_page_idx())
-            mapping_text = mapping if mapping and mapping != "EMPTY" else "Unmapped"
-
-        if hasattr(self, "inspector_box_lbl") and self.inspector_box_lbl is not None:
-            self.inspector_box_lbl.text = box_text
-        if hasattr(self, "inspector_mapping_lbl") and self.inspector_mapping_lbl is not None:
-            self.inspector_mapping_lbl.text = mapping_text
-
-    def _update_bottom_statusbar(self):
-        if not hasattr(self, "statusbar_file_lbl"):
-            return
-        pdf_name = os.path.basename(getattr(self.engine, "pdf_path", "") or "") or "No PDF"
-        try:
-            page_idx = self.current_page_idx()
-        except Exception:
-            page_idx = 0
-        total_pages = max(int(self.engine.total_pages()), 0)
-        patient = self.selected_patient() or "No patient"
-        box_count = len(getattr(self.engine, "all_boxes", []) or [])
-        sel_count = len(getattr(self.engine, "selected_box_ids", []) or [])
-        ready = []
-        if getattr(self.engine, "pdf_path", ""):
-            ready.append("PDF")
-        if getattr(self.engine, "df", None) is not None and not self.engine.df.empty:
-            ready.append("DATA")
-        if self.engine.supports_detection_backend():
-            ready.append("DETECT")
-        if self.engine.supports_export_backend():
-            ready.append("EXPORT")
-        readiness = " • ".join(ready) if ready else "Idle"
-        self.statusbar_file_lbl.text = f"File: {pdf_name}"
-        self.statusbar_page_lbl.text = f"Page: {page_idx + 1}/{max(total_pages, 1)}"
-        self.statusbar_patient_lbl.text = f"Patient: {patient}"
-        self.statusbar_boxes_lbl.text = f"Boxes: {box_count} • Selected: {sel_count}"
-        self.statusbar_ready_lbl.text = f"Ready: {readiness}"
-
-    def _bind_desktop_shortcuts(self):
-        if platform == "android":
-            return
-        try:
-            Window.unbind(on_key_down=self._on_window_key_down)
-        except Exception:
-            pass
-        try:
-            Window.bind(on_key_down=self._on_window_key_down)
-        except Exception:
-            pass
-
-    def _on_window_key_down(self, _window, key, _scancode, _codepoint, modifiers):
-        if platform == "android":
-            return False
-        modifiers = modifiers or []
-        ctrl = "ctrl" in modifiers or "meta" in modifiers
-        try:
-            if ctrl and key in (111, ord('o'), ord('O')):
-                self.on_load_pdf(None)
-                return True
-            if ctrl and key in (115, ord('s'), ord('S')):
-                self.on_save_config(None)
-                return True
-            if key in (276, 80):
-                self.on_prev_page(None)
-                return True
-            if key in (275, 79):
-                self.on_next_page(None)
-                return True
-            if key in (13, 271):
-                self.on_run_detect(None)
-                return True
-            if key in (127, 8):
-                self.on_clear_selected_mapping()
-                return True
-            if key in (45, 269):
-                self._zoom_preview("out")
-                return True
-            if key in (61, 43, 270):
-                self._zoom_preview("in")
-                return True
-            digit_map = {
-                ord('1'): 'Workspace', ord('2'): 'Session', ord('3'): 'Detection',
-                ord('4'): 'Selection', ord('5'): 'Mapping', ord('6'): 'Export'
-            }
-            if key in digit_map:
-                target = digit_map[key]
-                if target in getattr(self, '_desktop_section_cards', {}):
-                    self._show_desktop_section(target)
-                elif target in getattr(self, '_desktop_right_section_cards', {}):
-                    self._show_desktop_right_section(target)
-                return True
-        except Exception:
-            return False
-        return False
-
-    def _post_preview_refresh(self, *args):
-        try:
-            tex = getattr(self.preview, "texture", None)
-            if tex is not None:
-                self._update_preview_size(self.preview, tex)
-            self.preview._redraw_overlay()
-            self.preview.canvas.ask_update()
-            if getattr(self, "preview_wrap", None) is not None:
-                self.preview_wrap.scroll_x = 0
-                self.preview_wrap.scroll_y = 1
-        except Exception:
-            pass
+        if texture:
+            self.preview.size = texture.size
 
     def set_status(self, text):
         self.status_lbl.text = text
-        if hasattr(self, "desktop_status_detail_lbl") and self.desktop_status_detail_lbl is not None:
-            self.desktop_status_detail_lbl.text = str(text).replace("\n", " • ")[:220]
-        try:
-            self.refresh_backend_capabilities_ui()
-            self._update_bottom_statusbar()
-        except Exception:
-            pass
 
-    def _set_widget_enabled(self, widget, enabled=True):
-        if widget is None:
-            return
-        try:
-            widget.disabled = not bool(enabled)
-        except Exception:
-            pass
-        try:
-            widget.opacity = 1.0 if enabled else 0.45
-        except Exception:
-            pass
-
-    def refresh_backend_capabilities_ui(self):
-        detection_ok = bool(self.engine.supports_detection_backend())
-        export_ok = bool(self.engine.supports_export_backend())
-        has_pdf = bool(getattr(self.engine, "pdf_path", ""))
-        has_data = bool(getattr(self.engine, "df", None) is not None and not self.engine.df.empty)
-        android_mode = (platform == "android")
-
-        detect_ready = detection_ok and has_pdf
-        preview_ready = detection_ok and has_pdf
-        assign_ready = detection_ok and has_pdf and has_data and bool(getattr(self.engine, "selected_box_ids", []))
-        export_ready = export_ok and has_pdf and has_data
-        page_ready = has_pdf
-
-        for attr, enabled in [
-            ("btn_detect", detect_ready),
-            ("btn_preview", preview_ready),
-            ("btn_assign", assign_ready),
-            ("btn_generate_one", export_ready),
-            ("btn_generate_batch", export_ready),
-            ("btn_prev", page_ready),
-            ("btn_next", page_ready),
-            ("btn_toolbar_prev", page_ready),
-            ("btn_toolbar_next", page_ready),
-            ("btn_toolbar_detect", detect_ready),
-            ("btn_toolbar_refresh", preview_ready),
-            ("btn_zoom_out", has_pdf),
-            ("btn_zoom_in", has_pdf),
-            ("btn_fit_width", has_pdf),
-            ("btn_fit_page", has_pdf),
-            ("btn_zoom_reset", has_pdf),
-            ("btn_clear_mapping", bool(getattr(self.engine, "selected_box_ids", []))),
-            ("btn_toolbar_export", export_ready),
-        ]:
-            self._set_widget_enabled(getattr(self, attr, None), enabled)
-
-        if hasattr(self, "backend_note_lbl") and self.backend_note_lbl is not None:
-            mode = "Android-safe mode" if android_mode else "Desktop mode"
-            next_step = "Load PDF" if not has_pdf else ("Load CSV/XLSX" if not has_data else ("Select boxes" if not getattr(self.engine, "selected_box_ids", []) else "Ready"))
-            self.backend_note_lbl.text = (
-                f"{mode} • Detect: {'ready' if detection_ok else 'unavailable'} • "
-                f"Export: {'ready' if export_ok else 'unavailable'} • Next: {next_step}"
-            )
-
-        if hasattr(self, "export_note_lbl") and self.export_note_lbl is not None:
-            if not export_ok:
-                self.export_note_lbl.text = "Export backend is unavailable in this build."
-            elif not has_pdf and not has_data:
-                self.export_note_lbl.text = "Load a PDF and CSV/XLSX data file to enable export."
-            elif not has_pdf:
-                self.export_note_lbl.text = "Load a PDF to enable export."
-            elif not has_data:
-                self.export_note_lbl.text = "Load CSV/XLSX data to enable export."
-            else:
-                self.export_note_lbl.text = "Export is ready. Generate one PDF or the full batch."
-
-        if getattr(self, "mobile_flow_lbl", None) is not None:
-            if not has_pdf:
-                self.mobile_flow_lbl.text = "Start in 1 Files. Open a PDF first."
-            elif not has_data:
-                self.mobile_flow_lbl.text = "PDF loaded. Next: load CSV/XLSX or a public Google Sheet."
-            elif not detection_ok:
-                self.mobile_flow_lbl.text = "Data ready. Preview works, but detection is unavailable in this build."
-            elif not self.engine.all_boxes:
-                self.mobile_flow_lbl.text = "Data ready. Go to 3 Detect and run detection on the current page."
-            elif not self.engine.custom_mappings:
-                self.mobile_flow_lbl.text = "Detection finished. Go to 4 Mapping and assign fields to columns."
-            elif not export_ok:
-                self.mobile_flow_lbl.text = "Mappings saved. Export is unavailable in this build."
-            else:
-                self.mobile_flow_lbl.text = "Ready. Go to 5 Export and generate one PDF or a full batch."
-
-        self._update_selection_inspector()
-        self._update_bottom_statusbar()
+    def get_selected_file(self):
+        if not self.file_chooser.selection:
+            return None
+        return self.file_chooser.selection[0]
 
     def current_page_idx(self):
         try:
@@ -3999,25 +2175,10 @@ class MediMapProApp(MDApp):
             self.engine.settings["Ext_High"] = float(self.ext_high.text)
             self.engine.settings["C_FillMin"] = float(self.c_fill.text)
             self.engine.settings["C_Eps"] = float(self.c_eps.text)
-            self.engine.settings["Use_Extent"] = bool(getattr(self, "use_extent_chk", None).active if hasattr(self, "use_extent_chk") else int(self.use_extent.text.strip() or "0"))
+            self.engine.settings["Use_Extent"] = bool(int(self.use_extent.text.strip() or "0"))
         except Exception as e:
             raise ValueError(f"Invalid settings input: {e}")
 
-    def get_app_output_dir(self):
-        """Return a writable app-controlled directory for generated files/configs."""
-        base_dir = getattr(self, "user_data_dir", None)
-        if not base_dir:
-            base_dir = os.path.join(os.path.expanduser("~"), "MediMapPro")
-
-        out_dir = os.path.join(base_dir, "output")
-        os.makedirs(out_dir, exist_ok=True)
-        return out_dir
-
-    def get_default_file_path(self):
-        if platform == "android":
-            return self.get_app_output_dir()
-        return os.path.expanduser("~")
-        
     def push_engine_settings_to_ui(self):
         s = self.engine.settings
         self.f_area.text = str(s["F_Area"])
@@ -4042,11 +2203,7 @@ class MediMapProApp(MDApp):
         self.ext_high.text = str(s["Ext_High"])
         self.c_fill.text = str(s["C_FillMin"])
         self.c_eps.text = str(s["C_Eps"])
-        
-        if hasattr(self, "use_extent_chk"):
-            self.use_extent_chk.active = bool(s["Use_Extent"])
-        elif hasattr(self, "use_extent"):
-            self.use_extent.text = "1" if s["Use_Extent"] else "0"
+        self.use_extent.text = "1" if s["Use_Extent"] else "0"
 
     def refresh_patient_and_column_lists(self):
         if self.engine.df is None or self.engine.df.empty:
@@ -4055,7 +2212,6 @@ class MediMapProApp(MDApp):
             self.patient_spinner.text = "Select Patient"
             self.column_spinner.text = "Select Column"
             return
-            self.refresh_backend_capabilities_ui()
 
         patient_names = sorted([
             str(x).strip()
@@ -4068,7 +2224,6 @@ class MediMapProApp(MDApp):
         cols = sorted([str(c) for c in self.engine.df.columns.tolist()])
         self.column_spinner.values = cols
         self.column_spinner.text = cols[0] if cols else "Select Column"
-        self.refresh_backend_capabilities_ui()
 
     def selected_patient(self):
         val = self.patient_spinner.text.strip()
@@ -4076,426 +2231,91 @@ class MediMapProApp(MDApp):
             return None
         return val
 
-    def render_preview_image(self, img_bgr, boxes_payload=None, page_idx=0, preview_zoom=PREVIEW_SCALE):
+    def render_preview_image(self, img_bgr):
         if img_bgr is None:
             return
-        if hasattr(self.preview, "set_texture_from_bgr"):
-            self.preview.set_texture_from_bgr(img_bgr)
-            if boxes_payload is None:
-                self.preview.clear_boxes()
-            else:
-                self.preview.set_boxes_payload(
-                    boxes_payload,
-                    selected_ids=self.engine.selected_box_ids,
-                    preview_zoom=preview_zoom,
-                    page_idx=page_idx,
-                )
-        else:
-            rgba = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGBA)
-            buf = rgba.tobytes()
-            texture = Texture.create(size=(rgba.shape[1], rgba.shape[0]), colorfmt="rgba")
-            texture.blit_buffer(buf, colorfmt="rgba", bufferfmt="ubyte")
-            texture.flip_vertical()
-            self.preview.texture = texture
-        Clock.schedule_once(self._post_preview_refresh, 0)
-        Clock.schedule_once(self._post_preview_refresh, 0.05)
 
-    def _build_preview_boxes_payload(self, page_idx, preview_zoom):
-        payload = []
-        for i, r in enumerate(self.engine.all_boxes):
-            payload.append({
-                "id": i,
-                "x": float(r.x0 * preview_zoom),
-                "y": float(r.y0 * preview_zoom),
-                "w": float(r.width * preview_zoom),
-                "h": float(r.height * preview_zoom),
-                "t": self.engine.box_types[i] if i < len(self.engine.box_types) else "field",
-                "mapping": self.engine.describe_box_mapping(i, page_idx),
-            })
-        return payload
-
-    def _find_mapping_for_box(self, box_id, page_idx):
-        if box_id < 0 or box_id >= len(self.engine.all_boxes):
-            return None
-        target_rect = self.engine.all_boxes[box_id]
-        best_hit = None
-        best_score = -1.0
-        for configs in self.engine.custom_mappings.values():
-            for cfg in configs:
-                if cfg.get("page", 0) != page_idx:
-                    continue
-                for r in self.engine._mapping_rect_list(cfg):
-                    score = self.engine._mapping_match_score(target_rect, r)
-                    if score > best_score:
-                        best_score = score
-                        best_hit = cfg
-        if best_hit is not None and best_score >= 1.0:
-            return best_hit
-        return None
-
-    def _sync_box_selection_ui(self):
-        ids = sorted(set(int(x) for x in self.engine.selected_box_ids if isinstance(x, int) or str(x).isdigit()))
-        self.engine.selected_box_ids = ids
-        self.box_ids_input.text = ",".join(str(i) for i in ids)
-        if hasattr(self.preview, "set_selected_ids"):
-            self.preview.set_selected_ids(ids)
-
-        if not ids:
-            self.preview_info.text = "Interactive preview ready. Tap a box to select it."
-            self._update_selection_inspector()
-            self._update_bottom_statusbar()
-            return
-
-        first = ids[0]
-        box_type = self.engine.box_types[first] if first < len(self.engine.box_types) else "field"
-        mapping = self.engine.describe_box_mapping(first, self.current_page_idx())
-        self.preview_info.text = f"Selected: {ids} | Type: {box_type} | {mapping}"
-        self._update_selection_inspector()
-        self._update_bottom_statusbar()
-        try:
-            if hasattr(self, '_show_desktop_right_section') and platform != 'android':
-                self._show_desktop_right_section('Selection')
-        except Exception:
-            pass
-
-    def on_preview_box_hover(self, hit):
-        if not hit:
-            return
-        mapping = hit.get("mapping") or "Unmapped"
-        self.preview_info.text = f"Hover Box {hit['id']} | Type: {hit.get('t', 'field')} | {mapping}"
-        if hasattr(self, "desktop_status_detail_lbl") and self.desktop_status_detail_lbl is not None:
-            self.desktop_status_detail_lbl.text = f"Hover • Box {hit['id']} • {mapping}"
-
-    def on_preview_box_tap(self, hit):
-        box_id = int(hit["id"])
-        ids = list(self.engine.selected_box_ids)
-        if box_id in ids:
-            ids.remove(box_id)
-        else:
-            ids.append(box_id)
-        self.engine.selected_box_ids = sorted(set(ids))
-        self._sync_box_selection_ui()
-
-        mapping = self._find_mapping_for_box(box_id, self.current_page_idx())
-        if mapping:
-            col = str(mapping.get("column", "")).strip()
-            trig = str(mapping.get("trigger", "")).strip()
-            if col:
-                self.column_spinner.text = col
-            self.trigger_input.text = trig
-            if hasattr(self, "grid_flag_chk"):
-                self.grid_flag_chk.active = bool(mapping.get("g", False))
-            else:
-                self.grid_flag_input.text = "1" if bool(mapping.get("g", False)) else "0"
-            self.grid_n_input.text = str(int(mapping.get("n", 1)))
-
-        self.open_mapping_popup_for_selection(primary_box_id=box_id)
-
-    def open_mapping_popup_for_selection(self, primary_box_id=None):
-        ids = sorted(set(int(x) for x in self.engine.selected_box_ids if isinstance(x, int) or str(x).isdigit()))
-        if not ids:
-            self.set_status("Tap at least one preview box first.")
-            return
-
-        page_idx = self.current_page_idx()
-        focus_id = ids[0] if primary_box_id is None else int(primary_box_id)
-        existing = self._find_mapping_for_box(focus_id, page_idx)
-
-        current_col = self.column_spinner.text if self.column_spinner.text != "Select Column" else ""
-        current_trigger = self.trigger_input.text.strip()
-        current_grid_flag = "1" if getattr(self, "grid_flag_chk", None).active else "0" if hasattr(self, "grid_flag_chk") else (self.grid_flag_input.text.strip() or "0")
-        current_grid_n = self.grid_n_input.text.strip() or "1"
-
-        if existing:
-            current_col = str(existing.get("column", "")).strip() or current_col
-            current_trigger = str(existing.get("trigger", "")).strip()
-            current_grid_flag = "1" if bool(existing.get("g", False)) else "0"
-            current_grid_n = str(int(existing.get("n", 1)))
-
-        wrap = BoxLayout(orientation="vertical", spacing=8, padding=8)
-
-        title_lbl = Label(
-            text=f"Selected boxes: {', ' .join(str(i) for i in ids)}\nPage: {page_idx}",
-            size_hint_y=None,
-            height=46,
-            halign="left",
-            valign="middle"
-        )
-        title_lbl.bind(size=self._sync_label_text_size)
-        wrap.add_widget(title_lbl)
-
-        column_spinner = Spinner(
-            text=current_col if current_col else "Select Column",
-            values=self.column_spinner.values,
-            size_hint_y=None,
-            height=44
-        )
-        wrap.add_widget(column_spinner)
-
-        trigger_input = TextInput(
-            text=current_trigger,
-            hint_text="Trigger",
-            multiline=False,
-            size_hint_y=None,
-            height=44
-        )
-        wrap.add_widget(trigger_input)
-
-        grid_row = GridLayout(cols=2, size_hint_y=None, height=64, spacing=8)
-        popup_grid_chk = CheckBox(active=(str(current_grid_flag).strip() == "1"))
-        grid_flag_wrap = BoxLayout(orientation="horizontal", spacing=8)
-        grid_flag_wrap.add_widget(popup_grid_chk)
-        grid_flag_lbl = Label(text="Is Grid?", halign="left", valign="middle")
-        grid_flag_lbl.bind(size=self._sync_label_text_size)
-        grid_flag_wrap.add_widget(grid_flag_lbl)
-        grid_n_input = TextInput(
-            text=current_grid_n,
-            hint_text="Grid N",
-            multiline=False
-        )
-        grid_row.add_widget(grid_flag_wrap)
-        grid_row.add_widget(grid_n_input)
-        wrap.add_widget(grid_row)
-
-        btn_row = GridLayout(cols=3, size_hint_y=None, height=46, spacing=6)
-        btn_assign = Button(text="Assign")
-        btn_clear = Button(text="Clear")
-        btn_close = Button(text="Close")
-        btn_row.add_widget(btn_assign)
-        btn_row.add_widget(btn_clear)
-        btn_row.add_widget(btn_close)
-        wrap.add_widget(btn_row)
-
-        popup = Popup(title="Map Selected Box(es)", content=wrap, size_hint=(0.88, 0.52))
-
-        def _assign(*_):
-            try:
-                column = column_spinner.text.strip()
-                if not column or column == "Select Column":
-                    raise ValueError("Please select a column.")
-                trigger = trigger_input.text.strip()
-                is_grid = bool(getattr(popup_grid_chk, "active", False))
-                grid_n = int(grid_n_input.text.strip() or "1")
-
-                self.engine.assign_mapping(ids, column, trigger, is_grid, grid_n, page_idx)
-
-                self.column_spinner.text = column
-                self.trigger_input.text = trigger
-                
-                if hasattr(self, "grid_flag_chk"):
-                    self.grid_flag_chk.active = bool(is_grid)
-                else:
-                    self.grid_flag_input.text = "1" if is_grid else "0"
-                self.grid_n_input.text = str(grid_n)
-                self.box_ids_input.text = ",".join(str(i) for i in ids)
-                self.engine.selected_box_ids = ids
-                self._sync_box_selection_ui()
-                self.set_status(
-                    f"Mapping saved from preview.\nPage: {page_idx}\nColumn: {column}\nBoxes: {ids}"
-                )
-                popup.dismiss()
-                self.on_preview(None)
-            except Exception as e:
-                self.set_status(f"Preview mapping error:\n{e}")
-
-        def _clear(*_):
-            try:
-                self.clear_mapping_for_box_ids(ids, page_idx)
-                self.engine.selected_box_ids = ids
-                self._sync_box_selection_ui()
-                self.set_status(f"Cleared mapping for boxes: {ids} on page {page_idx}")
-                popup.dismiss()
-                self.on_preview(None)
-            except Exception as e:
-                self.set_status(f"Clear mapping error:\n{e}")
-
-        btn_assign.bind(on_release=_assign)
-        btn_clear.bind(on_release=_clear)
-        btn_close.bind(on_release=lambda *_: popup.dismiss())
-        popup.open()
-
-    def clear_mapping_for_box_ids(self, box_ids, page_idx):
-        box_ids = sorted(set(int(x) for x in box_ids))
-        target_rects = []
-        for b_id in box_ids:
-            if b_id < 0 or b_id >= len(self.engine.all_boxes):
-                continue
-            target_rects.append(self.engine.all_boxes[b_id])
-
-        def overlaps_any(mapping_item):
-            existing_rects = self.engine._mapping_rect_list(mapping_item)
-            for er in existing_rects:
-                for sr in target_rects:
-                    if self.engine._rects_refer_to_same_target(er, sr, tol=0.20):
-                        return True
-            return False
-
-        for k in list(self.engine.custom_mappings.keys()):
-            kept = []
-            for m in self.engine.custom_mappings[k]:
-                if m.get("page", 0) != page_idx:
-                    kept.append(m)
-                    continue
-                if overlaps_any(m):
-                    continue
-                kept.append(m)
-            if kept:
-                self.engine.custom_mappings[k] = kept
-            else:
-                del self.engine.custom_mappings[k]
-
-    def on_clear_selected_mapping(self, *_):
-        ids = sorted(set(int(x) for x in getattr(self.engine, "selected_box_ids", []) if isinstance(x, int) or str(x).isdigit()))
-        if not ids:
-            self.set_status("Select at least one box first.")
-            return
-        self.clear_mapping_for_box_ids(ids, self.current_page_idx())
-        self._sync_box_selection_ui()
-        self.set_status(f"Cleared mapping for box(es): {', '.join(str(i) for i in ids)}")
+        rgba = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGBA)
+        buf = rgba.tobytes()
+        texture = Texture.create(size=(rgba.shape[1], rgba.shape[0]), colorfmt="rgba")
+        texture.blit_buffer(buf, colorfmt="rgba", bufferfmt="ubyte")
+        texture.flip_vertical()
+        self.preview.texture = texture
 
     # --------------------------------------------------------
     # File loading
     # --------------------------------------------------------
-    def _load_dataframe_from_local_path(self, path):
-        self.engine.load_dataframe(path)
-        self.refresh_patient_and_column_lists()
-        self.set_status(
-            f"Data loaded:\n{os.path.basename(path)}\nRows: {len(self.engine.df)}"
-        )
-        if self.engine.pdf_path:
-            Clock.schedule_once(lambda dt: self.on_preview(None), 0.1)
-
     def on_load_csv(self, instance):
-        if platform == "android":
-            return self._open_android_document_picker(
-                request_code=42431,
-                mime_type="*/*",
-                title="data file",
-                on_picked=self._load_dataframe_from_local_path,
-                cancel_message="Data file selection cancelled.",
-                allowed_suffixes=[".csv", ".xlsx", ".xls"],
-                extra_mime_types=[
-                    "text/csv",
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    "application/vnd.ms-excel",
-                    "text/plain",
-                    "application/octet-stream",
-                ],
+        try:
+            path = self.get_selected_file()
+            if not path:
+                self.set_status("Please select a CSV/XLSX file.")
+                return
+    
+            self.engine.load_dataframe(path)
+            self.refresh_patient_and_column_lists()
+    
+            self.set_status(
+                f"Data loaded:\n{os.path.basename(path)}\nRows: {len(self.engine.df)}"
             )
+    
+            if self.engine.pdf_path:
+                Clock.schedule_once(lambda dt: self.on_preview(None), 0.1)
+    
+        except Exception as e:
+            traceback.print_exc()
+            self.set_status(f"Load data error:\n{e}")
 
-        content = FileChooserListView(
-            filters=["*.csv", "*.xlsx", "*.xls"],
-            path=self.get_default_file_path()
-        )
-        popup = Popup(title="Select CSV/XLSX File", content=content, size_hint=(0.9, 0.9))
-        content.bind(on_submit=lambda obj, sel, touch: self._handle_csv_selection(sel, popup))
-        popup.open()
-
-    def _handle_csv_selection(self, selection, popup):
-        if selection:
-            try:
-                path = selection[0]
-                self._load_dataframe_from_local_path(path)
-            except Exception as e:
-                traceback.print_exc()
-                self.set_status(f"Load data error:\n{e}")
-        popup.dismiss()
-
-    def _load_config_from_local_path(self, path):
-        if not path.lower().endswith(".json"):
-            raise ValueError("Please select a JSON config file.")
-
-        self.engine.load_config(path)
-        self.engine.all_boxes = []
-        self.engine.box_types = []
-        self.push_engine_settings_to_ui()
-        self.set_status(f"Config loaded:\n{os.path.basename(path)}")
-        self.refresh_backend_capabilities_ui()
 
     def on_load_config(self, instance):
-        if platform == "android":
-            return self._open_android_document_picker(
-                request_code=42432,
-                mime_type="*/*",
-                title="config file",
-                on_picked=self._load_config_from_local_path,
-                cancel_message="Config selection cancelled.",
-                required_suffix=".json",
-                allowed_suffixes=[".json"],
-                extra_mime_types=["application/json", "text/plain", "application/octet-stream"],
-            )
+        try:
+            path = self.get_selected_file()
+            if not path or not path.lower().endswith(".json"):
+                self.set_status("Please select a JSON config file.")
+                return
 
-        content = FileChooserListView(
-            filters=["*.json"],
-            path=self.get_default_file_path()
-        )
-        popup = Popup(title="Select Config File", content=content, size_hint=(0.9, 0.9))
-        content.bind(on_submit=lambda obj, sel, touch: self._handle_load_config_selection(sel, popup))
-        popup.open()
-
-    def _handle_load_config_selection(self, selection, popup):
-        if selection:
-            try:
-                path = selection[0]
-                self._load_config_from_local_path(path)
-            except Exception as e:
-                traceback.print_exc()
-                self.set_status(f"Load config error:\n{e}")
-        popup.dismiss()
-
-    def _merge_config_from_local_path(self, path):
-        if not path.lower().endswith(".json"):
-            raise ValueError("Please select a JSON config file.")
-
-        with open(path, "r", encoding="utf-8") as f:
-            incoming = json.load(f)
-
-        self.apply_ui_settings_to_engine()
-        self.engine.merge_config_into_current(
-            incoming_cfg=incoming,
-            keep_current_detection=True,
-            prefer="incoming"
-        )
-        self.engine.all_boxes = []
-        self.engine.box_types = []
-        self.push_engine_settings_to_ui()
-        self.set_status(f"Config merged:\n{os.path.basename(path)}")
+            self.engine.load_config(path)
+            self.engine.all_boxes = []
+            self.engine.box_types = []
+            self.push_engine_settings_to_ui()
+            self.set_status(f"Config loaded:\n{os.path.basename(path)}")
+        except Exception as e:
+            self.set_status(f"Load config error:\n{e}")
 
     def on_merge_config(self, instance):
-        if platform == "android":
-            return self._open_android_document_picker(
-                request_code=42433,
-                mime_type="*/*",
-                title="config file to merge",
-                on_picked=self._merge_config_from_local_path,
-                cancel_message="Merge config selection cancelled.",
-                required_suffix=".json",
-                allowed_suffixes=[".json"],
-                extra_mime_types=["application/json", "text/plain", "application/octet-stream"],
+        try:
+            path = self.get_selected_file()
+            if not path or not path.lower().endswith(".json"):
+                self.set_status("Please select a JSON config file.")
+                return
+
+            with open(path, "r", encoding="utf-8") as f:
+                incoming = json.load(f)
+
+            self.apply_ui_settings_to_engine()
+            self.engine.merge_config_into_current(
+                incoming_cfg=incoming,
+                keep_current_detection=True,
+                prefer="incoming"
             )
-
-        content = FileChooserListView(
-            filters=["*.json"],
-            path=self.get_default_file_path()
-        )
-        popup = Popup(title="Select Config File to Merge", content=content, size_hint=(0.9, 0.9))
-        content.bind(on_submit=lambda obj, sel, touch: self._handle_merge_config_selection(sel, popup))
-        popup.open()
-
-    def _handle_merge_config_selection(self, selection, popup):
-        if selection:
-            try:
-                path = selection[0]
-                self._merge_config_from_local_path(path)
-            except Exception as e:
-                traceback.print_exc()
-                self.set_status(f"Merge config error:\n{e}")
-        popup.dismiss()
+            self.engine.all_boxes = []
+            self.engine.box_types = []
+            self.push_engine_settings_to_ui()
+            self.set_status(f"Config merged:\n{os.path.basename(path)}")
+        except Exception as e:
+            self.set_status(f"Merge config error:\n{e}")
 
     def on_save_config(self, instance):
         try:
+            if not self.engine.pdf_path:
+                self.set_status("Load a PDF first before saving config.")
+                return
+
             self.apply_ui_settings_to_engine()
-            out_path = os.path.join(self.get_app_output_dir(), CONFIG_FILENAME)
+            out_path = os.path.join(
+                os.path.dirname(self.engine.pdf_path),
+                "medimap_config.json"
+            )
             self.engine.save_config(out_path)
             self.set_status(f"Config saved:\n{out_path}")
         except Exception as e:
@@ -4518,8 +2338,7 @@ class MediMapProApp(MDApp):
                         page_idx=idx,
                         preview_zoom=PREVIEW_SCALE
                     )
-                    self.render_preview_image(raw_img, boxes_payload=[], page_idx=idx, preview_zoom=PREVIEW_SCALE)
-                    self._sync_box_selection_ui()
+                    self.render_preview_image(raw_img)
                     self.set_status(f"Raw PDF preview.\nPage: {idx}")
         except Exception as e:
             self.set_status(f"Prev page error:\n{e}")
@@ -4539,8 +2358,7 @@ class MediMapProApp(MDApp):
                         page_idx=idx,
                         preview_zoom=PREVIEW_SCALE
                     )
-                    self.render_preview_image(raw_img, boxes_payload=[], page_idx=idx, preview_zoom=PREVIEW_SCALE)
-                    self._sync_box_selection_ui()
+                    self.render_preview_image(raw_img)
                     self.set_status(f"Raw PDF preview.\nPage: {idx}")
         except Exception as e:
             self.set_status(f"Next page error:\n{e}")
@@ -4563,7 +2381,6 @@ class MediMapProApp(MDApp):
             self.apply_ui_settings_to_engine()
             page_idx = self.current_page_idx()
             self.engine.run_detection(page_idx=page_idx)
-            self.engine.selected_box_ids = []
             self.set_status(
                 f"Detection done.\n"
                 f"Page: {page_idx}\n"
@@ -4579,81 +2396,32 @@ class MediMapProApp(MDApp):
             if not self.engine.pdf_path:
                 self.set_status("Load PDF first.")
                 return
-
+    
             page_idx = self.current_page_idx()
             patient = self.selected_patient()
-
-            if platform == "android" and not self.engine.supports_export_backend():
-                raw_img = self.engine.get_raw_preview_pixmap(
-                    page_idx=page_idx,
-                    preview_zoom=PREVIEW_SCALE
-                )
-                boxes_payload = self._build_preview_boxes_payload(
-                    page_idx=page_idx,
-                    preview_zoom=PREVIEW_SCALE,
-                ) if self.engine.all_boxes else []
-                self.render_preview_image(
-                    raw_img,
-                    boxes_payload=boxes_payload,
-                    page_idx=page_idx,
-                    preview_zoom=PREVIEW_SCALE,
-                )
-                self._sync_box_selection_ui()
-                if patient and self.engine.df is not None and not self.engine.df.empty:
-                    self.set_status(
-                        f"Android detection preview rendered.\n"
-                        f"Page: {page_idx}\n"
-                        f"Boxes: {len(self.engine.all_boxes)}\n"
-                        f"PDF export backend is unavailable in this build."
-                    )
-                else:
-                    self.set_status(
-                        f"Android raw preview rendered.\n"
-                        f"Page: {page_idx}\n"
-                        f"Boxes shown: {len(self.engine.all_boxes)}\n"
-                        f"PDF export backend is unavailable in this build."
-                    )
-                return
-
+    
             if not patient or self.engine.df is None or self.engine.df.empty:
                 raw_img = self.engine.get_raw_preview_pixmap(
                     page_idx=page_idx,
                     preview_zoom=PREVIEW_SCALE
                 )
-                self.render_preview_image(
-                    raw_img,
-                    boxes_payload=[],
-                    page_idx=page_idx,
-                    preview_zoom=PREVIEW_SCALE,
-                )
-                self._sync_box_selection_ui()
+                self.render_preview_image(raw_img)
                 self.set_status(
                     f"Raw PDF preview.\n"
                     f"Page: {page_idx}\n"
                     f"No patient selected yet."
                 )
                 return
-
+    
             self.apply_ui_settings_to_engine()
-
-            img = self.engine.get_processed_preview_pixmap(
+    
+            img = self.engine.get_preview_pixmap_with_boxes(
                 patient_name=patient,
                 page_idx=page_idx,
                 preview_zoom=PREVIEW_SCALE
             )
-            boxes_payload = self._build_preview_boxes_payload(
-                page_idx=page_idx,
-                preview_zoom=PREVIEW_SCALE,
-            )
-            self.render_preview_image(
-                img,
-                boxes_payload=boxes_payload,
-                page_idx=page_idx,
-                preview_zoom=PREVIEW_SCALE,
-            )
-            self._sync_box_selection_ui()
-
-            self.refresh_backend_capabilities_ui()
+            self.render_preview_image(img)
+    
             self.set_status(
                 f"Preview rendered.\n"
                 f"Patient: {patient}\n"
@@ -4684,17 +2452,65 @@ class MediMapProApp(MDApp):
             if not box_ids:
                 raise ValueError("Please enter at least one Box ID.")
 
+            selected_rects = []
+            for b_id in box_ids:
+                if b_id < 0 or b_id >= len(self.engine.all_boxes):
+                    raise ValueError(f"Box ID {b_id} is out of range.")
+                selected_rects.append(self.engine.all_boxes[b_id])
+
+            selected_rects = sorted(selected_rects, key=lambda rr: (round(rr.y0, 3), rr.x0))
             trigger = self.trigger_input.text.strip()
-            is_grid = bool(self.grid_flag_chk.active) if hasattr(self, "grid_flag_chk") else bool(int(self.grid_flag_input.text.strip() or "0"))
+            is_grid = bool(int(self.grid_flag_input.text.strip() or "0"))
             grid_n = int(self.grid_n_input.text.strip() or "1")
             page_idx = self.current_page_idx()
 
-            self.engine.assign_mapping(box_ids, column, trigger, is_grid, grid_n, page_idx)
-            self.engine.selected_box_ids = sorted(set(box_ids))
-            self._sync_box_selection_ui()
+            map_key = f"{column}_{trigger}"
+
+            def mapping_conflicts_with_selected(mapping_item, selected_rects):
+                existing_rects = self.engine._mapping_rect_list(mapping_item)
+                if not existing_rects:
+                    return False
+
+                for er in existing_rects:
+                    for sr in selected_rects:
+                        if self.engine._rects_refer_to_same_target(er, sr, tol=0.20):
+                            return True
+                return False
+
+            for k in list(self.engine.custom_mappings.keys()):
+                kept = []
+                for m in self.engine.custom_mappings[k]:
+                    if m.get("page", 0) != page_idx:
+                        kept.append(m)
+                        continue
+
+                    if mapping_conflicts_with_selected(m, selected_rects):
+                        continue
+
+                    kept.append(m)
+
+                if kept:
+                    self.engine.custom_mappings[k] = kept
+                else:
+                    del self.engine.custom_mappings[k]
+
+            if map_key not in self.engine.custom_mappings:
+                self.engine.custom_mappings[map_key] = []
+
+            self.engine.custom_mappings[map_key].append({
+                "column": column,
+                "trigger": trigger,
+                "rects": selected_rects,
+                "page": page_idx,
+                "g": is_grid,
+                "n": grid_n
+            })
 
             self.set_status(
-                f"Mapping saved.\nPage: {page_idx}\nColumn: {column}\nBoxes: {box_ids}"
+                f"Mapping saved.\n"
+                f"Page: {page_idx}\n"
+                f"Column: {column}\n"
+                f"Boxes: {box_ids}"
             )
             self.on_preview(None)
         except Exception as e:
@@ -4705,9 +2521,6 @@ class MediMapProApp(MDApp):
     # --------------------------------------------------------
     def on_generate_single(self, instance):
         try:
-            if not self.engine.supports_export_backend():
-                self.set_status("PDF export backend is unavailable in this build.")
-                return
             if not self.engine.pdf_path:
                 self.set_status("Load PDF first.")
                 return
@@ -4718,143 +2531,62 @@ class MediMapProApp(MDApp):
                 return
 
             page_idx = self.current_page_idx()
-            out_dir = self.get_app_output_dir()
+            doc = self.engine.process_doc(patient, page_idx=page_idx)
+
+            safe_name = "".join(c if c.isalnum() or c in (" ", "-", "_") else "_" for c in patient).strip()
+            if not safe_name:
+                safe_name = "Unknown"
+
             out_path = os.path.join(
-                out_dir,
-                f"Filled_{safe_name(patient)}_page_{page_idx + 1}.pdf"
+                os.path.dirname(self.engine.pdf_path),
+                f"Filled_{safe_name}_page_{page_idx + 1}.pdf"
             )
+            
 
-            self.engine.export_filled_pdf(patient, out_path, page_idx=page_idx)
-            self.set_status("Generated:\n" + out_path)
+            doc.save(out_path)
+            doc.close()
+
+            self.set_status(f"Generated:\n{out_path}")
         except Exception as e:
             traceback.print_exc()
-            self.set_status("Generate single error:\n" + str(e))
+            self.set_status(f"Generate single error:\n{e}")
 
-    def _copy_android_uri_to_local_file(self, uri, default_name="selected_input", required_suffix=None, allowed_suffixes=None):
-        return self.android_picker.copy_uri_to_local_file(
-            uri,
-            default_name=default_name,
-            required_suffix=required_suffix,
-            allowed_suffixes=allowed_suffixes,
-        )
-
-    def _open_android_document_picker(self, request_code, mime_type="*/*", title="document", on_picked=None, cancel_message=None, required_suffix=None, allowed_suffixes=None, extra_mime_types=None):
-        return self.android_picker.open_document_picker(
-            request_code=request_code,
-            mime_type=mime_type,
-            title=title,
-            on_picked=on_picked,
-            cancel_message=cancel_message,
-            required_suffix=required_suffix,
-            allowed_suffixes=allowed_suffixes,
-            extra_mime_types=extra_mime_types,
-        )
-
-    def _load_pdf_from_path(self, path):
-        try:
-            self.set_status(f"Loading PDF...\n{os.path.basename(path)}")
-            total = self.engine.load_pdf(path)
-
-            cur_idx = self.current_page_idx()
-            max_idx = max(total - 1, 0)
-            if cur_idx > max_idx:
-                self.page_input.text = "0"
-
-            self.set_status(
-                f"PDF loaded: {os.path.basename(path)}\n"
-                f"Pages: {total}\n"
-                f"Rendering preview..."
-            )
-            Clock.schedule_once(lambda dt: self._finish_pdf_load_preview(path, total), 0.05)
-        except Exception as e:
-            traceback.print_exc()
-            self.set_status(f"PDF Error: {e}")
-
-    def _copy_android_uri_to_local_pdf(self, uri):
-        return self._copy_android_uri_to_local_file(
-            uri,
-            default_name="selected_pdf",
-            required_suffix=".pdf",
-            allowed_suffixes=[".pdf"],
-        )
-
-    def _open_android_pdf_picker(self):
-        return self._open_android_document_picker(
-            request_code=42421,
-            mime_type="application/pdf",
-            title="PDF",
-            on_picked=self._load_pdf_from_path,
-            cancel_message="PDF selection cancelled.",
-            required_suffix=".pdf",
-            allowed_suffixes=[".pdf"],
-        )
-
-    def _open_legacy_pdf_picker(self):
+    def on_load_pdf(self, instance):
+        """Opens a popup to select the PDF template."""
         content = FileChooserListView(
             filters=["*.pdf"],
-            path=self.get_default_file_path()
+            path=self.file_chooser.path
         )
         popup = Popup(title="Select PDF Template", content=content, size_hint=(0.9, 0.9))
         content.bind(on_submit=lambda obj, sel, touch: self._handle_pdf_selection(sel, popup))
         popup.open()
-
-    def on_load_pdf(self, instance):
-        if platform == "android":
-            return self._open_android_pdf_picker()
-        return self._open_legacy_pdf_picker()
     
     def _handle_pdf_selection(self, selection, popup):
-        popup.dismiss()
-
         if selection:
             try:
                 path = selection[0]
-                self.set_status(f"Loading PDF...\n{os.path.basename(path)}")
-
                 total = self.engine.load_pdf(path)
-
+    
                 cur_idx = self.current_page_idx()
                 max_idx = max(total - 1, 0)
                 if cur_idx > max_idx:
                     self.page_input.text = "0"
-
+    
+                raw_img = self.engine.get_raw_preview_pixmap(
+                    page_idx=self.current_page_idx(),
+                    preview_zoom=PREVIEW_SCALE
+                )
+                self.render_preview_image(raw_img)
+    
                 self.set_status(
                     f"PDF Loaded: {os.path.basename(path)}\n"
                     f"Pages: {total}\n"
-                    f"Rendering preview..."
+                    f"Showing raw template page: {self.current_page_idx()}"
                 )
-                Clock.schedule_once(lambda dt: self._finish_pdf_load_preview(path, total), 0.05)
             except Exception as e:
                 traceback.print_exc()
                 self.set_status(f"PDF Error: {e}")
-
-    def _finish_pdf_load_preview(self, path, total):
-        try:
-            page_idx = self.current_page_idx()
-            raw_img = self.engine.get_raw_preview_pixmap(
-                page_idx=page_idx,
-                preview_zoom=PREVIEW_SCALE
-            )
-            self.render_preview_image(
-                raw_img,
-                boxes_payload=[],
-                page_idx=page_idx,
-                preview_zoom=PREVIEW_SCALE
-            )
-            self._sync_box_selection_ui()
-            Clock.schedule_once(self._post_preview_refresh, 0.05)
-
-            mode_note = "\nMode: export is limited in this build" if not self.engine.supports_export_backend() else ""
-            self.set_status(
-                f"PDF Loaded: {os.path.basename(path)}\n"
-                f"Pages: {total}\n"
-                f"Showing raw template page: {page_idx}"
-                f"{mode_note}"
-            )
-        except Exception as e:
-            traceback.print_exc()
-            self.set_status(f"PDF Preview Error: {e}")
-
+        popup.dismiss()
 
     def open_text_input_popup(self, title, hint_text, on_submit_callback, default_text=""):
         wrap = BoxLayout(orientation="vertical", spacing=8, padding=8)
@@ -4921,17 +2653,11 @@ class MediMapProApp(MDApp):
     
         except Exception as e:
             traceback.print_exc()
-            msg = str(e)
-            if "certificate" in msg.lower() or "ssl" in msg.lower():
-                msg += "\n\nTip: exporting/downloading the sheet as CSV/XLSX and loading the file directly is usually more reliable on Android."
-            self.set_status(f"Google Sheet load error:\n{msg}")
+            self.set_status(f"Google Sheet load error:\n{e}")
     
     def on_generate_batch(self, instance):
         """Processes all rows in the data file and generates PDFs."""
         try:
-            if not self.engine.supports_export_backend():
-                self.set_status("PDF export backend is unavailable in this build.")
-                return
             if self.engine.df is None or self.engine.df.empty:
                 self.set_status("Load CSV/XLSX first.")
                 return
@@ -4941,18 +2667,20 @@ class MediMapProApp(MDApp):
                 return
 
             names = sorted(self.engine.df["_DISPLAY_NAME"].dropna().astype(str).unique())
-            out_dir = os.path.join(self.get_app_output_dir(), "batch_output")
+            out_dir = os.path.join(os.path.dirname(self.engine.pdf_path), "batch_output")
             os.makedirs(out_dir, exist_ok=True)
 
             success = 0
             skipped = 0
-            page_idx = self.current_page_idx()
 
             for patient_name in names:
                 try:
+                    doc = self.engine.process_doc(patient_name, page_idx=self.current_page_idx())
                     safe_p_name = "".join(c if c.isalnum() or c in (" ", "-", "_") else "_" for c in patient_name).strip()
+                    
                     out_path = os.path.join(out_dir, f"Filled_{safe_p_name or 'Unknown'}.pdf")
-                    self.engine.export_filled_pdf(patient_name, out_path, page_idx=page_idx)
+                    doc.save(out_path)
+                    doc.close()
                     success += 1
                 except Exception:
                     skipped += 1
@@ -4960,7 +2688,7 @@ class MediMapProApp(MDApp):
             self.set_status(f"Batch done.\nFolder: {out_dir}\nSuccess: {success} | Skipped: {skipped}")
         except Exception as e:
             traceback.print_exc()
-            self.set_status("Batch Error: " + str(e))
+            self.set_status(f"Batch Error: {e}")
 
 
 if __name__ == "__main__":
