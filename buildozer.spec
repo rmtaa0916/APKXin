@@ -5,21 +5,24 @@ package.domain = org.medimap
 
 source.dir = .
 source.include_exts = py,png,jpg,jpeg,kv,atlas,xlsx,pdf,json,csv
+source.exclude_dirs = .git,__pycache__,bin,.buildozer,venv,.venv
 version = 1.6.0
 
-requirements = python3==3.10.11,hostpython3==3.10.11,kivy,kivymd,opencv,pandas,numpy,openpyxl,pypdf,typing_extensions,reportlab,pillow,pymupdf
+requirements = python3,kivy,kivymd,opencv,pandas,numpy,openpyxl,pypdf,typing_extensions,reportlab,pillow
 
 orientation = portrait
 fullscreen = 0
 
 android.archs = arm64-v8a
-android.api = 33
+android.api = 36
 android.minapi = 21
-android.ndk = 25b
+android.ndk = 29
 android.accept_sdk_license = True
 android.allow_backup = True
-
+android.enable_androidx = True
 android.permissions = INTERNET
+
+p4a.branch = develop
 
 [buildozer]
 log_level = 2
