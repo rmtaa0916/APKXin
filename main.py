@@ -11,6 +11,8 @@ import base64
 import zipfile
 import traceback
 import re
+import ssl
+import urllib.request
 from urllib.parse import urlparse, parse_qs
 from functools import partial
 
@@ -323,6 +325,77 @@ def gsheet_url_to_csv_export(url):
     gid = extract_gsheet_gid(url)
     return f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
 
+
+def download_url_bytes(url, timeout=30):
+    """Download bytes from a URL with an Android-friendly SSL fallback."""
+    headers = {
+        "User-Agent": "Mozilla/5.0 MediMapPro/1.0",
+        "Accept": "text/csv,text/plain,application/octet-stream,*/*",
+    }
+
+    contexts = []
+    if platform == "android":
+        try:
+            import certifi
+            contexts.append(ssl.create_default_context(cafile=certifi.where()))
+        except Exception:
+            pass
+        try:
+            contexts.append(ssl.create_default_context())
+        except Exception:
+            pass
+        try:
+            contexts.append(ssl._create_unverified_context())
+        except Exception:
+            pass
+    else:
+        try:
+            contexts.append(ssl.create_default_context())
+        except Exception:
+            contexts.append(None)
+
+    if not contexts:
+        contexts = [None]
+
+    last_error = None
+    for ctx in contexts:
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            if ctx is None:
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    return resp.read()
+            with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+                return resp.read()
+        except Exception as e:
+            last_error = e
+
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("Failed to download URL data.")
+
+
+def load_google_sheet_dataframe(url):
+    csv_url = gsheet_url_to_csv_export(url)
+    raw = download_url_bytes(csv_url, timeout=30)
+    if not raw:
+        raise ValueError("Google Sheet export returned an empty response.")
+
+    sniff = raw[:512].lower()
+    if b"<html" in sniff or b"<!doctype html" in sniff:
+        raise ValueError(
+            "Google Sheet export returned HTML instead of CSV. "
+            "Make sure the sheet and selected tab are shared/accessible."
+        )
+
+    try:
+        return pd.read_csv(io.BytesIO(raw), dtype=str).fillna("")
+    except Exception:
+        try:
+            return pd.read_csv(io.StringIO(raw.decode("utf-8-sig")), dtype=str).fillna("")
+        except Exception as e:
+            raise ValueError(f"Downloaded Google Sheet data could not be parsed as CSV. Details: {e}")
+
+
 # ============================================================
 # Detection / mapping engine
 # ============================================================
@@ -365,9 +438,8 @@ class MediMapEngine:
         # ---------------------------------------------
         if src.startswith("http://") or src.startswith("https://"):
             if "docs.google.com/spreadsheets" in src:
-                csv_url = gsheet_url_to_csv_export(src)
                 try:
-                    df = pd.read_csv(csv_url, dtype=str).fillna("")
+                    df = load_google_sheet_dataframe(src)
                 except Exception as e:
                     raise ValueError(
                         "Failed to load Google Sheet from URL. "
@@ -514,6 +586,9 @@ class MediMapEngine:
         Full detection/fill/export currently depends on PyMuPDF (fitz).
         """
         return bool(FITZ_AVAILABLE)
+
+    def android_preview_only_mode(self):
+        return platform == "android" and not self.supports_processing_backend()
 
     def get_raw_preview_pixmap(self, page_idx=0, preview_zoom=1.5):
         """Render the raw loaded PDF page without filling or boxes."""
@@ -3021,23 +3096,44 @@ class MediMapProApp(MDApp):
     # --------------------------------------------------------
     # File loading
     # --------------------------------------------------------
-    def _load_dataframe_from_path(self, path):
+    def _load_dataframe_from_local_path(self, path):
         self.engine.load_dataframe(path)
         self.refresh_patient_and_column_lists()
-
-        cols = self.engine.df_columns()
-        self.patient_col_spinner.values = cols
-        self.patient_col_spinner.text = cols[0] if cols else ""
-
-        names = self.engine.patient_names()
-        self.patient_spinner.values = names
-        self.patient_spinner.text = names[0] if names else ""
-
-        self.set_status(f"Data loaded:\n{os.path.basename(path)}\nRows: {len(self.engine.df)}")
-        if self.engine.total_pages() > 0:
+        self.set_status(
+            f"Data loaded:\n{os.path.basename(path)}\nRows: {len(self.engine.df)}"
+        )
+        if self.engine.pdf_path:
             Clock.schedule_once(lambda dt: self.on_preview(None), 0.1)
 
-    def _load_config_from_path(self, path):
+    def on_load_csv(self, instance):
+        if platform == "android":
+            return self._open_android_document_picker(
+                request_code=42431,
+                mime_type="*/*",
+                title="data file",
+                on_picked=self._load_dataframe_from_local_path,
+                cancel_message="Data file selection cancelled."
+            )
+
+        content = FileChooserListView(
+            filters=["*.csv", "*.xlsx", "*.xls"],
+            path=self.get_default_file_path()
+        )
+        popup = Popup(title="Select CSV/XLSX File", content=content, size_hint=(0.9, 0.9))
+        content.bind(on_submit=lambda obj, sel, touch: self._handle_csv_selection(sel, popup))
+        popup.open()
+
+    def _handle_csv_selection(self, selection, popup):
+        if selection:
+            try:
+                path = selection[0]
+                self._load_dataframe_from_local_path(path)
+            except Exception as e:
+                traceback.print_exc()
+                self.set_status(f"Load data error:\n{e}")
+        popup.dismiss()
+
+    def _load_config_from_local_path(self, path):
         if not path.lower().endswith(".json"):
             raise ValueError("Please select a JSON config file.")
 
@@ -3047,7 +3143,36 @@ class MediMapProApp(MDApp):
         self.push_engine_settings_to_ui()
         self.set_status(f"Config loaded:\n{os.path.basename(path)}")
 
-    def _merge_config_from_path(self, path):
+    def on_load_config(self, instance):
+        if platform == "android":
+            return self._open_android_document_picker(
+                request_code=42432,
+                mime_type="application/json",
+                title="config file",
+                on_picked=self._load_config_from_local_path,
+                cancel_message="Config selection cancelled.",
+                required_suffix=".json",
+            )
+
+        content = FileChooserListView(
+            filters=["*.json"],
+            path=self.get_default_file_path()
+        )
+        popup = Popup(title="Select Config File", content=content, size_hint=(0.9, 0.9))
+        content.bind(on_submit=lambda obj, sel, touch: self._handle_load_config_selection(sel, popup))
+        popup.open()
+
+    def _handle_load_config_selection(self, selection, popup):
+        if selection:
+            try:
+                path = selection[0]
+                self._load_config_from_local_path(path)
+            except Exception as e:
+                traceback.print_exc()
+                self.set_status(f"Load config error:\n{e}")
+        popup.dismiss()
+
+    def _merge_config_from_local_path(self, path):
         if not path.lower().endswith(".json"):
             raise ValueError("Please select a JSON config file.")
 
@@ -3065,240 +3190,16 @@ class MediMapProApp(MDApp):
         self.push_engine_settings_to_ui()
         self.set_status(f"Config merged:\n{os.path.basename(path)}")
 
-    def _copy_android_uri_to_local_file(self, uri, default_name="selected_input", required_suffix=None):
-        if platform != "android" or not ANDROID_JAVA_AVAILABLE:
-            raise RuntimeError("Android document picker is unavailable.")
-
-        if uri is None:
-            raise ValueError("Android returned no document URI.")
-
-        activity_obj = AndroidPythonActivity.mActivity
-        resolver = activity_obj.getContentResolver()
-
-        if isinstance(uri, str):
-            uri_string = uri.strip()
-        else:
-            try:
-                uri_string = str(uri.toString()).strip()
-            except Exception:
-                uri_string = ""
-
-        if not uri_string:
-            raise ValueError("Android returned an empty document URI.")
-        if not (uri_string.startswith("content://") or uri_string.startswith("file://")):
-            raise ValueError(f"Android returned an invalid document URI: {uri_string}")
-
-        uri = AndroidUri.parse(uri_string)
-        input_stream = resolver.openInputStream(uri)
-        if input_stream is None:
-            raise ValueError("Unable to open the selected Android document.")
-
-        display_name = None
-        cursor = None
-        try:
-            OpenableColumns = autoclass("android.provider.OpenableColumns")
-            cursor = resolver.query(uri, None, None, None, None)
-            if cursor is not None and cursor.moveToFirst():
-                idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                if idx >= 0:
-                    display_name = cursor.getString(idx)
-        except Exception:
-            display_name = None
-        finally:
-            try:
-                if cursor is not None:
-                    cursor.close()
-            except Exception:
-                pass
-
-        filename = safe_name(display_name or default_name)
-        if required_suffix:
-            required_suffix = str(required_suffix).strip()
-            if required_suffix and not filename.lower().endswith(required_suffix.lower()):
-                filename += required_suffix
-
-        out_dir = self.get_app_output_dir()
-        os.makedirs(out_dir, exist_ok=True)
-        out_path = os.path.join(out_dir, filename)
-
-        BufferedInputStream = autoclass("java.io.BufferedInputStream")
-        BufferedOutputStream = autoclass("java.io.BufferedOutputStream")
-        FileOutputStream = autoclass("java.io.FileOutputStream")
-        ByteArray = autoclass("java.lang.reflect.Array")
-        JavaByte = autoclass("java.lang.Byte").TYPE
-
-        bis = BufferedInputStream(input_stream)
-        bos = BufferedOutputStream(FileOutputStream(out_path))
-        buffer = ByteArray.newInstance(JavaByte, 65536)
-
-        try:
-            while True:
-                count = bis.read(buffer)
-                if count == -1:
-                    break
-                bos.write(buffer, 0, count)
-            bos.flush()
-        finally:
-            try:
-                bis.close()
-            except Exception:
-                pass
-            try:
-                bos.close()
-            except Exception:
-                pass
-            try:
-                input_stream.close()
-            except Exception:
-                pass
-
-        return out_path
-
-    def _open_android_document_picker(self, request_code, mime_type="*/*", mime_types=None, title="document", on_picked=None, cancel_message=None):
-        if platform != "android" or not ANDROID_JAVA_AVAILABLE:
-            raise RuntimeError("Android system document picker is unavailable.")
-
-        if on_picked is None:
-            raise ValueError("Android document picker callback is required.")
-
-        def _on_activity_result(request_code_result, result_code, intent):
-            if request_code_result != request_code:
-                return
-            activity.unbind(on_activity_result=_on_activity_result)
-            if result_code != -1 or intent is None:
-                self.set_status(cancel_message or f"{title.capitalize()} selection cancelled.")
-                return
-            try:
-                uri = intent.getData()
-                if uri is None:
-                    raise ValueError(f"No {title} URI was returned by Android.")
-                try:
-                    flags = intent.getFlags()
-                    take_flags = flags & (AndroidIntent.FLAG_GRANT_READ_URI_PERMISSION | AndroidIntent.FLAG_GRANT_WRITE_URI_PERMISSION)
-                    AndroidPythonActivity.mActivity.getContentResolver().takePersistableUriPermission(uri, take_flags)
-                except Exception:
-                    pass
-                on_picked(uri)
-            except Exception as e:
-                traceback.print_exc()
-                self.set_status(f"{title.capitalize()} Error: {e}")
-
-        activity.bind(on_activity_result=_on_activity_result)
-        intent = AndroidIntent(AndroidIntent.ACTION_OPEN_DOCUMENT)
-        intent.addCategory(AndroidIntent.CATEGORY_OPENABLE)
-        intent.setType(mime_type or "*/*")
-        intent.addFlags(AndroidIntent.FLAG_GRANT_READ_URI_PERMISSION)
-        intent.addFlags(AndroidIntent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
-
-        if mime_types:
-            try:
-                StringClass = autoclass("java.lang.String")
-                ByteArray = autoclass("java.lang.reflect.Array")
-                java_mime_types = ByteArray.newInstance(StringClass, len(mime_types))
-                for idx, value in enumerate(mime_types):
-                    java_mime_types[idx] = value
-                intent.putExtra(AndroidIntent.EXTRA_MIME_TYPES, java_mime_types)
-            except Exception:
-                pass
-
-        AndroidPythonActivity.mActivity.startActivityForResult(intent, request_code)
-
-    def on_load_csv(self, instance):
-        if platform == "android":
-            try:
-                return self._open_android_document_picker(
-                    request_code=42422,
-                    mime_type="*/*",
-                    mime_types=[
-                        "text/csv",
-                        "application/vnd.ms-excel",
-                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        "application/octet-stream",
-                    ],
-                    title="data file",
-                    cancel_message="Data file selection cancelled.",
-                    on_picked=lambda uri: self._load_dataframe_from_path(
-                        self._copy_android_uri_to_local_file(uri, default_name="selected_data")
-                    ),
-                )
-            except Exception as e:
-                traceback.print_exc()
-                self.set_status(f"Data file Error: {e}")
-                return
-
-        content = FileChooserListView(
-            filters=["*.csv", "*.xlsx", "*.xls"],
-            path=self.get_default_file_path()
-        )
-        popup = Popup(title="Select CSV/XLSX File", content=content, size_hint=(0.9, 0.9))
-        content.bind(on_submit=lambda obj, sel, touch: self._handle_csv_selection(sel, popup))
-        popup.open()
-
-    def _handle_csv_selection(self, selection, popup):
-        if selection:
-            try:
-                path = selection[0]
-                self._load_dataframe_from_path(path)
-            except Exception as e:
-                traceback.print_exc()
-                self.set_status(f"Load data error:\n{e}")
-        popup.dismiss()
-
-
-    def on_load_config(self, instance):
-        if platform == "android":
-            try:
-                return self._open_android_document_picker(
-                    request_code=42423,
-                    mime_type="application/json",
-                    mime_types=["application/json", "text/json", "text/plain"],
-                    title="config file",
-                    cancel_message="Config file selection cancelled.",
-                    on_picked=lambda uri: self._load_config_from_path(
-                        self._copy_android_uri_to_local_file(uri, default_name="selected_config", required_suffix=".json")
-                    ),
-                )
-            except Exception as e:
-                traceback.print_exc()
-                self.set_status(f"Config Error: {e}")
-                return
-
-        content = FileChooserListView(
-            filters=["*.json"],
-            path=self.get_default_file_path()
-        )
-        popup = Popup(title="Select Config File", content=content, size_hint=(0.9, 0.9))
-        content.bind(on_submit=lambda obj, sel, touch: self._handle_load_config_selection(sel, popup))
-        popup.open()
-
-    def _handle_load_config_selection(self, selection, popup):
-        if selection:
-            try:
-                path = selection[0]
-                self._load_config_from_path(path)
-            except Exception as e:
-                traceback.print_exc()
-                self.set_status(f"Load config error:\n{e}")
-        popup.dismiss()
-
-
     def on_merge_config(self, instance):
         if platform == "android":
-            try:
-                return self._open_android_document_picker(
-                    request_code=42424,
-                    mime_type="application/json",
-                    mime_types=["application/json", "text/json", "text/plain"],
-                    title="merge config file",
-                    cancel_message="Merge config selection cancelled.",
-                    on_picked=lambda uri: self._merge_config_from_path(
-                        self._copy_android_uri_to_local_file(uri, default_name="merge_config", required_suffix=".json")
-                    ),
-                )
-            except Exception as e:
-                traceback.print_exc()
-                self.set_status(f"Merge Config Error: {e}")
-                return
+            return self._open_android_document_picker(
+                request_code=42433,
+                mime_type="application/json",
+                title="config file to merge",
+                on_picked=self._merge_config_from_local_path,
+                cancel_message="Merge config selection cancelled.",
+                required_suffix=".json",
+            )
 
         content = FileChooserListView(
             filters=["*.json"],
@@ -3312,7 +3213,7 @@ class MediMapProApp(MDApp):
         if selection:
             try:
                 path = selection[0]
-                self._merge_config_from_path(path)
+                self._merge_config_from_local_path(path)
             except Exception as e:
                 traceback.print_exc()
                 self.set_status(f"Merge config error:\n{e}")
@@ -3543,6 +3444,139 @@ class MediMapProApp(MDApp):
             traceback.print_exc()
             self.set_status(f"Generate single error:\n{e}")
 
+    def _copy_android_uri_to_local_file(self, uri, default_name="selected_input", required_suffix=None):
+        if platform != "android" or not ANDROID_JAVA_AVAILABLE:
+            raise RuntimeError("Android document picker is unavailable.")
+
+        if uri is None:
+            raise ValueError("Android returned no document URI.")
+
+        activity_obj = AndroidPythonActivity.mActivity
+        resolver = activity_obj.getContentResolver()
+
+        if isinstance(uri, str):
+            uri_string = uri.strip()
+        else:
+            try:
+                uri_string = str(uri.toString()).strip()
+            except Exception:
+                uri_string = ""
+
+        if not uri_string:
+            raise ValueError("Android returned an empty document URI.")
+        if not (uri_string.startswith("content://") or uri_string.startswith("file://")):
+            raise ValueError(f"Android returned an invalid document URI: {uri_string}")
+
+        uri = AndroidUri.parse(uri_string)
+
+        display_name = None
+        cursor = None
+        try:
+            OpenableColumns = autoclass("android.provider.OpenableColumns")
+            cursor = resolver.query(uri, None, None, None, None)
+            if cursor is not None and cursor.moveToFirst():
+                idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if idx >= 0:
+                    display_name = cursor.getString(idx)
+        except Exception:
+            display_name = None
+        finally:
+            try:
+                if cursor is not None:
+                    cursor.close()
+            except Exception:
+                pass
+
+        input_stream = resolver.openInputStream(uri)
+        if input_stream is None:
+            raise ValueError("Unable to open the selected Android document.")
+
+        ByteArray = autoclass("java.lang.reflect.Array")
+        JavaByte = autoclass("java.lang.Byte").TYPE
+        baos = AndroidByteArrayOutputStream()
+        buffer = ByteArray.newInstance(JavaByte, 65536)
+
+        try:
+            while True:
+                count = input_stream.read(buffer)
+                if count == -1:
+                    break
+                baos.write(buffer, 0, count)
+            file_bytes = bytes(baos.toByteArray())
+        finally:
+            try:
+                input_stream.close()
+            except Exception:
+                pass
+
+        if not file_bytes:
+            raise ValueError("Android returned an empty file.")
+
+        filename = safe_name(display_name or default_name)
+        if required_suffix and not filename.lower().endswith(required_suffix.lower()):
+            filename += required_suffix
+
+        out_dir = self.get_app_output_dir()
+        os.makedirs(out_dir, exist_ok=True)
+        out_path = os.path.join(out_dir, filename)
+
+        with open(out_path, "wb") as f:
+            f.write(file_bytes)
+
+        if not os.path.exists(out_path) or os.path.getsize(out_path) <= 0:
+            raise ValueError("Copied file is empty after saving to app storage.")
+
+        if required_suffix and required_suffix.lower() == ".pdf" and not file_bytes.startswith(b"%PDF-"):
+            raise ValueError("Selected file was copied, but it does not start with a valid PDF header.")
+
+        return out_path
+
+    def _open_android_document_picker(self, request_code, mime_type="*/*", title="document", on_picked=None, cancel_message=None, required_suffix=None):
+        if platform != "android" or not ANDROID_JAVA_AVAILABLE:
+            self.set_status("Android system document picker is unavailable.")
+            return
+
+        def _on_activity_result(request_code_result, result_code, intent):
+            if request_code_result != request_code:
+                return
+            activity.unbind(on_activity_result=_on_activity_result)
+
+            if result_code != -1 or intent is None:
+                self.set_status(cancel_message or f"{title.capitalize()} selection cancelled.")
+                return
+
+            try:
+                uri = intent.getData()
+                if uri is None:
+                    raise ValueError(f"No {title} URI was returned by Android.")
+
+                try:
+                    flags = intent.getFlags()
+                    take_flags = flags & (AndroidIntent.FLAG_GRANT_READ_URI_PERMISSION | AndroidIntent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                    AndroidPythonActivity.mActivity.getContentResolver().takePersistableUriPermission(uri, take_flags)
+                except Exception:
+                    pass
+
+                local_path = self._copy_android_uri_to_local_file(
+                    uri,
+                    default_name=safe_name(title),
+                    required_suffix=required_suffix,
+                )
+
+                if callable(on_picked):
+                    on_picked(local_path)
+            except Exception as e:
+                traceback.print_exc()
+                self.set_status(f"{title.capitalize()} error: {e}")
+
+        activity.bind(on_activity_result=_on_activity_result)
+        intent = AndroidIntent(AndroidIntent.ACTION_OPEN_DOCUMENT)
+        intent.addCategory(AndroidIntent.CATEGORY_OPENABLE)
+        intent.setType(mime_type or "*/*")
+        intent.addFlags(AndroidIntent.FLAG_GRANT_READ_URI_PERMISSION)
+        intent.addFlags(AndroidIntent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        AndroidPythonActivity.mActivity.startActivityForResult(intent, request_code)
+
     def _load_pdf_from_path(self, path):
         total = self.engine.load_pdf(path)
 
@@ -3567,45 +3601,21 @@ class MediMapProApp(MDApp):
         )
 
     def _copy_android_uri_to_local_pdf(self, uri):
-        return self._copy_android_uri_to_local_file(uri, default_name="selected_input", required_suffix=".pdf")
+        return self._copy_android_uri_to_local_file(
+            uri,
+            default_name="selected_pdf",
+            required_suffix=".pdf",
+        )
 
     def _open_android_pdf_picker(self):
-        if platform != "android" or not ANDROID_JAVA_AVAILABLE:
-            self.set_status("Android system document picker is unavailable; falling back to the file chooser.")
-            return self._open_legacy_pdf_picker()
-
-        request_code = 42421
-
-        def _on_activity_result(request_code_result, result_code, intent):
-            if request_code_result != request_code:
-                return
-            activity.unbind(on_activity_result=_on_activity_result)
-            if result_code != -1 or intent is None:
-                self.set_status("PDF selection cancelled.")
-                return
-            try:
-                uri = intent.getData()
-                if uri is None:
-                    raise ValueError("No PDF URI was returned by Android.")
-                try:
-                    flags = intent.getFlags()
-                    take_flags = flags & (AndroidIntent.FLAG_GRANT_READ_URI_PERMISSION | AndroidIntent.FLAG_GRANT_WRITE_URI_PERMISSION)
-                    AndroidPythonActivity.mActivity.getContentResolver().takePersistableUriPermission(uri, take_flags)
-                except Exception:
-                    pass
-                local_path = self._copy_android_uri_to_local_pdf(uri)
-                self._load_pdf_from_path(local_path)
-            except Exception as e:
-                traceback.print_exc()
-                self.set_status(f"PDF Error: {e}")
-
-        activity.bind(on_activity_result=_on_activity_result)
-        intent = AndroidIntent(AndroidIntent.ACTION_OPEN_DOCUMENT)
-        intent.addCategory(AndroidIntent.CATEGORY_OPENABLE)
-        intent.setType("application/pdf")
-        intent.addFlags(AndroidIntent.FLAG_GRANT_READ_URI_PERMISSION)
-        intent.addFlags(AndroidIntent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
-        AndroidPythonActivity.mActivity.startActivityForResult(intent, request_code)
+        return self._open_android_document_picker(
+            request_code=42421,
+            mime_type="application/pdf",
+            title="PDF",
+            on_picked=self._load_pdf_from_path,
+            cancel_message="PDF selection cancelled.",
+            required_suffix=".pdf",
+        )
 
     def _open_legacy_pdf_picker(self):
         content = FileChooserListView(
