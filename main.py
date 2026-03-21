@@ -151,8 +151,21 @@ if platform == "android":
         AndroidBitmapConfig = None
         AndroidCompressFormat = None
         ANDROID_JAVA_AVAILABLE = False
+
+    try:
+        from androidssystemfilechooser import uri_to_stream, uri_to_filename, uri_to_extension
+        ANDROID_SYSTEM_FILE_CHOOSER_AVAILABLE = True
+    except Exception:
+        uri_to_stream = None
+        uri_to_filename = None
+        uri_to_extension = None
+        ANDROID_SYSTEM_FILE_CHOOSER_AVAILABLE = False
 else:
     ANDROID_JAVA_AVAILABLE = False
+    uri_to_stream = None
+    uri_to_filename = None
+    uri_to_extension = None
+    ANDROID_SYSTEM_FILE_CHOOSER_AVAILABLE = False
 
 
 def android_render_pdf_page(path, page_idx=0, preview_zoom=1.5):
@@ -543,30 +556,82 @@ class AndroidDocumentPickerService:
             except Exception:
                 pass
 
-        input_stream = resolver.openInputStream(uri)
-        if input_stream is None:
-            raise ValueError("Unable to open the selected Android document.")
+        file_bytes = b""
 
-        ByteArray = autoclass("java.lang.reflect.Array")
-        JavaByte = autoclass("java.lang.Byte").TYPE
-        baos = AndroidByteArrayOutputStream()
-        buffer = ByteArray.newInstance(JavaByte, 65536)
-
-        try:
-            while True:
-                count = input_stream.read(buffer)
-                if count == -1:
-                    break
-                baos.write(buffer, 0, count)
-            file_bytes = bytes(baos.toByteArray())
-        finally:
+        # Preferred path on Android: use a maintained URI stream helper when available.
+        # This avoids custom Java-byte-array bridging for content:// providers.
+        if ANDROID_SYSTEM_FILE_CHOOSER_AVAILABLE and callable(uri_to_stream):
             try:
-                input_stream.close()
+                if not display_name and callable(uri_to_filename):
+                    display_name = uri_to_filename(uri)
+                with uri_to_stream(uri) as stream:
+                    payload = stream.read()
+                if isinstance(payload, str):
+                    payload = payload.encode("utf-8")
+                elif isinstance(payload, bytearray):
+                    payload = bytes(payload)
+                elif not isinstance(payload, bytes):
+                    payload = bytes(payload)
+                file_bytes = payload or b""
             except Exception:
-                pass
+                file_bytes = b""
+
+        # Secondary path: read through ParcelFileDescriptor -> real OS fd.
+        if not file_bytes:
+            pfd = None
+            try:
+                pfd = resolver.openFileDescriptor(uri, "r")
+                if pfd is not None:
+                    fd = pfd.detachFd()
+                    try:
+                        with os.fdopen(fd, "rb", closefd=True) as fh:
+                            file_bytes = fh.read()
+                    finally:
+                        fd = None
+            except Exception:
+                file_bytes = b""
+            finally:
+                try:
+                    if pfd is not None:
+                        pfd.close()
+                except Exception:
+                    pass
+
+        # Final fallback path: stream copy through Java InputStream into Python byte chunks.
+        if not file_bytes:
+            input_stream = resolver.openInputStream(uri)
+            if input_stream is None:
+                raise ValueError("Unable to open the selected Android document.")
+
+            ByteArray = autoclass("java.lang.reflect.Array")
+            JavaByte = autoclass("java.lang.Byte").TYPE
+            buffer = ByteArray.newInstance(JavaByte, 65536)
+            chunks = []
+
+            try:
+                while True:
+                    count = input_stream.read(buffer)
+                    if count == -1:
+                        break
+                    if count > 0:
+                        chunks.append(bytes(buffer[:count]))
+                file_bytes = b"".join(chunks)
+            finally:
+                try:
+                    input_stream.close()
+                except Exception:
+                    pass
 
         if not file_bytes:
             raise ValueError("Android returned an empty file.")
+
+        if (not display_name) and ANDROID_SYSTEM_FILE_CHOOSER_AVAILABLE and callable(uri_to_extension):
+            try:
+                inferred_ext = uri_to_extension(uri)
+                if inferred_ext:
+                    display_name = f"{safe_name(default_name)}.{str(inferred_ext).lstrip('.')}"
+            except Exception:
+                pass
 
         lower_name = str(display_name or default_name or "").lower()
         if allowed_suffixes:
@@ -577,8 +642,11 @@ class AndroidDocumentPickerService:
         if required_suffix and required_suffix.lower() == ".pdf":
             pdf_pos = file_bytes.find(b"%PDF-")
             if pdf_pos == -1 or pdf_pos > 1024:
-                head = repr(file_bytes[:24])
-                raise ValueError(f"Selected file was copied, but it does not contain a valid PDF header. First bytes: {head}")
+                head = repr(file_bytes[:32])
+                raise ValueError(
+                    f"Selected file was copied, but it does not contain a valid PDF header. "
+                    f"First bytes: {head}"
+                )
             if pdf_pos > 0:
                 file_bytes = file_bytes[pdf_pos:]
 
@@ -2655,15 +2723,12 @@ class MediMapProApp(MDApp):
             return widget
 
         def make_card(title, subtitle=None):
-            card = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(12), size_hint_y=None)
+            card = BoxLayout(orientation="vertical", spacing=dp(8), padding=dp(12), size_hint_y=None)
             card.bind(minimum_height=card.setter("height"))
             style_card(card, palette["surface"])
 
             head = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(3))
-            if is_mobile:
-                head.bind(minimum_height=head.setter("height"))
-            else:
-                head.height = dp(44) if subtitle else dp(24)
+            head.bind(minimum_height=head.setter("height"))
 
             ttl = Label(
                 text=title,
@@ -2677,8 +2742,7 @@ class MediMapProApp(MDApp):
                 font_size=dp(16) if is_mobile else dp(15),
             )
             ttl.bind(size=self._sync_label_text_size)
-            if is_mobile:
-                self._bind_auto_height_label(ttl, min_height=dp(22), extra_pad=dp(2))
+            self._bind_auto_height_label(ttl, min_height=dp(22), extra_pad=dp(2))
             head.add_widget(ttl)
 
             if subtitle:
@@ -2689,16 +2753,15 @@ class MediMapProApp(MDApp):
                     height=dp(18),
                     halign="left",
                     valign="middle",
-                    font_size=dp(11) if is_mobile else dp(11),
+                    font_size=dp(11) if is_mobile else dp(12),
                 )
                 sub.bind(size=self._sync_label_text_size)
-                if is_mobile:
-                    self._bind_auto_height_label(sub, min_height=dp(16), extra_pad=dp(2))
+                self._bind_auto_height_label(sub, min_height=dp(16), extra_pad=dp(2))
                 head.add_widget(sub)
 
             card.add_widget(head)
 
-            body = GridLayout(cols=1, spacing=dp(10), size_hint_y=None)
+            body = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
             body.bind(minimum_height=body.setter("height"))
             card.add_widget(body)
             return card, body
@@ -2838,12 +2901,12 @@ class MediMapProApp(MDApp):
             orientation="vertical" if is_mobile else "horizontal",
             spacing=dp(10) if is_mobile else dp(14),
             size_hint_y=None,
-            height=dp(92) if is_mobile else dp(88),
+            height=dp(92) if is_mobile else dp(80),
             padding=[dp(14), dp(12), dp(14), dp(12)],
         )
         style_card(appbar, palette["surface"], radius=dp(26))
 
-        brand_wrap = BoxLayout(orientation="vertical", spacing=dp(4), size_hint_y=None, size_hint_x=1)
+        brand_wrap = BoxLayout(orientation="vertical", spacing=dp(4), size_hint_y=None)
         brand_wrap.bind(minimum_height=brand_wrap.setter("height"))
         hero_title = Label(
             text="MediMap Pro",
@@ -2856,12 +2919,11 @@ class MediMapProApp(MDApp):
             font_size=dp(22) if is_mobile else dp(20),
         )
         hero_title.bind(size=self._sync_label_text_size)
-        if is_mobile:
-            self._bind_auto_height_label(hero_title, min_height=dp(26), extra_pad=dp(2))
+        self._bind_auto_height_label(hero_title, min_height=dp(26), extra_pad=dp(2))
         brand_wrap.add_widget(hero_title)
 
         hero_sub = Label(
-            text=("Import files, preview pages, detect fields, and export filled PDFs." if is_mobile else "Medical-tech PDF automation with guided preview, detection, mapping, and export."),
+            text=("Import files, preview pages, detect fields, and export filled PDFs." if is_mobile else "Medical-tech PDF automation with interactive mapping and Android-native fallback preview."),
             color=palette["muted"],
             size_hint_y=None,
             height=dp(22),
@@ -2870,16 +2932,15 @@ class MediMapProApp(MDApp):
             font_size=dp(10.5) if is_mobile else dp(11.5),
         )
         hero_sub.bind(size=self._sync_label_text_size)
-        if is_mobile:
-            self._bind_auto_height_label(hero_sub, min_height=dp(18), extra_pad=dp(2))
+        self._bind_auto_height_label(hero_sub, min_height=dp(18), extra_pad=dp(2))
         brand_wrap.add_widget(hero_sub)
         appbar.add_widget(brand_wrap)
 
         status_chip = Label(
             text=("Ready • Open a PDF to begin" if is_mobile else "Ready • Import a PDF, then refresh or run detect"),
             color=palette["text"],
-            size_hint=(1, None) if is_mobile else (None, None),
-            height=dp(44) if is_mobile else dp(48),
+            size_hint=(1, None) if is_mobile else (0.42, None),
+            height=dp(44) if is_mobile else dp(42),
             halign="left" if is_mobile else "center",
             valign="middle",
             font_size=dp(10.5) if is_mobile else dp(11),
@@ -2893,7 +2954,6 @@ class MediMapProApp(MDApp):
             root.add_widget(appbar)
             root.add_widget(status_chip)
         else:
-            status_chip.width = dp(420)
             appbar.add_widget(status_chip)
             root.add_widget(appbar)
 
@@ -2934,16 +2994,12 @@ class MediMapProApp(MDApp):
             mobile_flow_card.add_widget(self.mobile_flow_lbl)
             root.add_widget(mobile_flow_card)
 
-        main = BoxLayout(orientation="vertical" if is_mobile else "horizontal", spacing=dp(10) if is_mobile else dp(16))
+        main = BoxLayout(orientation="vertical" if is_mobile else "horizontal", spacing=dp(10) if is_mobile else dp(14))
 
         self._mobile_section_buttons = {}
         self._mobile_section_cards = {}
         self._mobile_section_host = None
         self._mobile_active_section = None
-        self._desktop_section_buttons = {}
-        self._desktop_section_cards = {}
-        self._desktop_section_host = None
-        self._desktop_active_section = None
 
         def _style_mobile_section_button(btn, active=False):
             bg = palette["primary"] if active else palette["surface_soft"]
@@ -2976,46 +3032,6 @@ class MediMapProApp(MDApp):
                 _style_mobile_section_button(btn, active=(key == section_key))
 
         self._show_mobile_section = _show_mobile_section
-
-        def _style_desktop_section_button(btn, active=False):
-            bg = palette["primary"] if active else palette["surface_soft"]
-            fg = (1, 1, 1, 1) if active else palette["text"]
-            btn.background_normal = ""
-            btn.background_down = ""
-            btn.background_color = bg
-            btn.color = fg
-
-        def _show_desktop_section(section_key):
-            if is_mobile or self._desktop_section_host is None:
-                return
-            section_card = self._desktop_section_cards.get(section_key)
-            if section_card is None:
-                return
-            self._desktop_section_host.clear_widgets()
-            self._desktop_section_host.add_widget(section_card)
-            self._desktop_active_section = section_key
-            for key, btn in self._desktop_section_buttons.items():
-                _style_desktop_section_button(btn, active=(key == section_key))
-
-        self._show_desktop_section = _show_desktop_section
-
-        def _make_desktop_section_tabs(section_names):
-            wrap = GridLayout(cols=len(section_names), spacing=dp(8), size_hint_y=None, height=row_h)
-            for name in section_names:
-                btn = Button(
-                    text=name,
-                    size_hint_y=None,
-                    height=row_h,
-                    background_normal="",
-                    background_down="",
-                    background_color=palette["surface_soft"],
-                    color=palette["text"],
-                    font_size=dp(12),
-                )
-                btn.bind(on_release=lambda inst, n=name: _show_desktop_section(n))
-                self._desktop_section_buttons[name] = btn
-                wrap.add_widget(btn)
-            return wrap
 
         def _make_mobile_section_tabs(section_names):
             tabs_wrap = BoxLayout(orientation="vertical", spacing=dp(8), size_hint_y=None)
@@ -3053,7 +3069,7 @@ class MediMapProApp(MDApp):
                 tabs_wrap.add_widget(row)
             return tabs_wrap
 
-        controls_wrap = BoxLayout(orientation="vertical", size_hint=(1, 0.56) if is_mobile else (0.40, 1))
+        controls_wrap = BoxLayout(orientation="vertical", size_hint=(1, 0.56) if is_mobile else (0.44, 1))
         controls_scroll = ScrollView(do_scroll_x=False, do_scroll_y=True, bar_width=dp(6), scroll_type=["bars", "content"])
         controls = GridLayout(cols=1, spacing=gap, size_hint_y=None)
         controls.bind(minimum_height=controls.setter("height"))
@@ -3078,7 +3094,7 @@ class MediMapProApp(MDApp):
         if is_mobile:
             self._mobile_section_cards["Files"] = files_card
         else:
-            self._desktop_section_cards["Workspace"] = files_card
+            controls.add_widget(files_card)
 
         nav_card, nav_body = make_card("Session", "Pick patient, page, and actions" if is_mobile else "Choose a patient, move pages, detect, and refresh")
         self.patient_spinner = make_spinner("Select Patient")
@@ -3116,7 +3132,7 @@ class MediMapProApp(MDApp):
         if is_mobile:
             self._mobile_section_cards["Session"] = nav_card
         else:
-            self._desktop_section_cards["Session"] = nav_card
+            controls.add_widget(nav_card)
 
         detect_card, detect_body = make_card("Detection", "Tune detection thresholds" if is_mobile else "Field, line, checkbox, and extent thresholds")
         explain = Label(text="F = field sizing  •  Line = answer lines  •  C = checkbox tuning  •  Ext = contour extent limits",
@@ -3179,7 +3195,7 @@ class MediMapProApp(MDApp):
         if is_mobile:
             self._mobile_section_cards["Detection"] = detect_card
         else:
-            self._desktop_section_cards["Detection"] = detect_card
+            controls.add_widget(detect_card)
 
         map_card, map_body = make_card("Mapping", "Assign values to selected boxes" if is_mobile else "Assign values to selected boxes directly from preview")
         self.box_ids_input = make_input("", "0,1,2")
@@ -3200,7 +3216,7 @@ class MediMapProApp(MDApp):
         if is_mobile:
             self._mobile_section_cards["Mapping"] = map_card
         else:
-            self._desktop_section_cards["Mapping"] = map_card
+            controls.add_widget(map_card)
 
         export_card, export_body = make_card("Export", "Generate output PDFs" if is_mobile else "Generate patient output files")
         out_grid = GridLayout(cols=1 if is_mobile else 2, spacing=dp(8), size_hint_y=None, height=(2*row_h+dp(8)) if is_mobile else row_h)
@@ -3225,7 +3241,7 @@ class MediMapProApp(MDApp):
         if is_mobile:
             self._mobile_section_cards["Export"] = export_card
         else:
-            self._desktop_section_cards["Export"] = export_card
+            controls.add_widget(export_card)
 
         if is_mobile:
             mobile_controls_card, mobile_controls_body = make_card("Controls", "Use tabs to move step by step" if is_mobile else "Switch sections to keep the screen lighter and easier to navigate")
@@ -3236,19 +3252,10 @@ class MediMapProApp(MDApp):
             mobile_controls_body.add_widget(self._mobile_section_host)
             controls.add_widget(mobile_controls_card)
             Clock.schedule_once(lambda dt: _show_mobile_section("Files"), 0)
-        else:
-            desktop_controls_card, desktop_controls_body = make_card("Workspace & Settings", "Switch sections to keep the desktop view cleaner and easier to scan")
-            tabs = _make_desktop_section_tabs(["Workspace", "Session", "Detection", "Mapping", "Export"])
-            desktop_controls_body.add_widget(tabs)
-            self._desktop_section_host = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
-            self._desktop_section_host.bind(minimum_height=self._desktop_section_host.setter("height"))
-            desktop_controls_body.add_widget(self._desktop_section_host)
-            controls.add_widget(desktop_controls_card)
-            Clock.schedule_once(lambda dt: _show_desktop_section("Workspace"), 0)
         controls_scroll.add_widget(controls)
         controls_wrap.add_widget(controls_scroll)
 
-        preview_outer = BoxLayout(orientation="vertical", spacing=gap, size_hint=(1, None) if is_mobile else (0.60,1))
+        preview_outer = BoxLayout(orientation="vertical", spacing=gap, size_hint=(1, None) if is_mobile else (0.56,1))
         preview_card, preview_body = make_card("Live Preview", "Preview pages and tap boxes" if is_mobile else "Interactive canvas for detection review, mapping, and patient output preview.")
         preview_card.size_hint_y = 1
         if is_mobile:
@@ -3267,7 +3274,7 @@ class MediMapProApp(MDApp):
         preview_body.add_widget(preview_toolbar)
 
         preview_shell = BoxLayout(orientation="vertical", spacing=dp(8), padding=dp(8), size_hint_y=None)
-        preview_shell.height = max(dp(220), Window.height * 0.24) if is_mobile else max(dp(620), Window.height - dp(180))
+        preview_shell.height = max(dp(220), Window.height * 0.24) if is_mobile else dp(860)
         style_card(preview_shell, palette["preview_bg"], radius=dp(24))
         preview_wrap = ScrollView(do_scroll_x=True, do_scroll_y=True, bar_width=dp(6), scroll_type=["bars", "content"])
         self.preview_wrap = preview_wrap
