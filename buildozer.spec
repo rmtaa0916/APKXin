@@ -4,7 +4,7 @@ package.name = medimappro
 package.domain = org.medimap
 
 source.dir = .
-source.include_exts = py,png,jpg,jpeg,kv,atlas,xlsx,pdf,json,csv
+source.include_exts = py,png,jpg,jpeg,kv,atlas,xlsx,pdf,json,csv,java
 version = 1.6.0
 
 requirements = python3==3.10.11,hostpython3==3.10.11,kivy,kivymd,androidssystemfilechooser,opencv,pandas,numpy,openpyxl,pypdf,typing_extensions,reportlab,pillow
@@ -20,6 +20,7 @@ android.accept_sdk_license = True
 android.allow_backup = True
 
 android.permissions = INTERNET
+android.add_src = android_src
 
 [buildozer]
 log_level = 2
