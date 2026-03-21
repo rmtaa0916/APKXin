@@ -370,45 +370,54 @@ def gsheet_url_to_csv_export(url):
     return f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
 
 
+def _looks_like_ssl_cert_failure(exc):
+    msg = str(exc or "").lower()
+    return (
+        "certificate verify failed" in msg or
+        "unable to get local issuer certificate" in msg or
+        "self signed certificate" in msg or
+        "hostname" in msg and "doesn't match" in msg
+    )
+
+
 def download_url_bytes(url, timeout=30):
-    """Download bytes from a URL with an Android-friendly SSL fallback."""
+    """Download bytes from a URL with a cautious Android SSL fallback."""
     headers = {
         "User-Agent": "Mozilla/5.0 MediMapPro/1.0",
         "Accept": "text/csv,text/plain,application/octet-stream,*/*",
     }
 
-    contexts = []
-    if platform == "android":
-        try:
-            import certifi
-            contexts.append(ssl.create_default_context(cafile=certifi.where()))
-        except Exception:
-            pass
-        try:
-            contexts.append(ssl.create_default_context())
-        except Exception:
-            pass
-        try:
-            contexts.append(ssl._create_unverified_context())
-        except Exception:
-            pass
-    else:
-        try:
-            contexts.append(ssl.create_default_context())
-        except Exception:
-            contexts.append(None)
+    verified_contexts = []
+    try:
+        import certifi
+        verified_contexts.append(ssl.create_default_context(cafile=certifi.where()))
+    except Exception:
+        pass
+    try:
+        verified_contexts.append(ssl.create_default_context())
+    except Exception:
+        pass
 
-    if not contexts:
-        contexts = [None]
+    if not verified_contexts:
+        verified_contexts = [None]
 
     last_error = None
-    for ctx in contexts:
+    req = urllib.request.Request(url, headers=headers)
+
+    for ctx in verified_contexts:
         try:
-            req = urllib.request.Request(url, headers=headers)
             if ctx is None:
                 with urllib.request.urlopen(req, timeout=timeout) as resp:
                     return resp.read()
             with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+                return resp.read()
+        except Exception as e:
+            last_error = e
+
+    if platform == "android" and last_error is not None and _looks_like_ssl_cert_failure(last_error):
+        try:
+            insecure_ctx = ssl._create_unverified_context()
+            with urllib.request.urlopen(req, timeout=timeout, context=insecure_ctx) as resp:
                 return resp.read()
         except Exception as e:
             last_error = e
@@ -420,7 +429,16 @@ def download_url_bytes(url, timeout=30):
 
 def load_google_sheet_dataframe(url):
     csv_url = gsheet_url_to_csv_export(url)
-    raw = download_url_bytes(csv_url, timeout=30)
+    try:
+        raw = download_url_bytes(csv_url, timeout=30)
+    except Exception as e:
+        if _looks_like_ssl_cert_failure(e):
+            raise ValueError(
+                "Android could not verify Google Sheets SSL certificates for this connection. "
+                "Try again on a different network, or download/export the sheet as CSV/XLSX and load the file directly. "
+                f"Details: {e}"
+            )
+        raise
     if not raw:
         raise ValueError("Google Sheet export returned an empty response.")
 
@@ -612,7 +630,23 @@ class AndroidDocumentPickerService:
         intent.addFlags(AndroidIntent.FLAG_GRANT_READ_URI_PERMISSION)
         intent.addFlags(AndroidIntent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
 
-        intent.setType(mime_type or "*/*")
+        effective_mime = mime_type or "*/*"
+        if extra_mime_types:
+            try:
+                mime_candidates = [str(m).strip() for m in extra_mime_types if str(m).strip()]
+                if mime_candidates:
+                    effective_mime = "*/*"
+                    try:
+                        intent.putExtra(AndroidIntent.EXTRA_MIME_TYPES, mime_candidates)
+                    except Exception:
+                        try:
+                            intent.putExtra("android.intent.extra.MIME_TYPES", mime_candidates)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+        intent.setType(effective_mime)
         AndroidPythonActivity.mActivity.startActivityForResult(intent, request_code)
 
 
@@ -2875,6 +2909,43 @@ class MediMapProApp(MDApp):
         appbar.add_widget(status_chip)
         root.add_widget(appbar)
 
+        self.mobile_flow_lbl = None
+        if is_mobile:
+            mobile_flow_card = BoxLayout(
+                orientation="vertical",
+                spacing=dp(4),
+                size_hint_y=None,
+                height=dp(82),
+                padding=[dp(14), dp(12), dp(14), dp(12)],
+            )
+            style_card(mobile_flow_card, palette["surface_alt"], radius=dp(24))
+
+            flow_title = Label(
+                text="Next step",
+                color=palette["muted"],
+                size_hint_y=None,
+                height=dp(18),
+                halign="left",
+                valign="middle",
+                font_size=dp(11),
+            )
+            flow_title.bind(size=self._sync_label_text_size)
+            mobile_flow_card.add_widget(flow_title)
+
+            self.mobile_flow_lbl = Label(
+                text="Start in 1 Files. Open a PDF first.",
+                color=palette["text"],
+                bold=True,
+                size_hint_y=None,
+                height=dp(28),
+                halign="left",
+                valign="middle",
+                font_size=dp(14),
+            )
+            self.mobile_flow_lbl.bind(size=self._sync_label_text_size)
+            mobile_flow_card.add_widget(self.mobile_flow_lbl)
+            root.add_widget(mobile_flow_card)
+
         main = BoxLayout(orientation="vertical" if is_mobile else "horizontal", spacing=dp(10) if is_mobile else dp(14))
 
         self._mobile_section_buttons = {}
@@ -2912,6 +2983,8 @@ class MediMapProApp(MDApp):
             for key, btn in self._mobile_section_buttons.items():
                 _style_mobile_section_button(btn, active=(key == section_key))
 
+        self._show_mobile_section = _show_mobile_section
+
         def _make_mobile_section_tabs(section_names):
             tabs_wrap = BoxLayout(orientation="vertical", spacing=dp(8), size_hint_y=None)
             rows = []
@@ -2924,9 +2997,16 @@ class MediMapProApp(MDApp):
 
             for row_names in rows:
                 row = GridLayout(cols=max(1, len(row_names)), spacing=dp(8), size_hint_y=None, height=row_h)
+                display_map = {
+                    "Files": "1 Files",
+                    "Session": "2 Session",
+                    "Detection": "3 Detect",
+                    "Mapping": "4 Mapping",
+                    "Export": "5 Export",
+                }
                 for name in row_names:
                     btn = Button(
-                        text=name,
+                        text=display_map.get(name, name),
                         size_hint_y=None,
                         height=row_h,
                         background_normal="",
@@ -2990,6 +3070,17 @@ class MediMapProApp(MDApp):
         action_grid.add_widget(self.btn_detect)
         action_grid.add_widget(self.btn_preview)
         nav_body.add_widget(action_grid)
+        self.backend_note_lbl = Label(
+            text="",
+            color=palette["muted"],
+            size_hint_y=None,
+            height=dp(40),
+            halign="left",
+            valign="middle",
+            font_size=dp(11),
+        )
+        self.backend_note_lbl.bind(size=self._sync_label_text_size)
+        nav_body.add_widget(self.backend_note_lbl)
         if is_mobile:
             self._mobile_section_cards["Session"] = nav_card
         else:
@@ -3088,6 +3179,17 @@ class MediMapProApp(MDApp):
         out_grid.add_widget(self.btn_generate_one)
         out_grid.add_widget(self.btn_generate_batch)
         export_body.add_widget(out_grid)
+        self.export_note_lbl = Label(
+            text="",
+            color=palette["muted"],
+            size_hint_y=None,
+            height=dp(42),
+            halign="left",
+            valign="middle",
+            font_size=dp(11),
+        )
+        self.export_note_lbl.bind(size=self._sync_label_text_size)
+        export_body.add_widget(self.export_note_lbl)
         if is_mobile:
             self._mobile_section_cards["Export"] = export_card
         else:
@@ -3147,12 +3249,13 @@ class MediMapProApp(MDApp):
         preview_outer.add_widget(preview_card)
 
         if is_mobile:
-            main.add_widget(preview_outer)
             main.add_widget(controls_wrap)
+            main.add_widget(preview_outer)
         else:
             main.add_widget(controls_wrap)
             main.add_widget(preview_outer)
         root.add_widget(main)
+        Clock.schedule_once(lambda dt: self.refresh_backend_capabilities_ui(), 0)
 
         return root
 
@@ -3190,7 +3293,80 @@ class MediMapProApp(MDApp):
 
     def set_status(self, text):
         self.status_lbl.text = text
+        try:
+            self.refresh_backend_capabilities_ui()
+        except Exception:
+            pass
 
+
+    def _set_widget_enabled(self, widget, enabled=True):
+        if widget is None:
+            return
+        try:
+            widget.disabled = not bool(enabled)
+        except Exception:
+            pass
+        try:
+            widget.opacity = 1.0 if enabled else 0.45
+        except Exception:
+            pass
+
+    def refresh_backend_capabilities_ui(self):
+        detection_ok = bool(self.engine.supports_detection_backend())
+        export_ok = bool(self.engine.supports_export_backend())
+        has_pdf = bool(getattr(self.engine, "pdf_path", ""))
+        has_data = bool(getattr(self.engine, "df", None) is not None and not self.engine.df.empty)
+        android_mode = (platform == "android")
+
+        detect_ready = detection_ok and has_pdf
+        preview_ready = detection_ok and has_pdf
+        assign_ready = detection_ok and has_pdf and has_data
+        export_ready = export_ok and has_pdf and has_data
+
+        for attr, enabled in [
+            ("btn_detect", detect_ready),
+            ("btn_preview", preview_ready),
+            ("btn_assign", assign_ready),
+            ("btn_generate_one", export_ready),
+            ("btn_generate_batch", export_ready),
+        ]:
+            self._set_widget_enabled(getattr(self, attr, None), enabled)
+
+        if hasattr(self, "backend_note_lbl") and self.backend_note_lbl is not None:
+            mode = "Android-safe mode" if android_mode else "Desktop mode"
+            next_step = "Load PDF" if not has_pdf else ("Load CSV/XLSX" if not has_data else "Ready")
+            self.backend_note_lbl.text = (
+                f"{mode} • Detection: {'ready' if detection_ok else 'unavailable'} • "
+                f"Export: {'ready' if export_ok else 'unavailable'} • Next: {next_step}"
+            )
+
+        if hasattr(self, "export_note_lbl") and self.export_note_lbl is not None:
+            if not export_ok:
+                self.export_note_lbl.text = "Export backend is unavailable in this build."
+            elif not has_pdf and not has_data:
+                self.export_note_lbl.text = "Load a PDF and CSV/XLSX data file to enable export."
+            elif not has_pdf:
+                self.export_note_lbl.text = "Load a PDF to enable export."
+            elif not has_data:
+                self.export_note_lbl.text = "Load CSV/XLSX data to enable export."
+            else:
+                self.export_note_lbl.text = "Export is ready. Generate a single PDF or a batch folder."
+
+        if getattr(self, "mobile_flow_lbl", None) is not None:
+            if not has_pdf:
+                self.mobile_flow_lbl.text = "Start in 1 Files. Open a PDF first."
+            elif not has_data:
+                self.mobile_flow_lbl.text = "PDF loaded. Next: load CSV/XLSX or a public Google Sheet."
+            elif not detection_ok:
+                self.mobile_flow_lbl.text = "Data ready. Preview works, but detection is unavailable in this build."
+            elif not self.engine.all_boxes:
+                self.mobile_flow_lbl.text = "Data ready. Go to 3 Detect and run detection on the current page."
+            elif not self.engine.custom_mappings:
+                self.mobile_flow_lbl.text = "Detection finished. Go to 4 Mapping and assign fields to columns."
+            elif not export_ok:
+                self.mobile_flow_lbl.text = "Mappings saved. Export is unavailable in this build."
+            else:
+                self.mobile_flow_lbl.text = "Ready. Go to 5 Export and generate one PDF or a full batch."
     def get_selected_file(self):
         return None
 
@@ -3249,9 +3425,6 @@ class MediMapProApp(MDApp):
 
     def get_default_file_path(self):
         if platform == "android":
-            shared_dir = "/sdcard/Download"
-            if os.path.isdir(shared_dir):
-                return shared_dir
             return self.get_app_output_dir()
         return os.path.expanduser("~")
         
@@ -3292,6 +3465,7 @@ class MediMapProApp(MDApp):
             self.patient_spinner.text = "Select Patient"
             self.column_spinner.text = "Select Column"
             return
+            self.refresh_backend_capabilities_ui()
 
         patient_names = sorted([
             str(x).strip()
@@ -3304,6 +3478,7 @@ class MediMapProApp(MDApp):
         cols = sorted([str(c) for c in self.engine.df.columns.tolist()])
         self.column_spinner.values = cols
         self.column_spinner.text = cols[0] if cols else "Select Column"
+        self.refresh_backend_capabilities_ui()
 
     def selected_patient(self):
         val = self.patient_spinner.text.strip()
@@ -3625,6 +3800,7 @@ class MediMapProApp(MDApp):
         self.engine.box_types = []
         self.push_engine_settings_to_ui()
         self.set_status(f"Config loaded:\n{os.path.basename(path)}")
+        self.refresh_backend_capabilities_ui()
 
     def on_load_config(self, instance):
         if platform == "android":
@@ -3867,6 +4043,7 @@ class MediMapProApp(MDApp):
             )
             self._sync_box_selection_ui()
 
+            self.refresh_backend_capabilities_ui()
             self.set_status(
                 f"Preview rendered.\n"
                 f"Patient: {patient}\n"
@@ -4134,7 +4311,10 @@ class MediMapProApp(MDApp):
     
         except Exception as e:
             traceback.print_exc()
-            self.set_status(f"Google Sheet load error:\n{e}")
+            msg = str(e)
+            if "certificate" in msg.lower() or "ssl" in msg.lower():
+                msg += "\n\nTip: exporting/downloading the sheet as CSV/XLSX and loading the file directly is usually more reliable on Android."
+            self.set_status(f"Google Sheet load error:\n{msg}")
     
     def on_generate_batch(self, instance):
         """Processes all rows in the data file and generates PDFs."""
