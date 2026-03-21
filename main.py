@@ -139,6 +139,10 @@ if platform == "android":
         AndroidParcelFileDescriptor = autoclass("android.os.ParcelFileDescriptor")
         AndroidUri = autoclass("android.net.Uri")
         AndroidByteArrayOutputStream = autoclass("java.io.ByteArrayOutputStream")
+        try:
+            AndroidUriCopyHelper = autoclass("org.medimap.medimappro.UriCopyHelper")
+        except Exception:
+            AndroidUriCopyHelper = None
         ANDROID_JAVA_AVAILABLE = True
     except Exception:
         AndroidPythonActivity = None
@@ -150,6 +154,7 @@ if platform == "android":
         AndroidByteArrayOutputStream = None
         AndroidBitmapConfig = None
         AndroidCompressFormat = None
+        AndroidUriCopyHelper = None
         ANDROID_JAVA_AVAILABLE = False
     try:
         from androidssystemfilechooser import uri_to_stream, uri_to_filename, uri_to_extension
@@ -161,6 +166,7 @@ if platform == "android":
         ANDROID_SYSTEM_FILE_CHOOSER_AVAILABLE = False
 else:
     ANDROID_JAVA_AVAILABLE = False
+    AndroidUriCopyHelper = None
     uri_to_stream = None
     uri_to_filename = None
     uri_to_extension = None
@@ -623,6 +629,28 @@ class AndroidDocumentPickerService:
             except Exception:
                 pass
 
+
+    def _resolve_display_name_native(self, context_obj, uri_string, default_name):
+        if platform != "android" or AndroidUriCopyHelper is None:
+            return None
+        try:
+            name = AndroidUriCopyHelper.resolveDisplayName(context_obj, uri_string, default_name or "")
+            if name:
+                return str(name)
+        except Exception:
+            pass
+        return None
+
+    def _copy_uri_to_local_file_native(self, context_obj, uri_string, out_path):
+        if platform != "android" or AndroidUriCopyHelper is None:
+            return False
+        try:
+            ok = AndroidUriCopyHelper.copyUriToPath(context_obj, uri_string, out_path)
+            return bool(ok)
+        except Exception:
+            return False
+
+
     def copy_uri_to_local_file(self, uri, default_name="selected_input", required_suffix=None, allowed_suffixes=None):
         if platform != "android" or not ANDROID_JAVA_AVAILABLE:
             raise RuntimeError("Android document picker is unavailable.")
@@ -647,53 +675,25 @@ class AndroidDocumentPickerService:
 
         uri = AndroidUri.parse(uri_string)
 
-        display_name = None
-        cursor = None
-        try:
-            OpenableColumns = autoclass("android.provider.OpenableColumns")
-            cursor = resolver.query(uri, None, None, None, None)
-            if cursor is not None and cursor.moveToFirst():
-                idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                if idx >= 0:
-                    display_name = cursor.getString(idx)
-        except Exception:
-            display_name = None
-        finally:
+        display_name = self._resolve_display_name_native(activity_obj, uri_string, default_name)
+
+        if not display_name:
+            cursor = None
             try:
-                if cursor is not None:
-                    cursor.close()
+                OpenableColumns = autoclass("android.provider.OpenableColumns")
+                cursor = resolver.query(uri, None, None, None, None)
+                if cursor is not None and cursor.moveToFirst():
+                    idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if idx >= 0:
+                        display_name = cursor.getString(idx)
             except Exception:
-                pass
-
-        file_bytes = b""
-        read_backend = "none"
-
-        # Preferred path on Android: use a maintained URI stream helper when available.
-        # If that returns obviously invalid zero-filled bytes, keep trying lower-level backends.
-        file_bytes, display_name = self._read_uri_bytes_via_androidsystemfilechooser(uri, display_name=display_name)
-        if file_bytes and not self._looks_like_invalid_zero_payload(file_bytes):
-            read_backend = "androidssystemfilechooser"
-
-        # Secondary path: read through ParcelFileDescriptor -> real OS fd.
-        if (not file_bytes) or self._looks_like_invalid_zero_payload(file_bytes):
-            fd_bytes = self._read_uri_bytes_via_pfd(resolver, uri)
-            if fd_bytes and not self._looks_like_invalid_zero_payload(fd_bytes):
-                file_bytes = fd_bytes
-                read_backend = "pfd"
-
-        # Final fallback path: stream copy through Java InputStream into a Java ByteArrayOutputStream.
-        if (not file_bytes) or self._looks_like_invalid_zero_payload(file_bytes):
-            stream_bytes = self._read_uri_bytes_via_inputstream(resolver, uri)
-            if stream_bytes:
-                file_bytes = stream_bytes
-                read_backend = "inputstream"
-
-        if (not file_bytes) or self._looks_like_invalid_zero_payload(file_bytes):
-            sample = repr((file_bytes or b"")[:32])
-            raise ValueError(
-                "Android returned an unreadable file payload. "
-                f"Backend={read_backend}; first bytes={sample}"
-            )
+                display_name = None
+            finally:
+                try:
+                    if cursor is not None:
+                        cursor.close()
+                except Exception:
+                    pass
 
         if (not display_name) and ANDROID_SYSTEM_FILE_CHOOSER_AVAILABLE and callable(uri_to_extension):
             try:
@@ -709,6 +709,66 @@ class AndroidDocumentPickerService:
             if normalized and not any(lower_name.endswith(s) for s in normalized):
                 raise ValueError(f"Selected file must end with one of: {', '.join(normalized)}")
 
+        target_path = self.import_store.build_local_path(
+            display_name=display_name,
+            default_name=default_name,
+            required_suffix=required_suffix,
+        )
+
+        native_ok = self._copy_uri_to_local_file_native(activity_obj, uri_string, target_path)
+        read_backend = "nativehelper" if native_ok else "none"
+
+        file_bytes = b""
+        if native_ok and os.path.exists(target_path):
+            try:
+                with open(target_path, "rb") as fh:
+                    file_bytes = fh.read()
+            except Exception:
+                file_bytes = b""
+
+        if (not file_bytes) or self._looks_like_invalid_zero_payload(file_bytes):
+            if os.path.exists(target_path):
+                try:
+                    os.remove(target_path)
+                except Exception:
+                    pass
+
+            chooser_bytes, display_name = self._read_uri_bytes_via_androidsystemfilechooser(uri, display_name=display_name)
+            if chooser_bytes and not self._looks_like_invalid_zero_payload(chooser_bytes):
+                file_bytes = chooser_bytes
+                read_backend = "androidssystemfilechooser"
+
+            if (not file_bytes) or self._looks_like_invalid_zero_payload(file_bytes):
+                fd_bytes = self._read_uri_bytes_via_pfd(resolver, uri)
+                if fd_bytes and not self._looks_like_invalid_zero_payload(fd_bytes):
+                    file_bytes = fd_bytes
+                    read_backend = "pfd"
+
+            if (not file_bytes) or self._looks_like_invalid_zero_payload(file_bytes):
+                stream_bytes = self._read_uri_bytes_via_inputstream(resolver, uri)
+                if stream_bytes and not self._looks_like_invalid_zero_payload(stream_bytes):
+                    file_bytes = stream_bytes
+                    read_backend = "inputstream"
+
+            if (not file_bytes) or self._looks_like_invalid_zero_payload(file_bytes):
+                sample = repr((file_bytes or b"")[:32])
+                raise ValueError(
+                    "Android returned an unreadable file payload. "
+                    f"Backend={read_backend}; first bytes={sample}"
+                )
+
+            target_path = self.import_store.save_bytes(
+                file_bytes,
+                display_name=display_name,
+                default_name=default_name,
+                required_suffix=required_suffix,
+            )
+            try:
+                with open(target_path, "rb") as fh:
+                    file_bytes = fh.read()
+            except Exception:
+                file_bytes = b""
+
         if required_suffix and required_suffix.lower() == ".pdf":
             pdf_pos = file_bytes.find(b"%PDF-")
             if pdf_pos == -1 or pdf_pos > 1024:
@@ -719,13 +779,14 @@ class AndroidDocumentPickerService:
                 )
             if pdf_pos > 0:
                 file_bytes = file_bytes[pdf_pos:]
+                with open(target_path, "wb") as fh:
+                    fh.write(file_bytes)
 
-        return self.import_store.save_bytes(
-            file_bytes,
-            display_name=display_name,
-            default_name=default_name,
-            required_suffix=required_suffix,
-        )
+        if not os.path.exists(target_path) or os.path.getsize(target_path) <= 0:
+            raise ValueError(f"Imported file is missing or empty after copy. Backend={read_backend}")
+
+        return target_path
+
 
     def open_document_picker(self, request_code, mime_type="*/*", title="document", on_picked=None, cancel_message=None, required_suffix=None, allowed_suffixes=None, extra_mime_types=None):
         if platform != "android" or not ANDROID_JAVA_AVAILABLE:
