@@ -14,6 +14,7 @@ import re
 import ssl
 import urllib.request
 import tempfile
+import sys
 from urllib.parse import urlparse, parse_qs
 from functools import partial
 from types import SimpleNamespace
@@ -91,7 +92,7 @@ from kivy.clock import Clock
 from kivy.core.image import Image as CoreImage
 from kivy.core.text import Label as CoreLabel
 from kivy.core.window import Window
-from kivy.graphics import Color, Line, Rectangle, RoundedRectangle
+from kivy.graphics import Color, Line, Rectangle, RoundedRectangle, Ellipse
 from kivy.graphics.texture import Texture
 from kivy.metrics import dp
 from kivy.properties import StringProperty, NumericProperty, BooleanProperty, ListProperty, ObjectProperty
@@ -99,6 +100,7 @@ from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
 from kivy.uix.checkbox import CheckBox
 from kivy.uix.filechooser import FileChooserListView
+from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.gridlayout import GridLayout
 from kivy.uix.image import Image
 from kivy.uix.label import Label
@@ -129,6 +131,205 @@ except Exception:
     MDCheckbox = None
     MDSwitch = None
     KIVYMD_AVAILABLE = False
+
+
+class NeoMobileButton(Button):
+    """Rounded, layered button used to give the mobile UI a richer look."""
+
+    def __init__(self, tone="primary", theme=None, **kwargs):
+        self.tone = tone
+        self.theme = theme or {}
+        self.corner_radius = kwargs.pop("corner_radius", dp(20))
+        super().__init__(**kwargs)
+        self.background_normal = ""
+        self.background_down = ""
+        self.background_color = (0, 0, 0, 0)
+        self.border = (0, 0, 0, 0)
+        self.color = (0.95, 0.97, 1.0, 1)
+        self.font_size = max(float(self.font_size), dp(15))
+        self.bold = True
+        self.padding = [dp(18), dp(14), dp(18), dp(14)]
+        self.halign = "center"
+        self.valign = "middle"
+        self.text_size = self.size
+        self.shorten = True
+        self.shorten_from = "right"
+
+        with self.canvas.before:
+            self._shadow_color = Color(0, 0, 0, 0.32)
+            self._shadow_rect = RoundedRectangle(radius=[self.corner_radius] * 4)
+            self._outer_glow_color = Color(1, 1, 1, 0.06)
+            self._outer_glow_rect = RoundedRectangle(radius=[self.corner_radius + dp(4)] * 4)
+            self._base_color = Color(0.2, 0.32, 0.58, 1)
+            self._base_rect = RoundedRectangle(radius=[self.corner_radius] * 4)
+            self._nebula_color = Color(1, 1, 1, 0.08)
+            self._nebula_rect = RoundedRectangle(radius=[max(dp(10), self.corner_radius - dp(2))] * 4)
+            self._core_color = Color(1, 1, 1, 0.08)
+            self._core_rect = RoundedRectangle(radius=[max(dp(8), self.corner_radius - dp(6))] * 4)
+            self._shine_color = Color(1, 1, 1, 0.07)
+            self._shine_rect = RoundedRectangle(radius=[max(dp(8), self.corner_radius - dp(4))] * 4)
+            self._accent_color = Color(1, 1, 1, 0.18)
+            self._accent_rect = RoundedRectangle(radius=[dp(10)] * 4)
+            self._comet_color = Color(1, 1, 1, 0.14)
+            self._comet_rect = RoundedRectangle(radius=[dp(8)] * 4)
+            self._star1_color = Color(1, 1, 1, 0.18)
+            self._star1 = Ellipse()
+            self._star2_color = Color(1, 1, 1, 0.14)
+            self._star2 = Ellipse()
+        with self.canvas.after:
+            self._border_color = Color(1, 1, 1, 0.12)
+            self._border_line = Line(width=1.1)
+            self._inner_border_color = Color(1, 1, 1, 0.04)
+            self._inner_border_line = Line(width=1.0)
+
+        self.bind(pos=self._update_graphics, size=self._update_graphics, state=self._update_graphics, disabled=self._update_graphics)
+        self.bind(size=self._sync_text_size)
+        self._sync_text_size()
+        self._update_graphics()
+
+    @staticmethod
+    def _mix(a, b, t):
+        return tuple((a[i] * (1.0 - t)) + (b[i] * t) for i in range(len(a)))
+
+    def _resolve_palette(self):
+        theme = self.theme or {}
+        return {
+            "primary": theme.get("primary", (0.24, 0.48, 0.96, 1)),
+            "soft": theme.get("primary_soft", (0.16, 0.24, 0.38, 1)),
+            "accent": theme.get("accent", (0.10, 0.78, 0.63, 1)),
+            "secondary": theme.get("secondary", (0.82, 0.52, 1.0, 1)),
+            "aurora": theme.get("aurora", (0.28, 0.90, 1.0, 1)),
+            "starlight": theme.get("starlight", (1.0, 0.94, 0.78, 1)),
+            "plain": theme.get("surface_soft", (0.135, 0.16, 0.215, 1)),
+            "danger": theme.get("danger", (0.87, 0.33, 0.41, 1)),
+            "text": theme.get("text", (0.93, 0.96, 1.0, 1)),
+            "muted": theme.get("muted", (0.60, 0.68, 0.80, 1)),
+            "border": theme.get("border", (0.18, 0.24, 0.34, 1)),
+        }
+
+    def _sync_text_size(self, *_):
+        self.text_size = self.size
+
+    def _update_graphics(self, *_):
+        pal = self._resolve_palette()
+        base = pal.get(self.tone, pal["primary"])
+        if self.tone == "accent":
+            nebula = self._mix(base, pal["starlight"], 0.35)
+            glow = self._mix(base, pal["aurora"], 0.20)
+            comet = pal["starlight"]
+        elif self.tone == "danger":
+            nebula = self._mix(base, pal["secondary"], 0.22)
+            glow = self._mix(base, pal["starlight"], 0.08)
+            comet = self._mix(pal["starlight"], base, 0.35)
+        elif self.tone == "plain":
+            nebula = self._mix(base, pal["secondary"], 0.18)
+            glow = self._mix(base, pal["aurora"], 0.08)
+            comet = self._mix(pal["starlight"], pal["aurora"], 0.40)
+        elif self.tone == "soft":
+            nebula = self._mix(base, pal["secondary"], 0.28)
+            glow = self._mix(base, pal["aurora"], 0.14)
+            comet = self._mix(pal["starlight"], pal["secondary"], 0.30)
+        else:
+            nebula = self._mix(base, pal["secondary"], 0.24)
+            glow = self._mix(base, pal["aurora"], 0.18)
+            comet = self._mix(pal["starlight"], pal["aurora"], 0.24)
+
+        border = self._mix(glow, pal["border"], 0.34)
+        gloss = (1, 1, 1, 0.08)
+        accent = (1, 1, 1, 0.20)
+        outer_glow_alpha = 0.11
+        shadow_alpha = 0.34
+        star_alpha_1 = 0.16
+        star_alpha_2 = 0.10
+
+        if self.disabled:
+            base = self._mix(base, (0.12, 0.14, 0.19, 1), 0.60)
+            nebula = self._mix(nebula, (0.10, 0.11, 0.15, 1), 0.58)
+            glow = self._mix(glow, (0.12, 0.13, 0.16, 1), 0.60)
+            border = self._mix(border, (0.20, 0.22, 0.27, 1), 0.48)
+            gloss = (1, 1, 1, 0.02)
+            accent = (1, 1, 1, 0.04)
+            outer_glow_alpha = 0.02
+            shadow_alpha = 0.08
+            star_alpha_1 = 0.04
+            star_alpha_2 = 0.03
+            self.color = self._mix(pal["text"], pal["muted"], 0.58)
+        elif self.state == "down":
+            base = self._mix(base, (0.03, 0.05, 0.08, 1), 0.18)
+            nebula = self._mix(nebula, (0.02, 0.03, 0.05, 1), 0.16)
+            glow = self._mix(glow, pal["starlight"], 0.05)
+            border = self._mix(border, pal["starlight"], 0.10)
+            gloss = (1, 1, 1, 0.03)
+            accent = (1, 1, 1, 0.10)
+            outer_glow_alpha = 0.06
+            shadow_alpha = 0.22
+            self.color = (1, 1, 1, 1) if self.tone in ("primary", "accent", "danger", "secondary") else pal["text"]
+        else:
+            self.color = (1, 1, 1, 1) if self.tone in ("primary", "accent", "danger", "secondary") else pal["text"]
+
+        x, y = self.pos
+        w, h = self.size
+        shadow_offset = dp(3 if self.state != "down" else 1)
+        inset = dp(1.5)
+
+        self._shadow_color.rgba = (0, 0, 0, shadow_alpha)
+        self._shadow_rect.pos = (x, y - shadow_offset)
+        self._shadow_rect.size = (w, h + dp(2))
+        self._shadow_rect.radius = [self.corner_radius] * 4
+
+        self._outer_glow_color.rgba = (*glow[:3], outer_glow_alpha if not self.disabled else 0.0)
+        self._outer_glow_rect.pos = (x - dp(1.5), y - dp(1.5))
+        self._outer_glow_rect.size = (w + dp(3), h + dp(3))
+        self._outer_glow_rect.radius = [self.corner_radius + dp(4)] * 4
+
+        self._base_color.rgba = base
+        self._base_rect.pos = (x, y)
+        self._base_rect.size = (w, h)
+        self._base_rect.radius = [self.corner_radius] * 4
+
+        self._nebula_color.rgba = (*nebula[:3], 0.32 if not self.disabled else 0.10)
+        self._nebula_rect.pos = (x + inset, y + dp(1))
+        self._nebula_rect.size = (max(0, w - inset * 2), max(0, h * 0.62))
+        self._nebula_rect.radius = [max(dp(10), self.corner_radius - dp(2))] * 4
+
+        shine_h = max(dp(12), h * 0.42)
+        self._shine_color.rgba = gloss
+        self._shine_rect.pos = (x + inset, y + h - shine_h - inset)
+        self._shine_rect.size = (max(0, w - inset * 2), max(0, shine_h))
+        self._shine_rect.radius = [max(dp(8), self.corner_radius - dp(4))] * 4
+
+        self._core_color.rgba = (*comet[:3], 0.20 if not self.disabled else 0.05)
+        self._core_rect.pos = (x + dp(10), y + dp(7))
+        self._core_rect.size = (max(dp(18), w * 0.46), dp(5))
+        self._core_rect.radius = [dp(8)] * 4
+
+        accent_w = min(dp(28), w * 0.18)
+        accent_h = dp(4)
+        self._accent_color.rgba = accent
+        self._accent_rect.pos = (x + dp(14), y + h - accent_h - dp(10))
+        self._accent_rect.size = (accent_w, accent_h)
+        self._accent_rect.radius = [dp(8)] * 4
+
+        comet_w = min(dp(40), max(dp(20), w * 0.22))
+        self._comet_color.rgba = (*comet[:3], 0.22 if not self.disabled else 0.06)
+        self._comet_rect.pos = (x + w - comet_w - dp(14), y + h - dp(16))
+        self._comet_rect.size = (comet_w, dp(3.2))
+        self._comet_rect.radius = [dp(8)] * 4
+
+        star_size_1 = dp(3.0)
+        star_size_2 = dp(2.2)
+        self._star1_color.rgba = (*pal["starlight"][:3], star_alpha_1)
+        self._star1.pos = (x + w - dp(18), y + h - dp(18))
+        self._star1.size = (star_size_1, star_size_1)
+        self._star2_color.rgba = (*pal["aurora"][:3], star_alpha_2)
+        self._star2.pos = (x + w - dp(30), y + h - dp(13))
+        self._star2.size = (star_size_2, star_size_2)
+
+        self._border_color.rgba = border
+        self._border_line.rounded_rectangle = [x, y, w, h, self.corner_radius]
+        self._inner_border_color.rgba = (1, 1, 1, 0.035 if not self.disabled else 0.0)
+        self._inner_border_line.rounded_rectangle = [x + dp(1), y + dp(1), max(0, w - dp(2)), max(0, h - dp(2)), max(dp(8), self.corner_radius - dp(2))]
+
 
 FITZ_AVAILABLE = bool(fitz is not None and hasattr(fitz, "open") and hasattr(fitz, "Rect"))
 
@@ -930,6 +1131,9 @@ class MediMapEngine:
         self.settings["C_Size"] = list(DEFAULTS["C_Size"])
         self.pdf_source = PdfPageSource()
         self.detected_page_idx = None
+        self.boxes_by_page = {}
+        self.box_types_by_page = {}
+        self.geom_by_page = {}
 
     # --------------------------------------------------------
     # Data loading
@@ -1009,6 +1213,9 @@ class MediMapEngine:
         self.box_types = []
         self.geom = {"names": [], "dob": [], "phil": []}
         self.detected_page_idx = None
+        self.boxes_by_page = {}
+        self.box_types_by_page = {}
+        self.geom_by_page = {}
         return total
 
     def total_pages(self):
@@ -1049,10 +1256,33 @@ class MediMapEngine:
     def android_preview_only_mode(self):
         return platform == "android" and not self.supports_detection_backend()
 
+    def _cache_detection_for_page(self, page_idx):
+        page_idx = int(page_idx)
+        self.boxes_by_page[page_idx] = [fitz.Rect(r) for r in self.all_boxes]
+        self.box_types_by_page[page_idx] = list(self.box_types)
+        geom_copy = {}
+        for key, rects in (self.geom or {}).items():
+            geom_copy[key] = [fitz.Rect(r) for r in rects]
+        self.geom_by_page[page_idx] = geom_copy
+
+    def _restore_detection_for_page(self, page_idx):
+        page_idx = int(page_idx)
+        if page_idx not in self.boxes_by_page:
+            return False
+        self.all_boxes = [fitz.Rect(r) for r in self.boxes_by_page.get(page_idx, [])]
+        self.box_types = list(self.box_types_by_page.get(page_idx, []))
+        geom_src = self.geom_by_page.get(page_idx, {}) or {}
+        self.geom = {k: [fitz.Rect(r) for r in rects] for k, rects in geom_src.items()}
+        self.detected_page_idx = page_idx
+        return True
+
     def _ensure_detection_for_page(self, page_idx=0):
         page_idx = int(page_idx)
-        if self.detected_page_idx != page_idx or not self.all_boxes or (page_idx == 0 and not self.geom.get("names")):
-            self.run_detection(page_idx=page_idx)
+        if self.detected_page_idx == page_idx and self.all_boxes:
+            return
+        if self._restore_detection_for_page(page_idx):
+            return
+        self.run_detection(page_idx=page_idx)
 
     def get_raw_preview_pixmap(self, page_idx=0, preview_zoom=1.5):
         """Render the raw loaded PDF page without filling or boxes."""
@@ -1483,6 +1713,10 @@ class MediMapEngine:
         if not self.supports_detection_backend():
             raise RuntimeError("No PDF rasterization backend is available for detection in this build.")
 
+        self.all_boxes = []
+        self.box_types = []
+        self.geom = {"names": [], "dob": [], "phil": []}
+
         img = self._render_pdf_page_bgr(self.pdf_path, page_idx=page_idx, preview_zoom=ZOOM)
         if img is None or getattr(img, "size", 0) == 0:
             raise ValueError("Failed to render PDF page into image.")
@@ -1691,6 +1925,7 @@ class MediMapEngine:
         self._cleanup_field_fragments()
         self._cleanup_line_field_conflicts()
         self.detected_page_idx = int(page_idx)
+        self._cache_detection_for_page(page_idx)
 
     # --------------------------------------------------------
     # Mapping helpers
@@ -2619,7 +2854,13 @@ class InteractivePreview(Image):
         self.preview_zoom = 1.0
         self.page_idx = 0
         self.box_tap_callback = None
+        self.box_double_tap_callback = None
         self.hover_callback = None
+        self.zoom_request_callback = None
+        self.display_scale = 1.0
+        self._active_touches = {}
+        self._pinch_start_dist = None
+        self._pinch_start_scale = 1.0
         self._mouse_bound = False
         self.bind(texture=self._redraw_overlay, size=self._redraw_overlay, pos=self._redraw_overlay)
         if platform != "android":
@@ -2660,6 +2901,8 @@ class InteractivePreview(Image):
         self.boxes_payload = []
         self.selected_ids = set()
         self.hovered_box_id = None
+        self._active_touches = {}
+        self._pinch_start_dist = None
         self._redraw_overlay()
 
     def _get_display_rect(self):
@@ -2686,16 +2929,65 @@ class InteractivePreview(Image):
             return (1.0, 0.85, 0.1, 1.0)
         return (0.1, 1.0, 0.3, 1.0)
 
-    def _draw_label(self, x, y, text):
-        core = CoreLabel(text=str(text), font_size=12)
+    def _draw_label(self, x, y, text, anchor="top_left"):
+        core = CoreLabel(text=str(text), font_size=11)
         core.refresh()
         tex = core.texture
         pad_x, pad_y = 4, 2
         bg_w = tex.width + pad_x * 2
         bg_h = tex.height + pad_y * 2
-        Rectangle(pos=(x, y - bg_h), size=(bg_w, bg_h))
+        draw_x = float(x)
+        draw_y = float(y)
+        if anchor == "left":
+            draw_x = x - bg_w - 4
+            draw_y = y + bg_h / 2.0
+        elif anchor == "right":
+            draw_x = x + 4
+            draw_y = y + bg_h / 2.0
+        elif anchor == "bottom":
+            draw_x = x
+            draw_y = y - 4
+        else:
+            draw_x = x
+            draw_y = y + bg_h + 4
+        Rectangle(pos=(draw_x, draw_y - bg_h), size=(bg_w, bg_h))
         Color(1, 1, 1, 1)
-        Rectangle(texture=tex, pos=(x + pad_x, y - bg_h + pad_y), size=tex.size)
+        Rectangle(texture=tex, pos=(draw_x + pad_x, draw_y - bg_h + pad_y), size=tex.size)
+
+    def _label_anchor_for_box(self, box, x, y, w, h, disp):
+        dx, dy, dw, dh = disp
+        box_type = str(box.get("t", "field"))
+        small_box = (w <= 28 or h <= 22)
+        if box_type == "check" or small_box:
+            if x - dx > 42:
+                return "left"
+            if (dx + dw) - (x + w) > 42:
+                return "right"
+            return "bottom" if y - dy > 18 else "top_left"
+        if y + h + 22 <= dy + dh:
+            return "top_left"
+        return "bottom"
+
+    def _resolve_box_image_rect(self, box):
+        if not isinstance(box, dict):
+            return 0.0, 0.0, 0.0, 0.0
+        try:
+            if all(k in box for k in ("pdf_x", "pdf_y", "pdf_w", "pdf_h")):
+                zoom = float(getattr(self, "preview_zoom", 1.0) or 1.0)
+                return (
+                    float(box.get("pdf_x", 0.0)) * zoom,
+                    float(box.get("pdf_y", 0.0)) * zoom,
+                    float(box.get("pdf_w", 0.0)) * zoom,
+                    float(box.get("pdf_h", 0.0)) * zoom,
+                )
+        except Exception:
+            pass
+        return (
+            float(box.get("x", 0.0) or 0.0),
+            float(box.get("y", 0.0) or 0.0),
+            float(box.get("w", 0.0) or 0.0),
+            float(box.get("h", 0.0) or 0.0),
+        )
 
     def _redraw_overlay(self, *args):
         self.canvas.after.clear()
@@ -2708,16 +3000,17 @@ class InteractivePreview(Image):
         sy = dh / float(max(tex.height, 1))
         with self.canvas.after:
             for box in self.boxes_payload:
-                x = dx + box["x"] * sx
-                y = dy + (tex.height - (box["y"] + box["h"])) * sy
-                w = max(1.0, box["w"] * sx)
-                h = max(1.0, box["h"] * sy)
+                bx, by, bw, bh = self._resolve_box_image_rect(box)
+                x = dx + bx * sx
+                y = dy + (tex.height - (by + bh)) * sy
+                w = max(1.0, bw * sx)
+                h = max(1.0, bh * sy)
                 selected = box["id"] in self.selected_ids
                 hovered = (box["id"] == self.hovered_box_id)
                 Color(*self._box_color(box.get("t", "field"), selected=selected, hovered=hovered))
                 Line(rectangle=(x, y, w, h), width=3.2 if selected else (2.4 if hovered else 1.35))
                 Color(0, 0, 0, 0.88)
-                self._draw_label(x, y + h, box["id"])
+                self._draw_label(x, y + h, box["id"], anchor=self._label_anchor_for_box(box, x, y, w, h, disp))
 
     def _touch_to_image_point(self, touch):
         disp = self._get_display_rect()
@@ -2734,25 +3027,70 @@ class InteractivePreview(Image):
     def _find_hit_box(self, img_x, img_y):
         hits = []
         for box in self.boxes_payload:
-            if box["x"] <= img_x <= box["x"] + box["w"] and box["y"] <= img_y <= box["y"] + box["h"]:
-                hits.append(box)
+            bx, by, bw, bh = self._resolve_box_image_rect(box)
+            if bx <= img_x <= bx + bw and by <= img_y <= by + bh:
+                hits.append((box, bw * bh))
         if not hits:
             return None
-        hits.sort(key=lambda b: (b["id"], b["w"] * b["h"]))
-        return hits[0]
+        type_priority = {"check": 0, "field": 1, "line": 2}
+        hits.sort(key=lambda item: (item[1], type_priority.get(str(item[0].get("t", "field")), 9), item[0]["id"]))
+        return hits[0][0]
 
     def on_touch_down(self, touch):
+        if getattr(touch, "is_mouse_scrolling", False):
+            if self.collide_point(*touch.pos):
+                direction = "in" if getattr(touch, "button", "") == "scrollup" else "out"
+                if callable(self.zoom_request_callback) and getattr(touch, "button", "") in ("scrollup", "scrolldown"):
+                    self.zoom_request_callback("step", direction)
+                    return True
+            return super().on_touch_down(touch)
+
         if not self.collide_point(*touch.pos):
             return super().on_touch_down(touch)
+
+        self._active_touches[touch.uid] = (touch.x, touch.y)
+        if len(self._active_touches) == 2:
+            pts = list(self._active_touches.values())[:2]
+            self._pinch_start_dist = math.hypot(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1])
+            self._pinch_start_scale = float(getattr(self, "display_scale", 1.0) or 1.0)
+
         pt = self._touch_to_image_point(touch)
+        hit = self._find_hit_box(*pt) if pt is not None else None
+
+        if getattr(touch, "is_double_tap", False):
+            if hit is not None and callable(self.box_double_tap_callback):
+                self.box_double_tap_callback(hit)
+                return True
+            if callable(self.zoom_request_callback):
+                self.zoom_request_callback("step", "in")
+                return True
+
         if pt is None:
             return super().on_touch_down(touch)
-        hit = self._find_hit_box(*pt)
         if hit is not None:
             if callable(self.box_tap_callback):
                 self.box_tap_callback(hit)
             return True
         return super().on_touch_down(touch)
+
+    def on_touch_move(self, touch):
+        if touch.uid in self._active_touches:
+            self._active_touches[touch.uid] = (touch.x, touch.y)
+            if len(self._active_touches) >= 2 and callable(self.zoom_request_callback):
+                pts = list(self._active_touches.values())[:2]
+                cur_dist = math.hypot(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1])
+                if self._pinch_start_dist and cur_dist > 0:
+                    factor = cur_dist / float(max(self._pinch_start_dist, 1e-6))
+                    self.zoom_request_callback("scale", self._pinch_start_scale * factor)
+                    return True
+        return super().on_touch_move(touch)
+
+    def on_touch_up(self, touch):
+        if touch.uid in self._active_touches:
+            self._active_touches.pop(touch.uid, None)
+            if len(self._active_touches) < 2:
+                self._pinch_start_dist = None
+        return super().on_touch_up(touch)
 
     def _on_mouse_pos(self, _window, pos):
         if platform == "android" or not self.get_root_window():
@@ -2777,10 +3115,185 @@ class MediMapProLayout(BoxLayout):
     pass
 
 
+
+
+class FloatingPreviewHUD(BoxLayout):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._drag_touch = None
+        self._drag_offset = (0, 0)
+        self._collapsed = False
+        self._expanded_height = None
+        self._body_widget = None
+        self._toggle_button = None
+        self._drag_handle_height = dp(40)
+        self._interactive_widgets = []
+        self._allow_body_passthrough = True
+        self._drag_enabled = True
+        self._collapse_callbacks = []
+
+    def set_body_widget(self, widget, expanded_height=None):
+        self._body_widget = widget
+        if expanded_height is not None:
+            self._expanded_height = float(expanded_height)
+        elif widget is not None:
+            self._expanded_height = max(
+                float(getattr(self, 'height', 0) or 0),
+                float(getattr(widget, 'height', 0) or 0) + self._drag_handle_height + dp(18)
+            )
+
+    def set_toggle_button(self, button):
+        self._toggle_button = button
+        if button is not None:
+            button.bind(on_release=self.toggle_collapsed)
+            self._refresh_collapse_state()
+
+    def register_interactive_widgets(self, *widgets):
+        collected = []
+        for widget in widgets:
+            if widget is None:
+                continue
+            if isinstance(widget, (list, tuple, set)):
+                for sub in widget:
+                    if sub is not None:
+                        collected.append(sub)
+            else:
+                collected.append(widget)
+        self._interactive_widgets = collected
+
+    def set_drag_enabled(self, enabled=True):
+        self._drag_enabled = bool(enabled)
+
+    def set_allow_body_passthrough(self, enabled=True):
+        self._allow_body_passthrough = bool(enabled)
+
+    def bind_collapse_state(self, callback):
+        if callable(callback):
+            self._collapse_callbacks.append(callback)
+
+    def _emit_collapse_state(self):
+        for callback in list(self._collapse_callbacks):
+            try:
+                callback(bool(self._collapsed))
+            except Exception:
+                pass
+
+    def toggle_collapsed(self, *_):
+        self._collapsed = not bool(self._collapsed)
+        self._refresh_collapse_state()
+
+    def _refresh_collapse_state(self):
+        if self._body_widget is not None:
+            self._body_widget.opacity = 0 if self._collapsed else 1
+            self._body_widget.disabled = bool(self._collapsed)
+            self._body_widget.height = 0 if self._collapsed else max(
+                dp(1),
+                float(getattr(self._body_widget, 'minimum_height', 0) or getattr(self._body_widget, 'height', 0) or dp(110))
+            )
+            self._body_widget.size_hint_y = None
+        if self._collapsed:
+            self.height = self._drag_handle_height + dp(8)
+        else:
+            self.height = max(self._drag_handle_height + dp(8), float(self._expanded_height or self.height or dp(150)))
+        if self._toggle_button is not None:
+            self._toggle_button.text = '✦' if self._collapsed else '—'
+        self._emit_collapse_state()
+
+    def _local_point_in_widget(self, widget, touch):
+        try:
+            lx, ly = widget.to_widget(*touch.pos, relative=True)
+            return (0 <= lx <= widget.width) and (0 <= ly <= widget.height)
+        except Exception:
+            return False
+
+    def _hud_contains(self, touch):
+        return self._local_point_in_widget(self, touch)
+
+    def _handle_contains(self, touch):
+        if not self._hud_contains(touch):
+            return False
+        if self._toggle_button is not None and self._touch_hits_widget_tree(self._toggle_button, touch):
+            return False
+        try:
+            _, ly = self.to_widget(*touch.pos, relative=True)
+        except Exception:
+            return False
+        return ly >= max(0.0, self.height - self._drag_handle_height)
+
+    def _touch_hits_widget_tree(self, widget, touch):
+        if widget is None:
+            return False
+        if self._local_point_in_widget(widget, touch):
+            return True
+        for child in getattr(widget, 'children', []) or []:
+            if self._touch_hits_widget_tree(child, touch):
+                return True
+        return False
+
+    def _touch_hits_interactive(self, touch):
+        if self._toggle_button is not None and self._touch_hits_widget_tree(self._toggle_button, touch):
+            return True
+        for widget in self._interactive_widgets:
+            if self._touch_hits_widget_tree(widget, touch):
+                return True
+        return False
+
+    def on_touch_down(self, touch):
+        if self._drag_enabled and self._handle_contains(touch):
+            try:
+                px, py = self.parent.to_widget(*touch.pos, relative=True)
+            except Exception:
+                px, py = touch.pos
+            self._drag_touch = touch
+            self._drag_offset = (px - self.x, py - self.y)
+            touch.grab(self)
+            self.pos_hint = {}
+            return True
+        if self._hud_contains(touch) and self._touch_hits_interactive(touch):
+            return super().on_touch_down(touch)
+        if self._allow_body_passthrough and self._hud_contains(touch):
+            return False
+        return super().on_touch_down(touch)
+
+    def on_touch_move(self, touch):
+        if touch.grab_current is self:
+            parent = self.parent
+            if parent is None:
+                return True
+            try:
+                px, py = parent.to_widget(*touch.pos, relative=True)
+            except Exception:
+                px, py = touch.pos
+            new_x = px - self._drag_offset[0]
+            new_y = py - self._drag_offset[1]
+            max_x = max(0.0, parent.width - self.width)
+            max_y = max(0.0, parent.height - self.height)
+            self.x = min(max(0.0, new_x), max_x)
+            self.y = min(max(0.0, new_y), max_y)
+            return True
+        if self._hud_contains(touch) and self._touch_hits_interactive(touch):
+            return super().on_touch_move(touch)
+        if self._allow_body_passthrough and self._hud_contains(touch):
+            return False
+        return super().on_touch_move(touch)
+
+    def on_touch_up(self, touch):
+        if touch.grab_current is self:
+            touch.ungrab(self)
+            self._drag_touch = None
+            return True
+        if self._hud_contains(touch) and self._touch_hits_interactive(touch):
+            return super().on_touch_up(touch)
+        if self._allow_body_passthrough and self._hud_contains(touch):
+            return False
+        return super().on_touch_up(touch)
+
+
 class MediMapProApp(MDApp):
 
     def build(self):
         self.title = APP_TITLE
+        self.icon = "assets/icon.png"
         self.engine = MediMapEngine()
         self.import_store = LocalImportStore(self.get_app_output_dir)
         self.android_picker = AndroidDocumentPickerService(self.import_store, status_callback=self.set_status)
@@ -2795,41 +3308,81 @@ class MediMapProApp(MDApp):
             except Exception:
                 pass
 
-        is_mobile = (platform == "android")
+        self.force_mobile_layout = (os.environ.get("MEDIMAP_FORCE_MOBILE_UI", "0") == "1")
+        desktop_phone_emulation = (platform != "android" and self.force_mobile_layout)
+        is_mobile = (platform == "android") or desktop_phone_emulation
+        self.ui_mobile = is_mobile
+        self.desktop_phone_emulation = desktop_phone_emulation
         pad = dp(12) if is_mobile else dp(14)
         gap = dp(10) if is_mobile else dp(12)
         row_h = dp(52) if is_mobile else dp(46)
         input_h = dp(52) if is_mobile else dp(44)
 
         palette = {
-            "bg": (0.055, 0.075, 0.11, 1),
-            "surface": (0.085, 0.105, 0.145, 1),
-            "surface_alt": (0.11, 0.135, 0.185, 1),
-            "surface_soft": (0.135, 0.16, 0.215, 1),
-            "primary": (0.24, 0.48, 0.96, 1),
-            "primary_soft": (0.16, 0.24, 0.38, 1),
-            "accent": (0.10, 0.78, 0.63, 1),
-            "accent_soft": (0.10, 0.28, 0.24, 1),
-            "text": (0.93, 0.96, 1.0, 1),
-            "muted": (0.60, 0.68, 0.80, 1),
-            "border": (0.18, 0.24, 0.34, 1),
-            "preview_bg": (0.06, 0.08, 0.11, 1),
-            "chip": (0.13, 0.18, 0.27, 1),
-            "danger": (0.87, 0.33, 0.41, 1),
+            "bg": (0.006, 0.010, 0.030, 1),
+            "surface": (0.030, 0.055, 0.115, 0.992),
+            "surface_alt": (0.055, 0.088, 0.175, 0.995),
+            "surface_soft": (0.090, 0.120, 0.220, 0.995),
+            "primary": (0.265, 0.510, 1.000, 1),
+            "primary_soft": (0.110, 0.170, 0.420, 1),
+            "accent": (0.970, 0.720, 0.320, 1),
+            "accent_soft": (0.300, 0.180, 0.060, 1),
+            "secondary": (0.690, 0.430, 1.000, 1),
+            "aurora": (0.300, 0.920, 1.000, 1),
+            "starlight": (1.000, 0.950, 0.800, 1),
+            "text": (0.970, 0.980, 1.000, 1),
+            "muted": (0.720, 0.790, 0.940, 1),
+            "border": (0.380, 0.500, 0.960, 0.980),
+            "preview_bg": (0.004, 0.008, 0.022, 1),
+            "chip": (0.082, 0.108, 0.225, 0.992),
+            "danger": (1.000, 0.360, 0.560, 1),
         }
         Window.clearcolor = palette["bg"]
+        self.ui_palette = palette
+        self._page_selected_box_ids = {}
+        self._active_selection_page_idx = 0
+        self.preview_zoom_mode = "fit_page" if is_mobile else "manual"
+        self.preview_zoom_factor = 1.0
+        self.desktop_zoom_mode = "manual"
+        self.desktop_zoom_factor = 1.0
 
         def style_card(widget, color=None, radius=dp(22)):
             color = color or palette["surface"]
             with widget.canvas.before:
+                widget._card_shadow_color = Color(0, 0, 0, 0.26)
+                widget._card_shadow = RoundedRectangle(radius=[radius + dp(4)] * 4)
+                widget._card_glow_color = Color(palette["aurora"][0], palette["aurora"][1], palette["aurora"][2], 0.050)
+                widget._card_glow = RoundedRectangle(radius=[radius + dp(3)] * 4)
                 widget._card_bg_color = Color(*color)
                 widget._card_bg = RoundedRectangle(radius=[radius] * 4)
+                widget._card_nebula_color = Color(palette["secondary"][0], palette["secondary"][1], palette["secondary"][2], 0.085)
+                widget._card_nebula = RoundedRectangle(radius=[max(dp(10), radius - dp(2))] * 4)
+                widget._card_shine_color = Color(*palette["starlight"][:3], 0.045)
+                widget._card_shine = RoundedRectangle(radius=[max(dp(10), radius - dp(5))] * 4)
+                widget._card_star1_color = Color(*palette["starlight"][:3], 0.12)
+                widget._card_star1 = Ellipse()
+                widget._card_star2_color = Color(*palette["aurora"][:3], 0.10)
+                widget._card_star2 = Ellipse()
                 widget._card_border_color = Color(*palette["border"])
-                widget._card_border = Line(rounded_rectangle=[0, 0, 0, 0, radius], width=1.1)
+                widget._card_border = Line(rounded_rectangle=[0, 0, 0, 0, radius], width=1.15)
             def _upd(*_):
-                widget._card_bg.pos = widget.pos
-                widget._card_bg.size = widget.size
-                widget._card_border.rounded_rectangle = [widget.x, widget.y, widget.width, widget.height, radius]
+                x, y = widget.pos
+                w, h = widget.size
+                widget._card_shadow.pos = (x, y - dp(2))
+                widget._card_shadow.size = (w, h + dp(3))
+                widget._card_glow.pos = (x - dp(1), y - dp(1))
+                widget._card_glow.size = (w + dp(2), h + dp(2))
+                widget._card_bg.pos = (x, y)
+                widget._card_bg.size = (w, h)
+                widget._card_nebula.pos = (x + dp(1), y + dp(1))
+                widget._card_nebula.size = (max(0, w - dp(2)), max(0, h * 0.52))
+                widget._card_shine.pos = (x + dp(1.5), y + h - max(dp(18), h * 0.34) - dp(1.5))
+                widget._card_shine.size = (max(0, w - dp(3)), max(dp(18), h * 0.34))
+                widget._card_star1.pos = (x + w - dp(22), y + h - dp(18))
+                widget._card_star1.size = (dp(2.8), dp(2.8))
+                widget._card_star2.pos = (x + w - dp(36), y + h - dp(14))
+                widget._card_star2.size = (dp(2.0), dp(2.0))
+                widget._card_border.rounded_rectangle = [x, y, w, h, radius]
             widget.bind(pos=_upd, size=_upd)
             _upd()
             return widget
@@ -2866,7 +3419,7 @@ class MediMapProApp(MDApp):
                     text=subtitle,
                     color=palette["muted"],
                     size_hint_y=None,
-                    height=dp(18),
+                    height=dp(22),
                     halign="left",
                     valign="middle",
                     font_size=dp(11) if is_mobile else dp(11),
@@ -2888,11 +3441,25 @@ class MediMapProApp(MDApp):
                 "primary": palette["primary"],
                 "soft": palette["primary_soft"],
                 "accent": palette["accent"],
+                "secondary": palette.get("secondary", palette["accent"]),
                 "plain": palette["surface_soft"],
+                "danger": palette["danger"],
             }
             label = text if not icon else f"{icon}  {text}"
+
+            if is_mobile:
+                btn = NeoMobileButton(
+                    text=label,
+                    tone=tone,
+                    theme=palette,
+                    size_hint_y=None,
+                    height=max(row_h, dp(54)),
+                    font_size=dp(15),
+                )
+                return btn
+
             if KIVYMD_AVAILABLE and MDRaisedButton is not None:
-                if tone in ("primary", "accent"):
+                if tone in ("primary", "accent", "danger"):
                     btn = MDRaisedButton(
                         text=label,
                         size_hint_y=None,
@@ -2919,7 +3486,7 @@ class MediMapProApp(MDApp):
                     )
                 return btn
 
-            txt_color = (1,1,1,1) if tone in ("primary","accent") else palette["text"]
+            txt_color = (1,1,1,1) if tone in ("primary","accent","danger") else palette["text"]
             btn = Button(
                 text=label,
                 size_hint_y=None, height=row_h,
@@ -3012,6 +3579,112 @@ class MediMapProApp(MDApp):
                 return wrap
             return row
 
+        def _toggle_phone_view(*_):
+            if platform == "android":
+                return
+            next_state = not bool(getattr(self, "force_mobile_layout", False))
+            os.environ["MEDIMAP_FORCE_MOBILE_UI"] = "1" if next_state else "0"
+            self.set_status("Switching desktop view mode...")
+            try:
+                os.execv(sys.executable, [sys.executable] + sys.argv)
+            except Exception as e:
+                self.set_status(f"Could not restart for view toggle:\n{e}\nSet MEDIMAP_FORCE_MOBILE_UI={'1' if next_state else '0'} and relaunch.")
+        self._toggle_phone_view = _toggle_phone_view
+
+        def _make_preview_hud():
+            hud = FloatingPreviewHUD(
+                orientation="vertical",
+                spacing=dp(6),
+                size_hint=((1, None) if is_mobile else (None, None)),
+                width=(dp(292) if is_mobile else dp(300)),
+                height=(dp(168) if is_mobile else dp(178)),
+                padding=[dp(12), dp(10), dp(12), dp(10)],
+                pos_hint=({} if is_mobile else {"right": 0.985, "y": 0.02}),
+            )
+            self._style_popup_card(hud, palette.get("surface", (0.085, 0.105, 0.145, 0.96)), radius=dp(18))
+            hud_header = BoxLayout(orientation="horizontal", spacing=dp(6), size_hint_y=None, height=dp(32))
+            self.preview_hud_title_lbl = Label(
+                text="Preview HUD",
+                color=palette["text"],
+                size_hint_y=None,
+                height=dp(18),
+                halign="left",
+                valign="middle",
+                font_size=dp(11.5),
+                bold=True,
+            )
+            self.preview_hud_title_lbl.bind(size=self._sync_label_text_size)
+            hud_drag_hint = Label(
+                text=("tools" if is_mobile else "drag"),
+                color=palette["muted"],
+                size_hint=(None, None),
+                width=(dp(72) if is_mobile else dp(40)),
+                height=dp(18),
+                halign="right",
+                valign="middle",
+                font_size=dp(9.5),
+            )
+            hud_drag_hint.bind(size=self._sync_label_text_size)
+            self.btn_hud_pin = self._make_compact_action_button("—", tone="accent")
+            self.btn_hud_pin.size_hint = (None, None)
+            self.btn_hud_pin.size = ((dp(54), dp(32)) if is_mobile else (dp(38), dp(26)))
+            hud_header.add_widget(self.preview_hud_title_lbl)
+            hud_header.add_widget(hud_drag_hint)
+            hud_header.add_widget(self.btn_hud_pin)
+
+            hud_body = BoxLayout(orientation="vertical", spacing=dp(5), size_hint_y=None)
+            hud_body.bind(minimum_height=hud_body.setter("height"))
+            self.preview_hud_detail_lbl = Label(
+                text="Hover or tap a box to inspect it here.",
+                color=palette["text"],
+                size_hint_y=None,
+                height=dp(32),
+                halign="left",
+                valign="top",
+                font_size=dp(11),
+            )
+            self.preview_hud_detail_lbl.bind(size=self._sync_label_text_size)
+            self._bind_auto_height_label(self.preview_hud_detail_lbl, min_height=dp(30), extra_pad=dp(6))
+            self.preview_hud_mapping_lbl = Label(
+                text="Mapping: —",
+                color=palette["muted"],
+                size_hint_y=None,
+                height=dp(36),
+                halign="left",
+                valign="top",
+                font_size=dp(10.5),
+            )
+            self.preview_hud_mapping_lbl.bind(size=self._sync_label_text_size)
+            self._bind_auto_height_label(self.preview_hud_mapping_lbl, min_height=dp(32), extra_pad=dp(6))
+            hud_btns = GridLayout(cols=3, spacing=dp(6), size_hint_y=None, height=row_h)
+            self.btn_hud_map = make_button("Map", tone="primary")
+            self.btn_hud_map.bind(on_release=self._open_mapping_from_hud)
+            self.btn_hud_clear = make_button("Clear", tone="secondary")
+            self.btn_hud_clear.bind(on_release=self.on_clear_selected_mapping)
+            self.btn_hud_tune = make_button("Tune", tone="accent")
+            self.btn_hud_tune.bind(on_release=self.open_detection_settings_popup)
+            for w in [self.btn_hud_map, self.btn_hud_clear, self.btn_hud_tune]:
+                hud_btns.add_widget(w)
+            hud_body.add_widget(self.preview_hud_detail_lbl)
+            hud_body.add_widget(self.preview_hud_mapping_lbl)
+            hud_body.add_widget(hud_btns)
+            hud.add_widget(hud_header)
+            hud.add_widget(hud_body)
+            hud.set_body_widget(hud_body, expanded_height=(dp(152) if is_mobile else dp(160)))
+            hud.set_toggle_button(self.btn_hud_pin)
+            hud.bind_collapse_state(lambda *_: self._refresh_mobile_hud_restore_button())
+            hud.register_interactive_widgets(
+                self.btn_hud_pin,
+                self.btn_hud_map,
+                self.btn_hud_clear,
+                self.btn_hud_tune,
+            )
+            if is_mobile:
+                hud.set_drag_enabled(False)
+                hud.set_allow_body_passthrough(False)
+                hud.bind(height=lambda *_: self._refresh_mobile_hud_restore_button())
+            return hud
+
         root = BoxLayout(orientation="vertical", spacing=gap, padding=pad)
 
         appbar = BoxLayout(
@@ -3069,10 +3742,25 @@ class MediMapProApp(MDApp):
         self._bind_auto_height_label(status_chip, min_height=dp(38), extra_pad=dp(10))
         style_card(status_chip, palette["chip"], radius=dp(18))
         self.status_lbl = status_chip
+
+        phone_view_btn = None
+        if platform != "android":
+            phone_view_btn = make_button(
+                "Desktop View" if desktop_phone_emulation else "Phone View",
+                tone="soft" if not desktop_phone_emulation else "accent",
+            )
+            phone_view_btn.size_hint = (None, None)
+            phone_view_btn.width = dp(138 if desktop_phone_emulation else 128)
+            phone_view_btn.bind(on_release=_toggle_phone_view)
+
         if is_mobile:
+            if phone_view_btn is not None:
+                appbar.add_widget(phone_view_btn)
             root.add_widget(appbar)
             root.add_widget(status_chip)
         else:
+            if phone_view_btn is not None:
+                appbar.add_widget(phone_view_btn)
             status_chip.width = dp(420)
             appbar.add_widget(status_chip)
             root.add_widget(appbar)
@@ -3356,6 +4044,14 @@ class MediMapProApp(MDApp):
         for w in detection_fields:
             det_grid.add_widget(w)
         detect_body.add_widget(det_grid)
+        det_action_row = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=row_h)
+        self.btn_detection_dialog = make_button("Popup Tuning", tone="soft")
+        self.btn_detection_dialog.bind(on_release=self.open_detection_settings_popup)
+        self.btn_detection_run = make_button("Detect Now", tone="accent")
+        self.btn_detection_run.bind(on_release=self.on_run_detect)
+        det_action_row.add_widget(self.btn_detection_dialog)
+        det_action_row.add_widget(self.btn_detection_run)
+        detect_body.add_widget(det_action_row)
         if is_mobile:
             self._mobile_section_cards["Detection"] = detect_card
         else:
@@ -3408,6 +4104,7 @@ class MediMapProApp(MDApp):
             self._desktop_section_cards["Export"] = export_card
 
         selection_card, selection_body = make_card("Selection", "Inspect the currently selected box or mapping target")
+
         selection_summary = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=dp(112))
         self.inspector_selected_lbl = Label(text="None", color=palette["text"], size_hint_y=None, height=dp(20), halign="left", valign="middle", font_size=dp(12))
         self.inspector_selected_lbl.bind(size=self._sync_label_text_size)
@@ -3415,20 +4112,41 @@ class MediMapProApp(MDApp):
         self.inspector_count_lbl.bind(size=self._sync_label_text_size)
         selection_summary.add_widget(labeled_field("Selected IDs", self.inspector_selected_lbl, "Click preview boxes to inspect them"))
         selection_summary.add_widget(labeled_field("Selection Count", self.inspector_count_lbl))
-        selection_body.add_widget(selection_summary)
+
+        selection_box_body = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
+        selection_box_body.bind(minimum_height=selection_box_body.setter("height"))
+        selection_box_body.add_widget(selection_summary)
         self.inspector_box_lbl = Label(text="No selection", color=palette["text"], size_hint_y=None, height=dp(40), halign="left", valign="middle", font_size=dp(12))
         self.inspector_box_lbl.bind(size=self._sync_label_text_size)
         self._bind_auto_height_label(self.inspector_box_lbl, min_height=dp(36), extra_pad=dp(6))
-        selection_body.add_widget(labeled_field("Selected Box", self.inspector_box_lbl))
+        selection_box_body.add_widget(labeled_field("Selected Box", self.inspector_box_lbl))
+
+        mapping_section_body = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
+        mapping_section_body.bind(minimum_height=mapping_section_body.setter("height"))
         self.inspector_mapping_lbl = Label(text="Choose a box in the preview to inspect or map it.", color=palette["muted"], size_hint_y=None, height=dp(40), halign="left", valign="middle", font_size=dp(11))
         self.inspector_mapping_lbl.bind(size=self._sync_label_text_size)
         self._bind_auto_height_label(self.inspector_mapping_lbl, min_height=dp(36), extra_pad=dp(6))
-        selection_body.add_widget(labeled_field("Current Mapping", self.inspector_mapping_lbl))
+        mapping_section_body.add_widget(labeled_field("Current Mapping", self.inspector_mapping_lbl))
+        self.inspector_resolution_lbl = Label(text="Resolved preview value: —", color=palette["text"], size_hint_y=None, height=dp(40), halign="left", valign="middle", font_size=dp(11))
+        self.inspector_resolution_lbl.bind(size=self._sync_label_text_size)
+        self._bind_auto_height_label(self.inspector_resolution_lbl, min_height=dp(36), extra_pad=dp(6))
+        mapping_section_body.add_widget(labeled_field("Resolved Output", self.inspector_resolution_lbl))
         clear_row = GridLayout(cols=1, spacing=dp(8), size_hint_y=None, height=row_h)
         self.btn_clear_mapping = make_button("Clear Selected Mapping", tone="plain")
         self.btn_clear_mapping.bind(on_release=self.on_clear_selected_mapping)
         clear_row.add_widget(self.btn_clear_mapping)
-        selection_body.add_widget(clear_row)
+        mapping_section_body.add_widget(clear_row)
+
+        hover_section_body = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
+        hover_section_body.bind(minimum_height=hover_section_body.setter("height"))
+        self.inspector_hover_lbl = Label(text="Hover a box to see quick details.", color=palette["muted"], size_hint_y=None, height=dp(40), halign="left", valign="middle", font_size=dp(11))
+        self.inspector_hover_lbl.bind(size=self._sync_label_text_size)
+        self._bind_auto_height_label(self.inspector_hover_lbl, min_height=dp(36), extra_pad=dp(6))
+        hover_section_body.add_widget(labeled_field("Hover Details", self.inspector_hover_lbl))
+
+        selection_body.add_widget(self._build_collapsible_panel("Selection Summary", selection_box_body, start_open=True))
+        selection_body.add_widget(self._build_collapsible_panel("Mapping Details", mapping_section_body, start_open=True))
+        selection_body.add_widget(self._build_collapsible_panel("Hover Details", hover_section_body, start_open=False))
         self._desktop_right_section_cards = {}
         self._desktop_right_section_buttons = {}
         self._desktop_right_section_host = None
@@ -3467,14 +4185,67 @@ class MediMapProApp(MDApp):
 
         if is_mobile:
             main.spacing = dp(12)
-            mobile_outer = BoxLayout(orientation="vertical", spacing=dp(10), size_hint=(1, 1))
+            mobile_scroll = ScrollView(do_scroll_x=False, do_scroll_y=True, bar_width=dp(6), scroll_type=["bars", "content"])
+            mobile_stack = GridLayout(cols=1, spacing=dp(12), size_hint_y=None)
+            mobile_stack.bind(minimum_height=mobile_stack.setter("height"))
 
-            preview_card, preview_body = make_card("Live Preview", "Preview stays on top while controls sit below")
+            mobile_controls_card, mobile_controls_body = make_card("Controls", "Step-by-step workflow")
+            tabs = _make_mobile_section_tabs(["Files", "Session", "Detection", "Mapping", "Export"])
+            mobile_controls_body.add_widget(tabs)
+            self._mobile_section_host = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
+            self._mobile_section_host.bind(minimum_height=self._mobile_section_host.setter("height"))
+            mobile_controls_body.add_widget(self._mobile_section_host)
+            Clock.schedule_once(lambda dt: _show_mobile_section("Files"), 0)
+            mobile_stack.add_widget(mobile_controls_card)
+
+            preview_card, preview_body = make_card("Live Preview", "Preview pages, zoom interactively, and tap boxes")
             preview_card.size_hint_y = None
+            preview_toolbar = GridLayout(cols=3, spacing=dp(8), size_hint_y=None, height=2 * row_h + dp(8))
+            mobile_preview_actions = [
+                ("Refresh", self.on_preview, "primary", "btn_mobile_refresh"),
+                ("Detect", self.on_run_detect, "accent", "btn_mobile_detect"),
+                ("Prev", self.on_prev_page, "plain", "btn_mobile_prev"),
+                ("Next", self.on_next_page, "plain", "btn_mobile_next"),
+                ("Map", self._open_mapping_from_hud, "soft", "btn_mobile_map"),
+                ("Focus", self._focus_selected_preview_box, "plain", "btn_mobile_focus"),
+            ]
+            for txt, cb, tone, attr_name in mobile_preview_actions:
+                b = make_button(txt, tone=tone)
+                b.bind(on_release=cb)
+                setattr(self, attr_name, b)
+                preview_toolbar.add_widget(b)
+            preview_body.add_widget(preview_toolbar)
+
+            mobile_meta_row = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(34), padding=[dp(10), dp(6), dp(10), dp(6)])
+            style_card(mobile_meta_row, palette["chip"], radius=dp(16))
+            self.mobile_meta_lbl = Label(text="Page 1/1 • Boxes 0 • Sel 0 • Zoom 100%", color=palette["text"], halign="center", valign="middle", font_size=dp(11))
+            self.mobile_meta_lbl.bind(size=self._sync_label_text_size)
+            mobile_meta_row.add_widget(self.mobile_meta_lbl)
+            preview_body.add_widget(mobile_meta_row)
+
+            mobile_zoom_row = GridLayout(cols=5, spacing=dp(8), size_hint_y=None, height=row_h)
+            self.btn_mobile_zoom_out = make_button("−", tone="plain")
+            self.btn_mobile_zoom_out.bind(on_release=lambda *_: self._zoom_preview("out"))
+            mobile_zoom_chip = BoxLayout(orientation="horizontal", size_hint=(None, None), size=(dp(92), row_h), padding=[dp(12), dp(10), dp(12), dp(10)])
+            style_card(mobile_zoom_chip, palette["chip"], radius=dp(16))
+            self.mobile_zoom_chip_lbl = Label(text="Fit", color=palette["text"], halign="center", valign="middle", font_size=dp(12))
+            self.mobile_zoom_chip_lbl.bind(size=self._sync_label_text_size)
+            mobile_zoom_chip.add_widget(self.mobile_zoom_chip_lbl)
+            self.btn_mobile_zoom_in = make_button("+", tone="plain")
+            self.btn_mobile_zoom_in.bind(on_release=lambda *_: self._zoom_preview("in"))
+            self.btn_mobile_fit_width = make_button("Fit W", tone="plain")
+            self.btn_mobile_fit_width.bind(on_release=self._fit_preview_width)
+            self.btn_mobile_fit_page = make_button("Fit Pg", tone="plain")
+            self.btn_mobile_fit_page.bind(on_release=self._fit_preview_page)
+            for w in [self.btn_mobile_zoom_out, mobile_zoom_chip, self.btn_mobile_zoom_in, self.btn_mobile_fit_width, self.btn_mobile_fit_page]:
+                mobile_zoom_row.add_widget(w)
+            preview_body.add_widget(mobile_zoom_row)
             self.preview_shell = BoxLayout(orientation="vertical", spacing=dp(8), padding=dp(8), size_hint_y=None)
-            self.preview_shell.height = max(dp(280), Window.height * 0.38)
+            self.preview_shell.height = max(dp(460), Window.height * 0.58)
             style_card(self.preview_shell, palette["preview_bg"], radius=dp(24))
-            preview_wrap = ScrollView(do_scroll_x=True, do_scroll_y=True, bar_width=dp(6), scroll_type=["bars", "content"])
+            preview_stage = FloatLayout(size_hint=(1, 1))
+            self.preview_stage = preview_stage
+            preview_wrap = ScrollView(do_scroll_x=True, do_scroll_y=True, bar_width=dp(6), scroll_type=["bars", "content"], size_hint=(1, 1), pos_hint={"x": 0, "y": 0})
             self.preview_wrap = preview_wrap
             preview_stack = BoxLayout(orientation="vertical", spacing=dp(8), size_hint_y=None)
             self.preview_stack = preview_stack
@@ -3482,8 +4253,10 @@ class MediMapProApp(MDApp):
             self.preview = InteractivePreview(size_hint=(None, None))
             self.preview.bind(texture=self._update_preview_size)
             self.preview.box_tap_callback = self.on_preview_box_tap
+            self.preview.box_double_tap_callback = self.on_preview_box_double_tap
             self.preview.hover_callback = self.on_preview_box_hover
-            self.preview_info = Label(text="Interactive preview ready. Tap a box to select it.", color=palette["text"], size_hint_y=None, height=dp(36), halign="left", valign="middle", font_size=dp(11.5))
+            self.preview.zoom_request_callback = self.on_preview_zoom_request
+            self.preview_info = Label(text="Interactive preview ready. Tap a box to select it. Double-tap a box to map it. Zoom and pan freely—the overlay now re-syncs to the current preview scale automatically.", color=palette["text"], size_hint_y=None, height=dp(36), halign="left", valign="middle", font_size=dp(11.5))
             self.preview_info.bind(size=self._sync_label_text_size)
             self._bind_auto_height_label(self.preview_info, min_height=dp(34), extra_pad=dp(8))
             style_card(self.preview_info, palette["chip"], radius=dp(18))
@@ -3491,44 +4264,26 @@ class MediMapProApp(MDApp):
             preview_stack.add_widget(self.preview_info)
             preview_stack.add_widget(self.preview)
             preview_wrap.add_widget(preview_stack)
-            self.preview_shell.add_widget(preview_wrap)
+            preview_stage.add_widget(preview_wrap)
+            self.preview_hud = _make_preview_hud()
+            self.preview_hud.size_hint_x = 1
+            self.preview_hud.width = 0
+            self.preview_hud.pos_hint = {}
+            self.preview_hud.height = dp(168)
+            self.btn_show_hud = make_button("Show HUD", tone="secondary")
+            self.btn_show_hud.size_hint_y = None
+            self.btn_show_hud.height = dp(42)
+            self.btn_show_hud.opacity = 0
+            self.btn_show_hud.disabled = True
+            self.btn_show_hud.bind(on_release=lambda *_: self._restore_mobile_hud())
+            self.preview_shell.add_widget(preview_stage)
+            self.preview_shell.add_widget(self.preview_hud)
+            self.preview_shell.add_widget(self.btn_show_hud)
             preview_body.add_widget(self.preview_shell)
-            mobile_outer.add_widget(preview_card)
+            mobile_stack.add_widget(preview_card)
 
-            sticky_actions = BoxLayout(orientation="vertical", spacing=dp(8), size_hint_y=None)
-            sticky_actions.bind(minimum_height=sticky_actions.setter("height"))
-            action_row_1 = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=row_h)
-            self.btn_preview = make_button("Refresh", tone="primary")
-            self.btn_preview.bind(on_release=self.on_preview)
-            self.btn_detect = make_button("Detect", tone="accent")
-            self.btn_detect.bind(on_release=self.on_run_detect)
-            action_row_1.add_widget(self.btn_preview)
-            action_row_1.add_widget(self.btn_detect)
-            sticky_actions.add_widget(action_row_1)
-            action_row_2 = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=row_h)
-            self.btn_prev = make_button("Prev", tone="plain")
-            self.btn_prev.bind(on_release=self.on_prev_page)
-            self.btn_next = make_button("Next", tone="plain")
-            self.btn_next.bind(on_release=self.on_next_page)
-            action_row_2.add_widget(self.btn_prev)
-            action_row_2.add_widget(self.btn_next)
-            sticky_actions.add_widget(action_row_2)
-            mobile_outer.add_widget(sticky_actions)
-
-            mobile_controls_scroll = ScrollView(do_scroll_x=False, do_scroll_y=True, bar_width=dp(6), scroll_type=["bars", "content"], size_hint=(1, 1))
-            mobile_controls_stack = GridLayout(cols=1, spacing=dp(10), size_hint_y=None)
-            mobile_controls_stack.bind(minimum_height=mobile_controls_stack.setter("height"))
-            mobile_controls_card, mobile_controls_body = make_card("Controls", "Choose a step below")
-            tabs = _make_mobile_section_tabs(["Files", "Session", "Detection", "Mapping", "Export"])
-            mobile_controls_body.add_widget(tabs)
-            self._mobile_section_host = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
-            self._mobile_section_host.bind(minimum_height=self._mobile_section_host.setter("height"))
-            mobile_controls_body.add_widget(self._mobile_section_host)
-            Clock.schedule_once(lambda dt: _show_mobile_section("Files"), 0)
-            mobile_controls_stack.add_widget(mobile_controls_card)
-            mobile_controls_scroll.add_widget(mobile_controls_stack)
-            mobile_outer.add_widget(mobile_controls_scroll)
-            main.add_widget(mobile_outer)
+            mobile_scroll.add_widget(mobile_stack)
+            main.add_widget(mobile_scroll)
         else:
             left_wrap = BoxLayout(orientation="vertical", size_hint=(0.23, 1), spacing=dp(10))
             left_scroll = ScrollView(do_scroll_x=False, do_scroll_y=True, bar_width=dp(5), scroll_type=["bars", "content"])
@@ -3588,7 +4343,9 @@ class MediMapProApp(MDApp):
             self.preview_shell = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(8), size_hint_y=None)
             self.preview_shell.height = max(dp(620), Window.height - dp(220))
             style_card(self.preview_shell, palette["preview_bg"], radius=dp(24))
-            preview_wrap = ScrollView(do_scroll_x=True, do_scroll_y=True, bar_width=dp(6), scroll_type=["bars", "content"])
+            preview_stage = FloatLayout(size_hint=(1, 1))
+            self.preview_stage = preview_stage
+            preview_wrap = ScrollView(do_scroll_x=True, do_scroll_y=True, bar_width=dp(6), scroll_type=["bars", "content"], size_hint=(1, 1), pos_hint={"x": 0, "y": 0})
             self.preview_wrap = preview_wrap
             preview_stack = BoxLayout(orientation="vertical", spacing=dp(6), size_hint_y=None)
             self.preview_stack = preview_stack
@@ -3596,14 +4353,20 @@ class MediMapProApp(MDApp):
             self.preview = InteractivePreview(size_hint=(None, None))
             self.preview.bind(texture=self._update_preview_size)
             self.preview.box_tap_callback = self.on_preview_box_tap
+            self.preview.box_double_tap_callback = self.on_preview_box_double_tap
             self.preview.hover_callback = self.on_preview_box_hover
-            self.preview_info = Label(text="Preview ready. Hover or click boxes to inspect them.", color=palette["text"], size_hint_y=None, height=dp(32), halign="left", valign="middle", font_size=dp(11))
+            self.preview.zoom_request_callback = self.on_preview_zoom_request
+            self.preview_info = Label(text="Preview ready. Click to select, double-click to map, and use the HUD for quick actions.", color=palette["text"], size_hint_y=None, height=dp(32), halign="left", valign="middle", font_size=dp(11))
             self.preview_info.bind(size=self._sync_label_text_size)
             style_card(self.preview_info, palette["chip"], radius=dp(16))
             preview_stack.add_widget(self.preview_info)
             preview_stack.add_widget(self.preview)
             preview_wrap.add_widget(preview_stack)
-            self.preview_shell.add_widget(preview_wrap)
+            preview_stage.add_widget(preview_wrap)
+            self.preview_hud = _make_preview_hud()
+            preview_stage.add_widget(self.preview_hud)
+            Clock.schedule_once(lambda dt: setattr(self.preview_hud, "pos", (max(0, preview_stage.width - self.preview_hud.width - dp(10)), dp(12))), 0)
+            self.preview_shell.add_widget(preview_stage)
             preview_body.add_widget(self.preview_shell)
             center_wrap.add_widget(preview_card)
 
@@ -3681,27 +4444,38 @@ class MediMapProApp(MDApp):
     def _update_preview_size(self, instance, texture):
         if not texture:
             return
-        if platform == "android":
-            max_w = max(dp(220), Window.width - dp(40))
-            max_h = max(dp(200), Window.height * 0.30)
-            scale = min(1.0, max_w / float(texture.width), max_h / float(texture.height))
-            self.preview.size = (max(dp(1), texture.width * scale), max(dp(1), texture.height * scale))
+
+        shell = getattr(self, "preview_shell", None)
+        is_mobile = bool(getattr(self, "ui_mobile", False))
+        if is_mobile:
+            mode = getattr(self, "preview_zoom_mode", "fit_page")
+            zoom = float(getattr(self, "preview_zoom_factor", 1.0) or 1.0)
+            avail_w = max(dp(240), (shell.width if shell is not None else Window.width) - dp(28))
+            avail_h = max(dp(340), min(Window.height * 0.62, (shell.height if shell is not None else Window.height * 0.58) - dp(18)))
         else:
             mode = getattr(self, "desktop_zoom_mode", "manual")
             zoom = float(getattr(self, "desktop_zoom_factor", 1.0) or 1.0)
-            shell = getattr(self, "preview_shell", None)
             avail_w = max(dp(260), (shell.width if shell is not None else Window.width * 0.58) - dp(26))
             avail_h = max(dp(260), (shell.height if shell is not None else Window.height - dp(240)) - dp(34))
 
-            if mode == "fit_width":
-                scale = avail_w / float(max(texture.width, 1))
-            elif mode == "fit_page":
-                scale = min(avail_w / float(max(texture.width, 1)), avail_h / float(max(texture.height, 1)))
-            else:
-                scale = zoom
+        if mode == "fit_width":
+            scale = avail_w / float(max(texture.width, 1))
+        elif mode == "fit_page":
+            scale = min(avail_w / float(max(texture.width, 1)), avail_h / float(max(texture.height, 1)))
+        else:
+            scale = zoom
 
-            scale = max(0.2, min(float(scale), 6.0))
-            self.preview.size = (max(dp(1), texture.width * scale), max(dp(1), texture.height * scale))
+        max_scale = 8.0 if is_mobile else 6.0
+        min_scale = 0.35 if is_mobile else 0.2
+        scale = max(min_scale, min(float(scale), max_scale))
+        self.preview.display_scale = scale
+        self.preview.size = (max(dp(1), texture.width * scale), max(dp(1), texture.height * scale))
+
+        if is_mobile:
+            self.preview_zoom_factor = scale
+            if hasattr(self, "mobile_zoom_chip_lbl") and self.mobile_zoom_chip_lbl is not None:
+                self.mobile_zoom_chip_lbl.text = ("Fit" if mode != "manual" else f"{int(round(scale * 100))}%")
+        else:
             self.desktop_zoom_factor = scale
             if hasattr(self, "zoom_chip_lbl") and self.zoom_chip_lbl is not None:
                 self.zoom_chip_lbl.text = f"{int(round(scale * 100))}%"
@@ -3709,25 +4483,30 @@ class MediMapProApp(MDApp):
             self.preview_stack.do_layout()
 
     def _apply_preview_zoom(self, mode=None, scale=None):
-        if platform == "android":
-            return
+        target_mode_attr = "preview_zoom_mode" if getattr(self, "ui_mobile", False) else "desktop_zoom_mode"
+        target_scale_attr = "preview_zoom_factor" if getattr(self, "ui_mobile", False) else "desktop_zoom_factor"
+        anchor = self._capture_preview_anchor()
         if mode is not None:
-            self.desktop_zoom_mode = mode
+            setattr(self, target_mode_attr, mode)
         if scale is not None:
-            self.desktop_zoom_factor = max(0.2, min(float(scale), 6.0))
+            max_scale = 8.0 if getattr(self, "ui_mobile", False) else 6.0
+            min_scale = 0.35 if getattr(self, "ui_mobile", False) else 0.2
+            setattr(self, target_scale_attr, max(min_scale, min(float(scale), max_scale)))
         tex = getattr(getattr(self, "preview", None), "texture", None)
         if tex is not None:
             self._update_preview_size(self.preview, tex)
-            Clock.schedule_once(lambda dt: self._post_preview_refresh(), 0)
+            Clock.schedule_once(lambda dt: self._post_preview_refresh(reset_scroll=False), 0)
+            Clock.schedule_once(lambda dt: self._restore_preview_anchor(anchor), 0)
+            self._schedule_preview_resync()
 
     def _zoom_preview(self, direction):
-        if platform == "android":
-            return
-        current = float(getattr(self, "desktop_zoom_factor", 1.0) or 1.0)
+        current_attr = "preview_zoom_factor" if getattr(self, "ui_mobile", False) else "desktop_zoom_factor"
+        current = float(getattr(self, current_attr, 1.0) or 1.0)
+        step = 1.18 if getattr(self, "ui_mobile", False) else 1.15
         if direction == "in":
-            current *= 1.15
+            current *= step
         elif direction == "out":
-            current /= 1.15
+            current /= step
         else:
             current = 1.0
         self._apply_preview_zoom(mode="manual", scale=current)
@@ -3763,6 +4542,19 @@ class MediMapProApp(MDApp):
             self.inspector_box_lbl.text = box_text
         if hasattr(self, "inspector_mapping_lbl") and self.inspector_mapping_lbl is not None:
             self.inspector_mapping_lbl.text = mapping_text
+        if hasattr(self, "inspector_resolution_lbl") and self.inspector_resolution_lbl is not None:
+            if ids:
+                first = ids[0]
+                mapping = self._find_mapping_for_box(first, self.current_page_idx()) or {}
+                self.inspector_resolution_lbl.text = "Resolved preview value: " + self._get_selected_column_preview(
+                    mapping.get("column", self.column_spinner.text if hasattr(self, "column_spinner") else ""),
+                    trigger=mapping.get("trigger", self.trigger_input.text if hasattr(self, "trigger_input") else ""),
+                    is_grid=bool(mapping.get("g", getattr(self.grid_flag_chk, "active", False) if hasattr(self, "grid_flag_chk") else False)),
+                    grid_n=int(mapping.get("n", self.grid_n_input.text if hasattr(self, "grid_n_input") else "1") or 1),
+                )
+            else:
+                self.inspector_resolution_lbl.text = "Resolved preview value: —"
+        self._update_preview_hud()
 
     def _update_bottom_statusbar(self):
         if not hasattr(self, "statusbar_file_lbl"):
@@ -3791,6 +4583,10 @@ class MediMapProApp(MDApp):
         self.statusbar_patient_lbl.text = f"Patient: {patient}"
         self.statusbar_boxes_lbl.text = f"Boxes: {box_count} • Selected: {sel_count}"
         self.statusbar_ready_lbl.text = f"Ready: {readiness}"
+        if hasattr(self, "mobile_meta_lbl") and self.mobile_meta_lbl is not None:
+            zoom_attr = "preview_zoom_factor" if getattr(self, "ui_mobile", False) else "desktop_zoom_factor"
+            zoom_pct = int(round(float(getattr(self, zoom_attr, 1.0) or 1.0) * 100))
+            self.mobile_meta_lbl.text = f"Page {page_idx + 1}/{max(total_pages, 1)} • Boxes {box_count} • Sel {sel_count} • Zoom {zoom_pct}%"
 
     def _bind_desktop_shortcuts(self):
         if platform == "android":
@@ -3849,16 +4645,18 @@ class MediMapProApp(MDApp):
             return False
         return False
 
-    def _post_preview_refresh(self, *args):
+    def _post_preview_refresh(self, *args, reset_scroll=True):
         try:
             tex = getattr(self.preview, "texture", None)
             if tex is not None:
                 self._update_preview_size(self.preview, tex)
+                self._refresh_preview_boxes_for_current_view()
             self.preview._redraw_overlay()
             self.preview.canvas.ask_update()
-            if getattr(self, "preview_wrap", None) is not None:
+            if reset_scroll and getattr(self, "preview_wrap", None) is not None:
                 self.preview_wrap.scroll_x = 0
                 self.preview_wrap.scroll_y = 1
+            self._update_preview_hud()
         except Exception:
             pass
 
@@ -3916,6 +4714,8 @@ class MediMapProApp(MDApp):
             ("btn_zoom_reset", has_pdf),
             ("btn_clear_mapping", bool(getattr(self.engine, "selected_box_ids", []))),
             ("btn_toolbar_export", export_ready),
+            ("btn_mobile_map", assign_ready),
+            ("btn_mobile_focus", bool(getattr(self.engine, "selected_box_ids", []))),
         ]:
             self._set_widget_enabled(getattr(self, attr, None), enabled)
 
@@ -4074,9 +4874,45 @@ class MediMapProApp(MDApp):
             return None
         return val
 
+    def _sanitize_box_id_list(self, ids):
+        out = []
+        for x in (ids or []):
+            try:
+                out.append(int(x))
+            except Exception:
+                continue
+        return sorted(set(out))
+
+    def _stash_page_selection(self, page_idx=None):
+        if not hasattr(self, "_page_selected_box_ids"):
+            self._page_selected_box_ids = {}
+        page_idx = self.current_page_idx() if page_idx is None else int(page_idx)
+        self._page_selected_box_ids[page_idx] = self._sanitize_box_id_list(getattr(self.engine, "selected_box_ids", []))
+        self._active_selection_page_idx = page_idx
+
+    def _restore_page_selection(self, page_idx=None, clear_if_missing=True):
+        if not hasattr(self, "_page_selected_box_ids"):
+            self._page_selected_box_ids = {}
+        page_idx = self.current_page_idx() if page_idx is None else int(page_idx)
+        ids = list(self._page_selected_box_ids.get(page_idx, []))
+        self.engine.selected_box_ids = self._sanitize_box_id_list(ids if ids else ([] if clear_if_missing else getattr(self.engine, "selected_box_ids", [])))
+        self._active_selection_page_idx = page_idx
+        return list(self.engine.selected_box_ids)
+
+    def _prepare_page_context(self, page_idx, clear_selection_if_missing=True):
+        page_idx = int(page_idx)
+        prev_page = int(getattr(self, "_active_selection_page_idx", page_idx))
+        if prev_page != page_idx:
+            self._stash_page_selection(prev_page)
+        self.engine._ensure_detection_for_page(page_idx)
+        self._restore_page_selection(page_idx, clear_if_missing=clear_selection_if_missing)
+
     def render_preview_image(self, img_bgr, boxes_payload=None, page_idx=0, preview_zoom=PREVIEW_SCALE):
         if img_bgr is None:
             return
+        self._last_preview_page_idx = int(page_idx or 0)
+        self._last_preview_render_zoom = float(preview_zoom or PREVIEW_SCALE)
+        self._last_preview_has_boxes = bool(boxes_payload)
         if hasattr(self.preview, "set_texture_from_bgr"):
             self.preview.set_texture_from_bgr(img_bgr)
             if boxes_payload is None:
@@ -4103,6 +4939,10 @@ class MediMapProApp(MDApp):
         for i, r in enumerate(self.engine.all_boxes):
             payload.append({
                 "id": i,
+                "pdf_x": float(r.x0),
+                "pdf_y": float(r.y0),
+                "pdf_w": float(r.width),
+                "pdf_h": float(r.height),
                 "x": float(r.x0 * preview_zoom),
                 "y": float(r.y0 * preview_zoom),
                 "w": float(r.width * preview_zoom),
@@ -4111,6 +4951,178 @@ class MediMapProApp(MDApp):
                 "mapping": self.engine.describe_box_mapping(i, page_idx),
             })
         return payload
+
+
+    def _get_preview_content_widget(self):
+        return getattr(self, "preview_stack", None) or getattr(self, "preview", None)
+
+    def _capture_preview_anchor(self):
+        wrap = getattr(self, "preview_wrap", None)
+        content = self._get_preview_content_widget()
+        if wrap is None or content is None:
+            return None
+        viewport_w = max(float(getattr(wrap, "width", 0) or 0), 1.0)
+        viewport_h = max(float(getattr(wrap, "height", 0) or 0), 1.0)
+        content_w = max(float(getattr(content, "width", 0) or 0), viewport_w)
+        content_h = max(float(getattr(content, "height", 0) or 0), viewport_h)
+        max_x = max(content_w - viewport_w, 0.0)
+        max_y = max(content_h - viewport_h, 0.0)
+        offset_x = float(getattr(wrap, "scroll_x", 0.0) or 0.0) * max_x
+        offset_y = (1.0 - float(getattr(wrap, "scroll_y", 1.0) or 1.0)) * max_y
+        center_x = (offset_x + viewport_w / 2.0) / max(content_w, 1.0)
+        center_y = (offset_y + viewport_h / 2.0) / max(content_h, 1.0)
+        return (
+            max(0.0, min(1.0, center_x)),
+            max(0.0, min(1.0, center_y)),
+        )
+
+    def _restore_preview_anchor(self, anchor):
+        wrap = getattr(self, "preview_wrap", None)
+        content = self._get_preview_content_widget()
+        if wrap is None or content is None or not anchor:
+            return
+        viewport_w = max(float(getattr(wrap, "width", 0) or 0), 1.0)
+        viewport_h = max(float(getattr(wrap, "height", 0) or 0), 1.0)
+        content_w = max(float(getattr(content, "width", 0) or 0), viewport_w)
+        content_h = max(float(getattr(content, "height", 0) or 0), viewport_h)
+        max_x = max(content_w - viewport_w, 0.0)
+        max_y = max(content_h - viewport_h, 0.0)
+        target_x = max(0.0, min(max_x, anchor[0] * content_w - viewport_w / 2.0))
+        target_y = max(0.0, min(max_y, anchor[1] * content_h - viewport_h / 2.0))
+        wrap.scroll_x = 0.0 if max_x <= 1e-6 else (target_x / max_x)
+        wrap.scroll_y = 1.0 if max_y <= 1e-6 else (1.0 - (target_y / max_y))
+
+    def _focus_preview_box(self, box_id, *_args, **_kwargs):
+        wrap = getattr(self, "preview_wrap", None)
+        preview = getattr(self, "preview", None)
+        content = self._get_preview_content_widget()
+        if wrap is None or preview is None or content is None:
+            return
+        try:
+            box_id = int(box_id)
+        except Exception:
+            return
+
+        hit = None
+        for box in getattr(preview, "boxes_payload", []) or []:
+            try:
+                if int(box.get("id", -1)) == box_id:
+                    hit = box
+                    break
+            except Exception:
+                continue
+
+        tex = getattr(preview, "texture", None)
+        disp = preview._get_display_rect() if hasattr(preview, "_get_display_rect") else None
+        if hit is None or tex is None or disp is None:
+            Clock.schedule_once(lambda dt: self._post_preview_refresh(reset_scroll=False), 0)
+            return
+
+        bx, by, bw, bh = preview._resolve_box_image_rect(hit) if hasattr(preview, "_resolve_box_image_rect") else (
+            float(hit.get("x", 0.0) or 0.0),
+            float(hit.get("y", 0.0) or 0.0),
+            float(hit.get("w", 0.0) or 0.0),
+            float(hit.get("h", 0.0) or 0.0),
+        )
+        dx, dy, dw, dh = disp
+        sx = dw / float(max(getattr(tex, "width", 1), 1))
+        sy = dh / float(max(getattr(tex, "height", 1), 1))
+        box_cx = dx + (bx + bw / 2.0) * sx
+        box_cy = dy + (float(getattr(tex, "height", 0)) - (by + bh / 2.0)) * sy
+
+        viewport_w = max(float(getattr(wrap, "width", 0) or 0), 1.0)
+        viewport_h = max(float(getattr(wrap, "height", 0) or 0), 1.0)
+        content_w = max(float(getattr(content, "width", 0) or 0), viewport_w)
+        content_h = max(float(getattr(content, "height", 0) or 0), viewport_h)
+        max_x = max(content_w - viewport_w, 0.0)
+        max_y = max(content_h - viewport_h, 0.0)
+
+        target_x = max(0.0, min(max_x, box_cx - viewport_w / 2.0))
+        target_y = max(0.0, min(max_y, box_cy - viewport_h / 2.0))
+
+        wrap.scroll_x = 0.0 if max_x <= 1e-6 else (target_x / max_x)
+        wrap.scroll_y = 1.0 if max_y <= 1e-6 else (1.0 - (target_y / max_y))
+
+    def _refresh_preview_boxes_for_current_view(self):
+        preview = getattr(self, "preview", None)
+        if preview is None or getattr(preview, "texture", None) is None:
+            return
+        page_idx = int(getattr(self, "_last_preview_page_idx", self.current_page_idx()) or 0)
+        render_zoom = float(getattr(self, "_last_preview_render_zoom", PREVIEW_SCALE) or PREVIEW_SCALE)
+        self._prepare_page_context(page_idx, clear_selection_if_missing=False)
+        boxes_payload = self._build_preview_boxes_payload(page_idx=page_idx, preview_zoom=render_zoom) if getattr(self.engine, "all_boxes", None) else []
+        preview.set_boxes_payload(
+            boxes_payload,
+            selected_ids=getattr(self.engine, "selected_box_ids", []),
+            preview_zoom=render_zoom,
+            page_idx=page_idx,
+        )
+
+    def _desired_preview_render_zoom(self):
+        mode_attr = "preview_zoom_mode" if getattr(self, "ui_mobile", False) else "desktop_zoom_mode"
+        scale_attr = "preview_zoom_factor" if getattr(self, "ui_mobile", False) else "desktop_zoom_factor"
+        mode = getattr(self, mode_attr, "fit_page")
+        current_scale = float(getattr(self, scale_attr, 1.0) or 1.0)
+        base_zoom = float(getattr(self, "_last_preview_render_zoom", PREVIEW_SCALE) or PREVIEW_SCALE)
+        if mode != "manual":
+            return max(PREVIEW_SCALE, min(base_zoom, 4.0 if getattr(self, "ui_mobile", False) else 5.0))
+        boost = max(1.0, min(current_scale, 2.0 if getattr(self, "ui_mobile", False) else 2.6))
+        target = PREVIEW_SCALE * boost
+        cap = 4.0 if getattr(self, "ui_mobile", False) else 5.0
+        return max(PREVIEW_SCALE, min(target, cap))
+
+    def _schedule_preview_resync(self, *_):
+        Clock.unschedule(self._perform_preview_resync)
+        Clock.schedule_once(self._perform_preview_resync, 0.08 if getattr(self, "ui_mobile", False) else 0.04)
+
+    def _perform_preview_resync(self, *_):
+        if not getattr(self.engine, "pdf_path", ""):
+            return
+        preview = getattr(self, "preview", None)
+        if preview is None or getattr(preview, "texture", None) is None:
+            return
+
+        anchor = self._capture_preview_anchor()
+        desired_zoom = self._desired_preview_render_zoom()
+        last_zoom = float(getattr(self, "_last_preview_render_zoom", PREVIEW_SCALE) or PREVIEW_SCALE)
+        page_idx = self.current_page_idx()
+        patient = self.selected_patient()
+        has_data = bool(getattr(self.engine, "df", None) is not None and not self.engine.df.empty)
+        has_boxes = bool(getattr(self.engine, "all_boxes", None))
+
+        if abs(desired_zoom - last_zoom) / max(last_zoom, 1e-6) < 0.035:
+            self._refresh_preview_boxes_for_current_view()
+            Clock.schedule_once(lambda dt: self._restore_preview_anchor(anchor), 0)
+            return
+
+        try:
+            if platform == "android" and not self.engine.supports_export_backend():
+                img = self.engine.get_raw_preview_pixmap(page_idx=page_idx, preview_zoom=desired_zoom)
+                boxes_payload = self._build_preview_boxes_payload(page_idx=page_idx, preview_zoom=desired_zoom) if has_boxes else []
+            elif not patient or not has_data:
+                img = self.engine.get_raw_preview_pixmap(page_idx=page_idx, preview_zoom=desired_zoom)
+                boxes_payload = self._build_preview_boxes_payload(page_idx=page_idx, preview_zoom=desired_zoom) if has_boxes else []
+            else:
+                img = self.engine.get_processed_preview_pixmap(patient_name=patient, page_idx=page_idx, preview_zoom=desired_zoom)
+                boxes_payload = self._build_preview_boxes_payload(page_idx=page_idx, preview_zoom=desired_zoom) if has_boxes else []
+            self.render_preview_image(
+                img,
+                boxes_payload=boxes_payload,
+                page_idx=page_idx,
+                preview_zoom=desired_zoom,
+            )
+            self._sync_box_selection_ui()
+            Clock.schedule_once(lambda dt: self._restore_preview_anchor(anchor), 0)
+        except Exception:
+            self._refresh_preview_boxes_for_current_view()
+            Clock.schedule_once(lambda dt: self._restore_preview_anchor(anchor), 0)
+
+    def _focus_selected_preview_box(self, *_):
+        ids = sorted(set(int(x) for x in getattr(self.engine, "selected_box_ids", []) if isinstance(x, int) or str(x).isdigit()))
+        if not ids:
+            self.set_status("Select a preview box first.")
+            return
+        self._focus_preview_box(ids[0])
 
     def _find_mapping_for_box(self, box_id, page_idx):
         if box_id < 0 or box_id >= len(self.engine.all_boxes):
@@ -4134,12 +5146,15 @@ class MediMapProApp(MDApp):
     def _sync_box_selection_ui(self):
         ids = sorted(set(int(x) for x in self.engine.selected_box_ids if isinstance(x, int) or str(x).isdigit()))
         self.engine.selected_box_ids = ids
+        if hasattr(self, "_page_selected_box_ids"):
+            self._page_selected_box_ids[int(self.current_page_idx())] = list(ids)
+            self._active_selection_page_idx = int(self.current_page_idx())
         self.box_ids_input.text = ",".join(str(i) for i in ids)
         if hasattr(self.preview, "set_selected_ids"):
             self.preview.set_selected_ids(ids)
 
         if not ids:
-            self.preview_info.text = "Interactive preview ready. Tap a box to select it."
+            self.preview_info.text = "Interactive preview ready. Tap a box to select it. Double-tap a box to map it. Zoom changes keep the overlay synced."
             self._update_selection_inspector()
             self._update_bottom_statusbar()
             return
@@ -4147,7 +5162,7 @@ class MediMapProApp(MDApp):
         first = ids[0]
         box_type = self.engine.box_types[first] if first < len(self.engine.box_types) else "field"
         mapping = self.engine.describe_box_mapping(first, self.current_page_idx())
-        self.preview_info.text = f"Selected: {ids} | Type: {box_type} | {mapping}"
+        self.preview_info.text = f"Selected: {ids} | Type: {box_type} | {mapping} | Double-tap to map"
         self._update_selection_inspector()
         self._update_bottom_statusbar()
         try:
@@ -4156,24 +5171,7 @@ class MediMapProApp(MDApp):
         except Exception:
             pass
 
-    def on_preview_box_hover(self, hit):
-        if not hit:
-            return
-        mapping = hit.get("mapping") or "Unmapped"
-        self.preview_info.text = f"Hover Box {hit['id']} | Type: {hit.get('t', 'field')} | {mapping}"
-        if hasattr(self, "desktop_status_detail_lbl") and self.desktop_status_detail_lbl is not None:
-            self.desktop_status_detail_lbl.text = f"Hover • Box {hit['id']} • {mapping}"
-
-    def on_preview_box_tap(self, hit):
-        box_id = int(hit["id"])
-        ids = list(self.engine.selected_box_ids)
-        if box_id in ids:
-            ids.remove(box_id)
-        else:
-            ids.append(box_id)
-        self.engine.selected_box_ids = sorted(set(ids))
-        self._sync_box_selection_ui()
-
+    def _load_mapping_into_editor(self, box_id):
         mapping = self._find_mapping_for_box(box_id, self.current_page_idx())
         if mapping:
             col = str(mapping.get("column", "")).strip()
@@ -4186,8 +5184,551 @@ class MediMapProApp(MDApp):
             else:
                 self.grid_flag_input.text = "1" if bool(mapping.get("g", False)) else "0"
             self.grid_n_input.text = str(int(mapping.get("n", 1)))
+        return mapping
 
+    def on_preview_box_hover(self, hit):
+        if not hit:
+            return
+        mapping = hit.get("mapping") or "Unmapped"
+        hover_text = f"Hover Box {hit['id']} | Type: {hit.get('t', 'field')} | {mapping}"
+        sel_ids = sorted(set(int(x) for x in getattr(self.engine, 'selected_box_ids', []) if isinstance(x, int) or str(x).isdigit()))
+        if sel_ids:
+            first = sel_ids[0]
+            sel_mapping = self.engine.describe_box_mapping(first, self.current_page_idx())
+            self.preview_info.text = f"Selected: {sel_ids} | Hovering box {hit['id']} | {sel_mapping}"
+        else:
+            self.preview_info.text = hover_text
+        if hasattr(self, "desktop_status_detail_lbl") and self.desktop_status_detail_lbl is not None:
+            self.desktop_status_detail_lbl.text = f"Hover • Box {hit['id']} • {mapping}"
+        if hasattr(self, "inspector_hover_lbl") and self.inspector_hover_lbl is not None:
+            self.inspector_hover_lbl.text = hover_text
+        self._update_preview_hud(hit=hit)
+
+    def on_preview_box_tap(self, hit):
+        box_id = int(hit["id"])
+        ids = list(self.engine.selected_box_ids)
+        if box_id in ids:
+            ids.remove(box_id)
+        else:
+            ids.append(box_id)
+        self.engine.selected_box_ids = sorted(set(ids))
+        self._load_mapping_into_editor(box_id)
+        self._sync_box_selection_ui()
+        self._focus_preview_box(box_id)
+        self._update_preview_hud()
+
+    def on_preview_box_double_tap(self, hit):
+        box_id = int(hit["id"])
+        ids = sorted(set(int(x) for x in getattr(self.engine, 'selected_box_ids', []) if isinstance(x, int) or str(x).isdigit()))
+        if box_id not in ids:
+            ids.insert(0, box_id)
+        self.engine.selected_box_ids = sorted(set(ids))
+        self._load_mapping_into_editor(box_id)
+        self._sync_box_selection_ui()
+        self._focus_preview_box(box_id)
+        self._update_preview_hud()
         self.open_mapping_popup_for_selection(primary_box_id=box_id)
+
+    def _style_popup_card(self, widget, color=None, radius=None, border_color=None):
+        palette = getattr(self, "ui_palette", {}) or {}
+        color = color or palette.get("surface_alt", (0.11, 0.135, 0.185, 1))
+        border_color = border_color or palette.get("border", (0.18, 0.24, 0.34, 1))
+        radius = dp(18) if radius is None else radius
+        with widget.canvas.before:
+            widget._popup_shadow_color = Color(0, 0, 0, 0.24)
+            widget._popup_shadow = RoundedRectangle(radius=[radius + dp(4)] * 4)
+            widget._popup_glow_color = Color(*palette.get("aurora", (0.30, 0.92, 1.0, 1))[:3], 0.045)
+            widget._popup_glow = RoundedRectangle(radius=[radius + dp(3)] * 4)
+            widget._popup_bg_color = Color(*color)
+            widget._popup_bg = RoundedRectangle(radius=[radius] * 4)
+            widget._popup_nebula_color = Color(*palette.get("secondary", (0.69, 0.43, 1.0, 1))[:3], 0.085)
+            widget._popup_nebula = RoundedRectangle(radius=[max(dp(10), radius - dp(2))] * 4)
+            widget._popup_shine_color = Color(*palette.get("starlight", (1.0, 0.95, 0.8, 1))[:3], 0.050)
+            widget._popup_shine = RoundedRectangle(radius=[max(dp(10), radius - dp(5))] * 4)
+            widget._popup_border_color = Color(*border_color)
+            widget._popup_border = Line(rounded_rectangle=[0, 0, 0, 0, radius], width=1.05)
+        def _upd(*_):
+            x, y = widget.pos
+            w, h = widget.size
+            widget._popup_shadow.pos = (x, y - dp(2))
+            widget._popup_shadow.size = (w, h + dp(3))
+            widget._popup_glow.pos = (x - dp(1), y - dp(1))
+            widget._popup_glow.size = (w + dp(2), h + dp(2))
+            widget._popup_bg.pos = (x, y)
+            widget._popup_bg.size = (w, h)
+            widget._popup_nebula.pos = (x + dp(1), y + dp(1))
+            widget._popup_nebula.size = (max(0, w - dp(2)), max(0, h * 0.50))
+            widget._popup_shine.pos = (x + dp(1.5), y + h - max(dp(16), h * 0.34) - dp(1.5))
+            widget._popup_shine.size = (max(0, w - dp(3)), max(dp(16), h * 0.34))
+            widget._popup_border.rounded_rectangle = [x, y, w, h, radius]
+        widget.bind(pos=_upd, size=_upd)
+        _upd()
+        return widget
+
+    def _make_popup_chip(self, text, tone="muted"):
+        palette = getattr(self, "ui_palette", {}) or {}
+        tone_map = {
+            "primary": palette.get("primary_soft", (0.16, 0.24, 0.38, 1)),
+            "accent": palette.get("accent_soft", (0.10, 0.28, 0.24, 1)),
+            "muted": palette.get("chip", (0.13, 0.18, 0.27, 1)),
+            "danger": (0.30, 0.12, 0.15, 1),
+        }
+        chip = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(34), padding=[dp(10), dp(6), dp(10), dp(6)])
+        self._style_popup_card(chip, tone_map.get(tone, tone_map["muted"]), radius=dp(14))
+        lbl = Label(text=str(text), color=palette.get("text", (0.93, 0.96, 1.0, 1)), halign="center", valign="middle", font_size=dp(11))
+        lbl.bind(size=self._sync_label_text_size)
+        chip.add_widget(lbl)
+        return chip
+
+
+    def _make_compact_action_button(self, text, tone="plain"):
+        palette = getattr(self, "ui_palette", {}) or {}
+        if getattr(self, "_is_mobile_ui", False):
+            btn = NeoMobileButton(
+                text=str(text),
+                tone=tone,
+                theme=palette,
+                size_hint_y=None,
+                height=dp(38),
+                font_size=dp(11),
+                corner_radius=dp(12),
+                padding=[dp(12), dp(8), dp(12), dp(8)],
+            )
+            return btn
+        tone_map = {
+            "primary": palette.get("primary", (0.24, 0.48, 0.96, 1)),
+            "accent": palette.get("accent", (0.10, 0.78, 0.63, 1)),
+            "secondary": palette.get("secondary", palette.get("accent", (0.10, 0.78, 0.63, 1))),
+            "soft": palette.get("surface_soft", (0.135, 0.16, 0.215, 1)),
+            "plain": palette.get("chip", (0.13, 0.18, 0.27, 1)),
+        }
+        return Button(
+            text=str(text),
+            background_normal="",
+            background_down="",
+            background_color=tone_map.get(tone, tone_map["plain"]),
+            color=palette.get("text", (0.93, 0.96, 1.0, 1)),
+            font_size=dp(11),
+        )
+
+    def _build_collapsible_panel(self, title, content, start_open=True):
+        palette = getattr(self, "ui_palette", {}) or {}
+        wrap = BoxLayout(orientation="vertical", spacing=dp(6), size_hint_y=None)
+        header = self._make_compact_action_button(("▾ " if start_open else "▸ ") + str(title), tone="soft")
+        header.size_hint_y = None
+        header.height = dp(38)
+        header.halign = "left"
+        header.valign = "middle"
+        try:
+            header.text_size = header.size
+            header.bind(size=self._sync_label_text_size)
+        except Exception:
+            pass
+        body_wrap = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(0))
+        body_wrap.add_widget(content)
+        state = {"open": bool(start_open)}
+
+        def _measure_content():
+            h = 0
+            try:
+                h = max(h, float(getattr(content, "minimum_height", 0)))
+            except Exception:
+                pass
+            try:
+                h = max(h, float(content.height))
+            except Exception:
+                pass
+            return max(h, dp(1))
+
+        def _refresh(*_):
+            state["open"] = bool(state.get("open", True))
+            if state["open"]:
+                body_wrap.opacity = 1
+                body_wrap.disabled = False
+                body_wrap.height = _measure_content()
+                wrap.height = header.height + dp(6) + body_wrap.height
+                header.text = "▾ " + str(title)
+            else:
+                body_wrap.opacity = 0
+                body_wrap.disabled = True
+                body_wrap.height = 0
+                wrap.height = header.height
+                header.text = "▸ " + str(title)
+            wrap._panel_open = bool(state["open"])
+
+        def _toggle(*_):
+            state["open"] = not state["open"]
+            _refresh()
+
+        def _set_open(value=True):
+            state["open"] = bool(value)
+            _refresh()
+
+        wrap._set_open = _set_open
+        wrap._toggle_panel = _toggle
+        header.bind(on_release=_toggle)
+        content.bind(height=_refresh)
+        if hasattr(content, "bind") and hasattr(content, "minimum_height"):
+            content.bind(minimum_height=_refresh)
+        wrap.add_widget(header)
+        wrap.add_widget(body_wrap)
+        Clock.schedule_once(_refresh, 0)
+        return wrap
+
+    def _get_selected_column_preview(self, column_name, trigger="", is_grid=False, grid_n=1):
+        column_name = str(column_name or "").strip()
+        patient = self.selected_patient()
+        if not patient or not column_name or column_name == "Select Column":
+            return "—"
+        try:
+            row = self.engine._get_patient_row(patient)
+            raw_val = row.get(column_name, "")
+        except Exception:
+            return "—"
+
+        if pd.isna(raw_val):
+            raw_val = ""
+        csv_val = str(raw_val).strip()
+        trigger = str(trigger or "").strip()
+
+        if trigger:
+            state = "checked" if csv_val.upper() == trigger.upper() else "unchecked"
+            return f"{csv_val or 'blank'} → trigger '{trigger}' → {state}"
+        if is_grid:
+            return f"{csv_val or 'blank'} → grid x{int(grid_n or 1)}"
+        return csv_val or "blank"
+
+    def _refresh_mobile_hud_restore_button(self, *_):
+        btn = getattr(self, "btn_show_hud", None)
+        hud = getattr(self, "preview_hud", None)
+        if btn is None or hud is None:
+            return
+        collapsed = bool(getattr(hud, "_collapsed", False))
+        btn.disabled = not collapsed
+        btn.opacity = 1 if collapsed else 0
+        btn.height = dp(42) if collapsed else 0
+
+    def _restore_mobile_hud(self, *_):
+        hud = getattr(self, "preview_hud", None)
+        if hud is None:
+            return
+        if bool(getattr(hud, "_collapsed", False)):
+            try:
+                hud.toggle_collapsed()
+            except Exception:
+                hud._collapsed = False
+                hud._refresh_collapse_state()
+        self._refresh_mobile_hud_restore_button()
+
+    def _update_preview_hud(self, hit=None):
+        sel_ids = sorted(set(int(x) for x in getattr(self.engine, "selected_box_ids", []) if isinstance(x, int) or str(x).isdigit()))
+        if hasattr(self, "btn_hud_map") and self.btn_hud_map is not None:
+            self.btn_hud_map.disabled = not bool(sel_ids)
+        if hasattr(self, "btn_hud_clear") and self.btn_hud_clear is not None:
+            self.btn_hud_clear.disabled = not bool(sel_ids)
+
+        if hit:
+            box_id = int(hit.get("id", -1))
+            rect_txt = f"{int(hit.get('x', 0))},{int(hit.get('y', 0))} • {int(hit.get('w', 0))}×{int(hit.get('h', 0))}"
+            map_txt = hit.get("mapping") or "Unmapped"
+            title = f"Hover • Box {box_id}"
+            detail = f"Type: {hit.get('t', 'field')} • Rect: {rect_txt}"
+            mapping = f"Mapping: {map_txt}"
+        elif sel_ids:
+            first = sel_ids[0]
+            box_type = self.engine.box_types[first] if first < len(self.engine.box_types) else "field"
+            rect = self.engine.all_boxes[first] if first < len(self.engine.all_boxes) else None
+            rect_txt = "—"
+            if rect is not None:
+                rect_txt = f"{int(rect.x0)},{int(rect.y0)} → {int(rect.x1)},{int(rect.y1)}"
+            map_txt = self.engine.describe_box_mapping(first, self.current_page_idx())
+            title = f"Selected • {len(sel_ids)} box{'es' if len(sel_ids) != 1 else ''}"
+            detail = f"Focus: {first} • {box_type} • {rect_txt}"
+            mapping = f"Mapping: {map_txt if map_txt and map_txt != 'EMPTY' else 'Unmapped'}"
+        else:
+            title = "Preview HUD"
+            detail = "Hover or tap a box to inspect it here."
+            mapping = "Mapping: —"
+
+        if hasattr(self, "preview_hud_title_lbl") and self.preview_hud_title_lbl is not None:
+            self.preview_hud_title_lbl.text = title
+        if hasattr(self, "preview_hud_detail_lbl") and self.preview_hud_detail_lbl is not None:
+            self.preview_hud_detail_lbl.text = detail
+        if hasattr(self, "preview_hud_mapping_lbl") and self.preview_hud_mapping_lbl is not None:
+            self.preview_hud_mapping_lbl.text = mapping
+        self._refresh_mobile_hud_restore_button()
+
+    def _open_mapping_from_hud(self, *_):
+        ids = sorted(set(int(x) for x in getattr(self.engine, "selected_box_ids", []) if isinstance(x, int) or str(x).isdigit()))
+        if not ids:
+            self.set_status("Select a preview box before opening the mapping HUD action.")
+            return
+        self.open_mapping_popup_for_selection(primary_box_id=ids[0])
+
+    def on_preview_zoom_request(self, action, value=None):
+        if action == "step":
+            self._zoom_preview("in" if str(value).lower() == "in" else "out")
+        elif action == "scale":
+            self._apply_preview_zoom(mode="manual", scale=float(value or 1.0))
+
+    def open_detection_settings_popup(self, *_):
+        palette = getattr(self, "ui_palette", {}) or {}
+        outer = BoxLayout(orientation="vertical", spacing=dp(10), padding=[dp(14), dp(14), dp(14), dp(14)])
+        self._style_popup_card(outer, palette.get("surface", (0.085, 0.105, 0.145, 1)), radius=dp(22))
+
+        head = BoxLayout(orientation="vertical", spacing=dp(6), size_hint_y=None, height=dp(66))
+        title_lbl = Label(text="Detection Tuning Console", color=palette.get("text", (0.93, 0.96, 1.0, 1)), size_hint_y=None, height=dp(24), halign="left", valign="middle", font_size=dp(18), bold=True)
+        title_lbl.bind(size=self._sync_label_text_size)
+        sub_lbl = Label(text="Grouped popup controls inspired by pdfautomatorv2. Adjust, apply, then re-run detection.", color=palette.get("muted", (0.60, 0.68, 0.80, 1)), size_hint_y=None, height=dp(18), halign="left", valign="middle", font_size=dp(11))
+        sub_lbl.bind(size=self._sync_label_text_size)
+        head.add_widget(title_lbl)
+        head.add_widget(sub_lbl)
+        outer.add_widget(head)
+
+        scroll = ScrollView(do_scroll_x=False, do_scroll_y=True, bar_width=dp(6))
+        content = GridLayout(cols=1, spacing=dp(10), size_hint_y=None)
+        content.bind(minimum_height=content.setter("height"))
+        scroll.add_widget(content)
+
+        def _popup_input_block(label_text, widget, helper_text=""):
+            block = BoxLayout(orientation="vertical", spacing=dp(4), size_hint_y=None)
+            block.height = dp(72 if helper_text else 54)
+            if hasattr(widget, "height"):
+                try:
+                    block.height = max(block.height, widget.height + dp(24) + (dp(16) if helper_text else 0))
+                except Exception:
+                    pass
+            lbl = Label(text=label_text, color=palette.get("muted", (0.60, 0.68, 0.80, 1)), size_hint_y=None, height=dp(18), halign="left", valign="middle", font_size=dp(11))
+            lbl.bind(size=self._sync_label_text_size)
+            block.add_widget(lbl)
+            block.add_widget(widget)
+            if helper_text:
+                helper = Label(text=helper_text, color=palette.get("muted", (0.60, 0.68, 0.80, 1)), size_hint_y=None, height=dp(14), halign="left", valign="middle", font_size=dp(10))
+                helper.bind(size=self._sync_label_text_size)
+                block.add_widget(helper)
+            return block
+
+        def _slider_spec(key, label, min_v, max_v, step=1.0, decimals=0, helper="", widget_type="float"):
+            return {"key": key, "label": label, "min": min_v, "max": max_v, "step": step, "decimals": decimals, "helper": helper, "widget_type": widget_type}
+
+        groups = [
+            ("Field", [
+                _slider_spec("f_area", "Field Area", 100, 5000, 10, 0, "Minimum contour area kept as a field", "int"),
+                _slider_spec("f_minw", "Field Min Width", 5, 200, 1, 0, "", "int"),
+                _slider_spec("f_minh", "Field Min Height", 5, 120, 1, 0, "", "int"),
+                _slider_spec("f_close", "Field Close", 0, 10, 1, 0, "Morph close kernel for field cleanup", "int"),
+            ]),
+            ("Lines", [
+                _slider_spec("line_minw", "Line Min Width", 50, 800, 5, 0, "", "int"),
+                _slider_spec("line_maxw", "Line Max Width", 150, 2600, 10, 0, "", "int"),
+            ]),
+            ("Checkbox", [
+                _slider_spec("c_strict", "Checkbox Strict", 10, 100, 1, 0, "", "int"),
+                _slider_spec("c_size_min", "Checkbox Min Size", 5, 120, 1, 0, "", "int"),
+                _slider_spec("c_size_max", "Checkbox Max Size", 10, 160, 1, 0, "", "int"),
+                _slider_spec("c_border", "Border Fill", 0.0, 1.0, 0.01, 2, "", "float"),
+                _slider_spec("c_inner", "Inner Fill", 0.0, 1.0, 0.01, 2, "", "float"),
+                _slider_spec("roi_max", "ROI Max", 50, 1000, 5, 0, "", "int"),
+                _slider_spec("c_open", "Checkbox Open", 0, 5, 1, 0, "", "int"),
+                _slider_spec("c_close", "Checkbox Close", 0, 5, 1, 0, "", "int"),
+                _slider_spec("c_band", "Band %", 0.01, 0.4, 0.01, 2, "", "float"),
+                _slider_spec("c_aspect", "Aspect Tolerance", 0.05, 1.0, 0.01, 2, "", "float"),
+            ]),
+            ("Extent", [
+                _slider_spec("ext_low", "Extent Low", 0.01, 0.5, 0.01, 2, "", "float"),
+                _slider_spec("ext_high", "Extent High", 0.10, 1.0, 0.01, 2, "", "float"),
+                _slider_spec("c_fill", "Fill Min", 0.10, 1.0, 0.01, 2, "", "float"),
+                _slider_spec("c_eps", "Approx Eps", 0.01, 0.20, 0.01, 2, "", "float"),
+            ]),
+        ]
+
+        controls = {}
+
+        def _format_slider_value(val, decimals=0, as_int=False):
+            return str(int(round(float(val)))) if as_int else f"{float(val):.{int(decimals)}f}"
+
+        def _make_slider_control(spec):
+            src_widget = getattr(self, spec["key"])
+            try:
+                start_val = float(src_widget.text)
+            except Exception:
+                start_val = float(spec["min"])
+            row = BoxLayout(orientation="vertical", spacing=dp(4), size_hint_y=None, height=dp(82))
+            top = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint_y=None, height=dp(20))
+            lbl = Label(text=spec["label"], color=palette.get("text", (0.93, 0.96, 1.0, 1)), halign="left", valign="middle", font_size=dp(11))
+            lbl.bind(size=self._sync_label_text_size)
+            val_lbl = Label(text=_format_slider_value(start_val, spec["decimals"], spec["widget_type"] == "int"), color=palette.get("accent", (0.10, 0.78, 0.63, 1)), halign="right", valign="middle", font_size=dp(11))
+            val_lbl.bind(size=self._sync_label_text_size)
+            top.add_widget(lbl)
+            top.add_widget(val_lbl)
+            slider = Slider(min=spec["min"], max=spec["max"], value=start_val, step=spec["step"], size_hint_y=None, height=dp(30))
+            input_widget = TextInput(
+                text=_format_slider_value(start_val, spec["decimals"], spec["widget_type"] == "int"),
+                multiline=False,
+                size_hint_y=None,
+                height=dp(28),
+                input_filter=("int" if spec["widget_type"] == "int" else None),
+                background_normal="",
+                background_active="",
+                background_color=palette.get("surface_soft", (0.135, 0.16, 0.215, 1)),
+                foreground_color=palette.get("text", (0.93, 0.96, 1.0, 1)),
+                cursor_color=palette.get("accent", (0.10, 0.78, 0.63, 1)),
+                padding=[dp(10), dp(8), dp(10), dp(8)],
+            )
+
+            def _sync_from_slider(_instance, value):
+                val_lbl.text = _format_slider_value(value, spec["decimals"], spec["widget_type"] == "int")
+                input_widget.text = _format_slider_value(value, spec["decimals"], spec["widget_type"] == "int")
+
+            def _sync_from_input(_instance=None):
+                try:
+                    value = float(input_widget.text.strip())
+                    value = max(float(spec["min"]), min(float(spec["max"]), value))
+                    slider.value = value
+                except Exception:
+                    pass
+
+            slider.bind(value=_sync_from_slider)
+            input_widget.bind(on_text_validate=_sync_from_input, focus=lambda inst, focused: (None if focused else _sync_from_input(inst)))
+            row.add_widget(top)
+            row.add_widget(slider)
+            row.add_widget(input_widget)
+            controls[spec["key"]] = {"slider": slider, "input": input_widget, "spec": spec}
+            return _popup_input_block(spec["label"], row, spec.get("helper", ""))
+
+        for group_name, specs in groups:
+            card = BoxLayout(orientation="vertical", spacing=dp(8), padding=[dp(10), dp(10), dp(10), dp(10)], size_hint_y=None)
+            title = Label(text=group_name, color=palette.get("text", (0.93, 0.96, 1.0, 1)), size_hint_y=None, height=dp(20), halign="left", valign="middle", font_size=dp(13), bold=True)
+            title.bind(size=self._sync_label_text_size)
+            grid = GridLayout(cols=2 if getattr(self, "ui_mobile", False) else 3, spacing=dp(8), size_hint_y=None)
+            grid.bind(minimum_height=grid.setter("height"))
+            for spec in specs:
+                grid.add_widget(_make_slider_control(spec))
+            card.add_widget(title)
+            card.add_widget(grid)
+            card.height = dp(42) + max(dp(86), grid.minimum_height)
+            grid.bind(minimum_height=lambda _inst, value, c=card: setattr(c, "height", dp(42) + value))
+            self._style_popup_card(card, palette.get("surface_alt", (0.11, 0.135, 0.185, 1)), radius=dp(18))
+            content.add_widget(card)
+
+        extent_toggle = CheckBox(active=bool(getattr(self.use_extent_chk, "active", False)))
+        extent_wrap = BoxLayout(orientation="horizontal", spacing=dp(8), padding=[dp(10), dp(8), dp(10), dp(8)], size_hint_y=None, height=dp(44))
+        self._style_popup_card(extent_wrap, palette.get("surface_alt", (0.11, 0.135, 0.185, 1)), radius=dp(16))
+        extent_wrap.add_widget(extent_toggle)
+        extent_lbl = Label(text="Use contour extent filter", color=palette.get("text", (0.93, 0.96, 1.0, 1)), halign="left", valign="middle", font_size=dp(11))
+        extent_lbl.bind(size=self._sync_label_text_size)
+        extent_wrap.add_widget(extent_lbl)
+        content.add_widget(extent_wrap)
+
+        outer.add_widget(scroll)
+
+        preset_wrap = BoxLayout(orientation="vertical", spacing=dp(6), size_hint_y=None, height=dp(76))
+        preset_lbl = Label(text="Quick presets", color=palette.get("muted", (0.60, 0.68, 0.80, 1)), size_hint_y=None, height=dp(16), halign="left", valign="middle", font_size=dp(10.5))
+        preset_lbl.bind(size=self._sync_label_text_size)
+        preset_row = GridLayout(cols=3, spacing=dp(8), size_hint_y=None, height=dp(44))
+        btn_preset_balanced = self._make_compact_action_button("Balanced", tone="plain")
+        btn_preset_sensitive = self._make_compact_action_button("Sensitive", tone="soft")
+        btn_preset_strict = self._make_compact_action_button("Strict", tone="accent")
+        for btn in [btn_preset_balanced, btn_preset_sensitive, btn_preset_strict]:
+            preset_row.add_widget(btn)
+        preset_wrap.add_widget(preset_lbl)
+        preset_wrap.add_widget(preset_row)
+        outer.add_widget(preset_wrap)
+
+        btn_row = GridLayout(cols=4, spacing=dp(8), size_hint_y=None, height=dp(46))
+        btn_defaults = self._make_compact_action_button("Defaults", tone="plain")
+        btn_apply = self._make_compact_action_button("Apply", tone="primary")
+        btn_detect = self._make_compact_action_button("Apply + Detect", tone="accent")
+        btn_close = self._make_compact_action_button("Close", tone="soft")
+        for btn in [btn_defaults, btn_apply, btn_detect, btn_close]:
+            btn_row.add_widget(btn)
+        outer.add_widget(btn_row)
+
+        popup = Popup(
+            title="",
+            separator_height=0,
+            background="",
+            background_color=(0, 0, 0, 0.72),
+            content=outer,
+            size_hint=(0.95 if getattr(self, "ui_mobile", False) else 0.86, 0.90 if getattr(self, "ui_mobile", False) else 0.88),
+            auto_dismiss=True,
+        )
+
+        def _apply_settings(run_detect=False):
+            try:
+                for key, payload in controls.items():
+                    slider = payload["slider"]
+                    spec = payload["spec"]
+                    as_int = spec["widget_type"] == "int"
+                    new_text = _format_slider_value(slider.value, spec["decimals"], as_int)
+                    getattr(self, key).text = new_text
+                self.use_extent_chk.active = bool(extent_toggle.active)
+                self.set_status("Detection popup settings applied.")
+                popup.dismiss()
+                if run_detect:
+                    self.on_run_detect(None)
+            except Exception as e:
+                self.set_status(f"Detection tuning error:\n{e}")
+
+        def _restore_defaults(*_):
+            default_map = {
+                "f_area": DEFAULTS["F_Area"],
+                "f_minw": DEFAULTS["F_MinW"],
+                "f_minh": DEFAULTS["F_MinH"],
+                "f_close": DEFAULTS["F_Close"],
+                "line_minw": DEFAULTS["Line_MinW"],
+                "line_maxw": DEFAULTS["Line_MaxW"],
+                "c_strict": DEFAULTS["C_Strict"],
+                "c_size_min": DEFAULTS["C_Size"][0],
+                "c_size_max": DEFAULTS["C_Size"][1],
+                "c_border": DEFAULTS["C_Border"],
+                "c_inner": DEFAULTS["C_Inner"],
+                "roi_max": DEFAULTS["ROI_Max"],
+                "c_open": DEFAULTS["C_Open"],
+                "c_close": DEFAULTS["C_Close"],
+                "c_band": DEFAULTS["C_BandPct"],
+                "c_aspect": DEFAULTS["C_AspectTol"],
+                "ext_low": DEFAULTS["Ext_Low"],
+                "ext_high": DEFAULTS["Ext_High"],
+                "c_fill": DEFAULTS["C_FillMin"],
+                "c_eps": DEFAULTS["C_Eps"],
+            }
+            for key, val in default_map.items():
+                if key in controls:
+                    controls[key]["slider"].value = float(val)
+            extent_toggle.active = bool(DEFAULTS["Use_Extent"])
+
+        def _apply_preset(kind):
+            preset = {
+                "balanced": {
+                    "f_area": DEFAULTS["F_Area"], "f_close": DEFAULTS["F_Close"],
+                    "c_strict": DEFAULTS["C_Strict"], "c_open": DEFAULTS["C_Open"], "c_close": DEFAULTS["C_Close"],
+                    "ext_low": DEFAULTS["Ext_Low"], "ext_high": DEFAULTS["Ext_High"], "c_fill": DEFAULTS["C_FillMin"]
+                },
+                "sensitive": {
+                    "f_area": max(50, DEFAULTS["F_Area"] * 0.75), "f_close": max(0, DEFAULTS["F_Close"] - 1),
+                    "c_strict": max(8, DEFAULTS["C_Strict"] - 8), "c_open": 0, "c_close": max(0, DEFAULTS["C_Close"] - 1),
+                    "ext_low": max(0.01, DEFAULTS["Ext_Low"] * 0.65), "ext_high": min(1.0, DEFAULTS["Ext_High"] + 0.08), "c_fill": max(0.08, DEFAULTS["C_FillMin"] - 0.05)
+                },
+                "strict": {
+                    "f_area": DEFAULTS["F_Area"] * 1.25, "f_close": DEFAULTS["F_Close"] + 1,
+                    "c_strict": DEFAULTS["C_Strict"] + 10, "c_open": DEFAULTS["C_Open"] + 1, "c_close": DEFAULTS["C_Close"] + 1,
+                    "ext_low": min(0.5, DEFAULTS["Ext_Low"] + 0.04), "ext_high": max(DEFAULTS["Ext_Low"] + 0.12, DEFAULTS["Ext_High"] - 0.04), "c_fill": min(1.0, DEFAULTS["C_FillMin"] + 0.05)
+                },
+            }.get(str(kind).lower(), {})
+            for key, val in preset.items():
+                if key in controls:
+                    controls[key]["slider"].value = float(val)
+            self.set_status(f"Detection preset applied: {str(kind).title()}")
+
+        btn_defaults.bind(on_release=_restore_defaults)
+        btn_preset_balanced.bind(on_release=lambda *_: _apply_preset("balanced"))
+        btn_preset_sensitive.bind(on_release=lambda *_: _apply_preset("sensitive"))
+        btn_preset_strict.bind(on_release=lambda *_: _apply_preset("strict"))
+        btn_apply.bind(on_release=lambda *_: _apply_settings(False))
+        btn_detect.bind(on_release=lambda *_: _apply_settings(True))
+        btn_close.bind(on_release=lambda *_: popup.dismiss())
+        popup.open()
 
     def open_mapping_popup_for_selection(self, primary_box_id=None):
         ids = sorted(set(int(x) for x in self.engine.selected_box_ids if isinstance(x, int) or str(x).isdigit()))
@@ -4198,6 +5739,7 @@ class MediMapProApp(MDApp):
         page_idx = self.current_page_idx()
         focus_id = ids[0] if primary_box_id is None else int(primary_box_id)
         existing = self._find_mapping_for_box(focus_id, page_idx)
+        palette = getattr(self, "ui_palette", {}) or {}
 
         current_col = self.column_spinner.text if self.column_spinner.text != "Select Column" else ""
         current_trigger = self.trigger_input.text.strip()
@@ -4210,61 +5752,175 @@ class MediMapProApp(MDApp):
             current_grid_flag = "1" if bool(existing.get("g", False)) else "0"
             current_grid_n = str(int(existing.get("n", 1)))
 
-        wrap = BoxLayout(orientation="vertical", spacing=8, padding=8)
+        outer = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(10))
+        self._style_popup_card(outer, palette.get("surface", (0.085, 0.105, 0.145, 1)), radius=dp(22))
 
+        head = BoxLayout(orientation="vertical", spacing=dp(8), size_hint_y=None, height=dp(118))
         title_lbl = Label(
-            text=f"Selected boxes: {', ' .join(str(i) for i in ids)}\nPage: {page_idx}",
+            text="Preview Mapping Inspector",
+            color=palette.get("text", (0.93, 0.96, 1.0, 1)),
             size_hint_y=None,
-            height=46,
+            height=dp(28),
             halign="left",
-            valign="middle"
+            valign="middle",
+            font_size=dp(18),
+            bold=True,
         )
         title_lbl.bind(size=self._sync_label_text_size)
-        wrap.add_widget(title_lbl)
+        subtitle = Label(
+            text=f"Page {page_idx} • Focus box {focus_id} • {len(ids)} selected",
+            color=palette.get("muted", (0.60, 0.68, 0.80, 1)),
+            size_hint_y=None,
+            height=dp(22),
+            halign="left",
+            valign="middle",
+            font_size=dp(11.5),
+        )
+        subtitle.bind(size=self._sync_label_text_size)
+        chip_row = GridLayout(cols=3, spacing=dp(8), size_hint_y=None, height=dp(34))
+        chip_row.add_widget(self._make_popup_chip(f"Boxes: {', '.join(str(i) for i in ids[:5])}{'…' if len(ids) > 5 else ''}", tone="primary"))
+        chip_row.add_widget(self._make_popup_chip(f"Mode: {'Grid' if str(current_grid_flag).strip() == '1' else 'Direct'}", tone="accent"))
+        chip_row.add_widget(self._make_popup_chip("Mapped" if existing else "New Mapping", tone="muted" if existing else "danger"))
+        head.add_widget(title_lbl)
+        head.add_widget(subtitle)
+        head.add_widget(chip_row)
+        outer.add_widget(head)
+
+        summary_text = "Existing mapping found for this box." if existing else "No existing mapping for the focused box yet."
+        if existing:
+            summary_text = f"Existing mapping: column={existing.get('column', '')} | trigger={existing.get('trigger', '') or '—'} | grid={bool(existing.get('g', False))} | n={int(existing.get('n', 1))}"
+        summary_lbl = Label(
+            text=summary_text,
+            color=palette.get("text", (0.93, 0.96, 1.0, 1)),
+            size_hint_y=None,
+            height=dp(48),
+            halign="left",
+            valign="middle",
+            font_size=dp(11.5),
+        )
+        summary_lbl.bind(size=self._sync_label_text_size)
+        self._bind_auto_height_label(summary_lbl, min_height=dp(44), extra_pad=dp(8))
+        self._style_popup_card(summary_lbl, palette.get("chip", (0.13, 0.18, 0.27, 1)), radius=dp(16))
+        outer.add_widget(summary_lbl)
+
+        live_preview_lbl = Label(
+            text="Live value preview: —",
+            color=palette.get("text", (0.93, 0.96, 1.0, 1)),
+            size_hint_y=None,
+            height=dp(50),
+            halign="left",
+            valign="middle",
+            font_size=dp(11.5),
+        )
+        live_preview_lbl.bind(size=self._sync_label_text_size)
+        self._bind_auto_height_label(live_preview_lbl, min_height=dp(44), extra_pad=dp(8))
+        self._style_popup_card(live_preview_lbl, palette.get("surface_alt", (0.11, 0.135, 0.185, 1)), radius=dp(16))
+        outer.add_widget(live_preview_lbl)
+
+        def _popup_field_block(label_text, widget, helper_text=""):
+            block = BoxLayout(orientation="vertical", spacing=dp(4), size_hint_y=None)
+            helper_lines = 1 + (1 if helper_text else 0)
+            block.height = dp(24 + 52 + (16 if helper_text else 0))
+            label = Label(text=label_text, color=palette.get("muted", (0.60, 0.68, 0.80, 1)), size_hint_y=None, height=dp(18), halign="left", valign="middle", font_size=dp(11.5))
+            label.bind(size=self._sync_label_text_size)
+            block.add_widget(label)
+            block.add_widget(widget)
+            if helper_text:
+                helper_lbl = Label(text=helper_text, color=palette.get("muted", (0.60, 0.68, 0.80, 1)), size_hint_y=None, height=dp(14), halign="left", valign="middle", font_size=dp(10.5))
+                helper_lbl.bind(size=self._sync_label_text_size)
+                block.add_widget(helper_lbl)
+            return block
+
+        form = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
+        form.bind(minimum_height=form.setter("height"))
 
         column_spinner = Spinner(
             text=current_col if current_col else "Select Column",
             values=self.column_spinner.values,
             size_hint_y=None,
-            height=44
+            height=dp(46),
+            background_normal="",
+            background_color=palette.get("surface_soft", (0.135, 0.16, 0.215, 1)),
         )
-        wrap.add_widget(column_spinner)
+        form.add_widget(_popup_field_block("Column", column_spinner, "Target data column for the selected box or group"))
 
         trigger_input = TextInput(
             text=current_trigger,
-            hint_text="Trigger",
+            hint_text="Trigger value (leave blank for text fill)",
             multiline=False,
             size_hint_y=None,
-            height=44
+            height=dp(46),
+            background_normal="",
+            background_active="",
+            background_color=palette.get("surface_soft", (0.135, 0.16, 0.215, 1)),
+            foreground_color=palette.get("text", (0.93, 0.96, 1.0, 1)),
+            cursor_color=palette.get("accent", (0.10, 0.78, 0.63, 1)),
+            hint_text_color=palette.get("muted", (0.60, 0.68, 0.80, 1)),
+            padding=[dp(12), dp(12), dp(12), dp(12)],
         )
-        wrap.add_widget(trigger_input)
+        form.add_widget(_popup_field_block("Trigger", trigger_input, "Useful for checkbox-style mappings"))
 
-        grid_row = GridLayout(cols=2, size_hint_y=None, height=64, spacing=8)
+        grid_row = GridLayout(cols=2, size_hint_y=None, height=dp(86), spacing=dp(8))
         popup_grid_chk = CheckBox(active=(str(current_grid_flag).strip() == "1"))
-        grid_flag_wrap = BoxLayout(orientation="horizontal", spacing=8)
+        grid_flag_wrap = BoxLayout(orientation="horizontal", spacing=dp(8), padding=[dp(10), dp(6), dp(10), dp(6)], size_hint_y=None, height=dp(46))
+        self._style_popup_card(grid_flag_wrap, palette.get("surface_alt", (0.11, 0.135, 0.185, 1)), radius=dp(16))
         grid_flag_wrap.add_widget(popup_grid_chk)
-        grid_flag_lbl = Label(text="Is Grid?", halign="left", valign="middle")
+        grid_flag_lbl = Label(text="Grid Fill", color=palette.get("text", (0.93, 0.96, 1.0, 1)), halign="left", valign="middle", font_size=dp(12))
         grid_flag_lbl.bind(size=self._sync_label_text_size)
         grid_flag_wrap.add_widget(grid_flag_lbl)
         grid_n_input = TextInput(
             text=current_grid_n,
             hint_text="Grid N",
-            multiline=False
+            multiline=False,
+            input_filter="int",
+            size_hint_y=None,
+            height=dp(46),
+            background_normal="",
+            background_active="",
+            background_color=palette.get("surface_soft", (0.135, 0.16, 0.215, 1)),
+            foreground_color=palette.get("text", (0.93, 0.96, 1.0, 1)),
+            cursor_color=palette.get("accent", (0.10, 0.78, 0.63, 1)),
+            hint_text_color=palette.get("muted", (0.60, 0.68, 0.80, 1)),
+            padding=[dp(12), dp(12), dp(12), dp(12)],
         )
-        grid_row.add_widget(grid_flag_wrap)
-        grid_row.add_widget(grid_n_input)
-        wrap.add_widget(grid_row)
+        grid_row.add_widget(_popup_field_block("Fill Mode", grid_flag_wrap, "Enable when the selection should behave like a grid"))
+        grid_row.add_widget(_popup_field_block("Grid Count", grid_n_input, "How many cells/characters to distribute"))
+        form.add_widget(grid_row)
 
-        btn_row = GridLayout(cols=3, size_hint_y=None, height=46, spacing=6)
-        btn_assign = Button(text="Assign")
-        btn_clear = Button(text="Clear")
-        btn_close = Button(text="Close")
+        def _refresh_live_preview(*_):
+            live_preview_lbl.text = "Live value preview: " + self._get_selected_column_preview(
+                column_spinner.text,
+                trigger=trigger_input.text.strip(),
+                is_grid=bool(getattr(popup_grid_chk, "active", False)),
+                grid_n=int(grid_n_input.text.strip() or "1"),
+            )
+
+        column_spinner.bind(text=_refresh_live_preview)
+        trigger_input.bind(text=_refresh_live_preview)
+        popup_grid_chk.bind(active=lambda *_: _refresh_live_preview())
+        grid_n_input.bind(text=_refresh_live_preview)
+        _refresh_live_preview()
+
+        outer.add_widget(form)
+
+        btn_row = GridLayout(cols=3, size_hint_y=None, height=dp(48), spacing=dp(8))
+        btn_assign = Button(text="Assign Mapping", background_normal="", background_down="", background_color=palette.get("primary", (0.24, 0.48, 0.96, 1)), color=(1, 1, 1, 1))
+        btn_clear = Button(text="Clear Mapping", background_normal="", background_down="", background_color=palette.get("surface_soft", (0.135, 0.16, 0.215, 1)), color=palette.get("text", (0.93, 0.96, 1.0, 1)))
+        btn_close = Button(text="Close", background_normal="", background_down="", background_color=palette.get("chip", (0.13, 0.18, 0.27, 1)), color=palette.get("text", (0.93, 0.96, 1.0, 1)))
         btn_row.add_widget(btn_assign)
         btn_row.add_widget(btn_clear)
         btn_row.add_widget(btn_close)
-        wrap.add_widget(btn_row)
+        outer.add_widget(btn_row)
 
-        popup = Popup(title="Map Selected Box(es)", content=wrap, size_hint=(0.88, 0.52))
+        popup = Popup(
+            title="",
+            separator_height=0,
+            background="",
+            background_color=(0, 0, 0, 0.70),
+            content=outer,
+            size_hint=(0.94 if getattr(self, "ui_mobile", False) else 0.62, 0.76 if getattr(self, "ui_mobile", False) else 0.64),
+            auto_dismiss=True,
+        )
 
         def _assign(*_):
             try:
@@ -4279,7 +5935,7 @@ class MediMapProApp(MDApp):
 
                 self.column_spinner.text = column
                 self.trigger_input.text = trigger
-                
+
                 if hasattr(self, "grid_flag_chk"):
                     self.grid_flag_chk.active = bool(is_grid)
                 else:
@@ -4351,6 +6007,58 @@ class MediMapProApp(MDApp):
         self._sync_box_selection_ui()
         self.set_status(f"Cleared mapping for box(es): {', '.join(str(i) for i in ids)}")
 
+    def _make_styled_popup(self, title, body, subtitle="", size_hint=(0.9, 0.9), auto_dismiss=True):
+        palette = getattr(self, "ui_palette", {}) or {}
+        outer = BoxLayout(orientation="vertical", spacing=dp(10), padding=[dp(12), dp(12), dp(12), dp(12)])
+        self._style_popup_card(outer, palette.get("surface", (0.085, 0.105, 0.145, 1)), radius=dp(22))
+        head = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint_y=None, height=dp(52))
+        title_wrap = BoxLayout(orientation="vertical", spacing=dp(2))
+        ttl = Label(text=str(title), color=palette.get("text", (0.93, 0.96, 1.0, 1)), size_hint_y=None, height=dp(24), halign="left", valign="middle", font_size=dp(17), bold=True)
+        ttl.bind(size=self._sync_label_text_size)
+        title_wrap.add_widget(ttl)
+        if subtitle:
+            sub = Label(text=str(subtitle), color=palette.get("muted", (0.60, 0.68, 0.80, 1)), size_hint_y=None, height=dp(18), halign="left", valign="middle", font_size=dp(10.5))
+            sub.bind(size=self._sync_label_text_size)
+            title_wrap.add_widget(sub)
+        head.add_widget(title_wrap)
+        popup = Popup(title="", separator_height=0, background="", background_color=(0, 0, 0, 0.72), content=outer, size_hint=size_hint, auto_dismiss=auto_dismiss)
+        btn_close = self._make_compact_action_button("Close", tone="soft")
+        btn_close.size_hint = (None, None)
+        btn_close.size = (dp(86), dp(36))
+        btn_close.bind(on_release=lambda *_: popup.dismiss())
+        head.add_widget(btn_close)
+        outer.add_widget(head)
+        outer.add_widget(body)
+        return popup, outer
+
+    def _open_styled_filechooser_popup(self, title, filters, on_submit, subtitle="Double-click a file or use Open."):
+        chooser = FileChooserListView(filters=list(filters or []), path=self.get_default_file_path())
+        chooser_box = BoxLayout(orientation="vertical", spacing=dp(8))
+        self._style_popup_card(chooser_box, getattr(self, "ui_palette", {}).get("surface_alt", (0.11, 0.135, 0.185, 1)), radius=dp(18))
+        chooser_box.padding = [dp(8), dp(8), dp(8), dp(8)]
+        chooser_box.add_widget(chooser)
+        btn_row = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=dp(44))
+        btn_cancel = self._make_compact_action_button("Cancel", tone="plain")
+        btn_open = self._make_compact_action_button("Open", tone="primary")
+        btn_row.add_widget(btn_cancel)
+        btn_row.add_widget(btn_open)
+        chooser_box.add_widget(btn_row)
+        popup, _outer = self._make_styled_popup(title, chooser_box, subtitle=subtitle, size_hint=(0.92, 0.92 if getattr(self, "ui_mobile", False) else 0.90))
+
+        def _submit(selection=None):
+            sel = list(selection if selection is not None else getattr(chooser, "selection", []) or [])
+            if not sel:
+                self.set_status(f"No file selected for {title}.")
+                return
+            on_submit(sel, popup)
+
+        chooser.bind(on_submit=lambda _obj, sel, _touch: _submit(sel))
+        btn_cancel.bind(on_release=lambda *_: popup.dismiss())
+        btn_open.bind(on_release=lambda *_: _submit())
+        popup.open()
+        return popup
+
+
     # --------------------------------------------------------
     # File loading
     # --------------------------------------------------------
@@ -4381,13 +6089,12 @@ class MediMapProApp(MDApp):
                 ],
             )
 
-        content = FileChooserListView(
-            filters=["*.csv", "*.xlsx", "*.xls"],
-            path=self.get_default_file_path()
+        self._open_styled_filechooser_popup(
+            "Select CSV/XLSX File",
+            ["*.csv", "*.xlsx", "*.xls"],
+            self._handle_csv_selection,
+            subtitle="Load the spreadsheet or CSV that will supply patient values.",
         )
-        popup = Popup(title="Select CSV/XLSX File", content=content, size_hint=(0.9, 0.9))
-        content.bind(on_submit=lambda obj, sel, touch: self._handle_csv_selection(sel, popup))
-        popup.open()
 
     def _handle_csv_selection(self, selection, popup):
         if selection:
@@ -4423,13 +6130,12 @@ class MediMapProApp(MDApp):
                 extra_mime_types=["application/json", "text/plain", "application/octet-stream"],
             )
 
-        content = FileChooserListView(
-            filters=["*.json"],
-            path=self.get_default_file_path()
+        self._open_styled_filechooser_popup(
+            "Select Config File",
+            ["*.json"],
+            self._handle_load_config_selection,
+            subtitle="Open a saved MediMap JSON configuration.",
         )
-        popup = Popup(title="Select Config File", content=content, size_hint=(0.9, 0.9))
-        content.bind(on_submit=lambda obj, sel, touch: self._handle_load_config_selection(sel, popup))
-        popup.open()
 
     def _handle_load_config_selection(self, selection, popup):
         if selection:
@@ -4472,13 +6178,12 @@ class MediMapProApp(MDApp):
                 extra_mime_types=["application/json", "text/plain", "application/octet-stream"],
             )
 
-        content = FileChooserListView(
-            filters=["*.json"],
-            path=self.get_default_file_path()
+        self._open_styled_filechooser_popup(
+            "Select Config File to Merge",
+            ["*.json"],
+            self._handle_merge_config_selection,
+            subtitle="Merge another JSON config into the current session.",
         )
-        popup = Popup(title="Select Config File to Merge", content=content, size_hint=(0.9, 0.9))
-        content.bind(on_submit=lambda obj, sel, touch: self._handle_merge_config_selection(sel, popup))
-        popup.open()
 
     def _handle_merge_config_selection(self, selection, popup):
         if selection:
@@ -4562,6 +6267,7 @@ class MediMapProApp(MDApp):
             page_idx = self.current_page_idx()
             self.engine.run_detection(page_idx=page_idx)
             self.engine.selected_box_ids = []
+            self._stash_page_selection(page_idx)
             self.set_status(
                 f"Detection done.\n"
                 f"Page: {page_idx}\n"
@@ -4580,6 +6286,7 @@ class MediMapProApp(MDApp):
 
             page_idx = self.current_page_idx()
             patient = self.selected_patient()
+            self._prepare_page_context(page_idx)
 
             if platform == "android" and not self.engine.supports_export_backend():
                 raw_img = self.engine.get_raw_preview_pixmap(
@@ -4618,9 +6325,13 @@ class MediMapProApp(MDApp):
                     page_idx=page_idx,
                     preview_zoom=PREVIEW_SCALE
                 )
+                boxes_payload = self._build_preview_boxes_payload(
+                    page_idx=page_idx,
+                    preview_zoom=PREVIEW_SCALE,
+                ) if self.engine.all_boxes else []
                 self.render_preview_image(
                     raw_img,
-                    boxes_payload=[],
+                    boxes_payload=boxes_payload,
                     page_idx=page_idx,
                     preview_zoom=PREVIEW_SCALE,
                 )
@@ -4788,13 +6499,12 @@ class MediMapProApp(MDApp):
         )
 
     def _open_legacy_pdf_picker(self):
-        content = FileChooserListView(
-            filters=["*.pdf"],
-            path=self.get_default_file_path()
+        self._open_styled_filechooser_popup(
+            "Select PDF Template",
+            ["*.pdf"],
+            self._handle_pdf_selection,
+            subtitle="Choose the PDF form template to preview and map.",
         )
-        popup = Popup(title="Select PDF Template", content=content, size_hint=(0.9, 0.9))
-        content.bind(on_submit=lambda obj, sel, touch: self._handle_pdf_selection(sel, popup))
-        popup.open()
 
     def on_load_pdf(self, instance):
         if platform == "android":
@@ -4855,39 +6565,46 @@ class MediMapProApp(MDApp):
 
 
     def open_text_input_popup(self, title, hint_text, on_submit_callback, default_text=""):
-        wrap = BoxLayout(orientation="vertical", spacing=8, padding=8)
-    
+        palette = getattr(self, "ui_palette", {}) or {}
+        wrap = BoxLayout(orientation="vertical", spacing=dp(10), padding=[dp(10), dp(10), dp(10), dp(10)])
+        self._style_popup_card(wrap, palette.get("surface_alt", (0.11, 0.135, 0.185, 1)), radius=dp(18))
+
         txt = TextInput(
             text=default_text,
             hint_text=hint_text,
             multiline=False,
             size_hint_y=None,
-            height=42
+            height=dp(48),
+            background_normal="",
+            background_active="",
+            background_color=palette.get("surface_soft", (0.135, 0.16, 0.215, 1)),
+            foreground_color=palette.get("text", (0.93, 0.96, 1.0, 1)),
+            cursor_color=palette.get("accent", (0.10, 0.78, 0.63, 1)),
+            hint_text_color=palette.get("muted", (0.60, 0.68, 0.80, 1)),
+            padding=[dp(12), dp(12), dp(12), dp(12)],
         )
         wrap.add_widget(txt)
-    
-        btn_row = GridLayout(cols=2, size_hint_y=None, height=42, spacing=6)
-    
-        btn_cancel = Button(text="Cancel")
-        btn_ok = Button(text="OK")
-    
+
+        btn_row = GridLayout(cols=2, size_hint_y=None, height=dp(46), spacing=dp(8))
+        btn_cancel = self._make_compact_action_button("Cancel", tone="plain")
+        btn_ok = self._make_compact_action_button("OK", tone="primary")
         btn_row.add_widget(btn_cancel)
         btn_row.add_widget(btn_ok)
         wrap.add_widget(btn_row)
-    
-        popup = Popup(title=title, content=wrap, size_hint=(0.82, 0.32))
-    
+
+        popup, _outer = self._make_styled_popup(title, wrap, subtitle=hint_text, size_hint=(0.92 if getattr(self, "ui_mobile", False) else 0.58, 0.34 if getattr(self, "ui_mobile", False) else 0.30))
+
         btn_cancel.bind(on_release=lambda *_: popup.dismiss())
-    
+
         def _submit(*_):
             try:
                 on_submit_callback(txt.text.strip())
             finally:
                 popup.dismiss()
-    
+
         btn_ok.bind(on_release=_submit)
         txt.bind(on_text_validate=lambda *_: _submit())
-    
+
         popup.open()
     
     
