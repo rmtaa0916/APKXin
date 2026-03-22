@@ -3666,37 +3666,14 @@ class InteractivePreview(Image):
         )
 
 
-    def _label_anchor_for_box_image(self, box, bx, by, bw, bh, img_w, img_h):
-        box_type = str(box.get("t", "field"))
-        small_box = (bw <= 28 or bh <= 22)
-        top_room = by
-        left_room = bx
-        right_room = img_w - (bx + bw)
-        bottom_room = img_h - (by + bh)
-        if box_type == "check" or small_box:
-            if left_room >= 26:
-                return "left"
-            if top_room >= 18:
-                return "top_left"
-            if right_room >= 26:
-                return "right"
-            return "bottom" if bottom_room >= 16 else "top_left"
-        if top_room >= 18:
-            return "top_left"
-        if right_room >= 34:
-            return "right"
-        if left_room >= 34:
-            return "left"
-        return "bottom"
-
     def _raster_label_style(self, tex_w, tex_h):
-        base = max(0.42, min(0.68, float(tex_w) / 1800.0))
+        base = max(0.36, min(0.54, float(tex_w) / 2200.0))
         return {
             "font_scale": base,
             "thickness": 1 if tex_w < 1800 else 2,
-            "pad_x": max(2, int(round(tex_w / 420.0))),
-            "pad_y": max(1, int(round(tex_h / 1100.0))),
-            "gap": max(2, int(round(tex_w / 520.0))),
+            "pad_x": max(2, int(round(tex_w / 520.0))),
+            "pad_y": max(1, int(round(tex_h / 1400.0))),
+            "gap": max(2, int(round(tex_w / 700.0))),
         }
 
     def _box_color_bgra_u8(self, box_type, selected=False, hovered=False):
@@ -3706,25 +3683,21 @@ class InteractivePreview(Image):
         b = int(max(0.0, min(1.0, float(rgba[2]))) * 255)
         return (b, g, r, 255)
 
-    def _draw_cv_badge(self, overlay_bgra, left, top, text, anchor, img_w, img_h, style):
+    def _draw_cv_badge_inside(self, overlay_bgra, left, top, right, bottom, text, img_w, img_h, style):
         text = str(text)
         font = cv2.FONT_HERSHEY_SIMPLEX
         (tw, th), baseline = cv2.getTextSize(text, font, style["font_scale"], style["thickness"])
         badge_w = int(tw + (style["pad_x"] * 2))
         badge_h = int(th + (style["pad_y"] * 2) + baseline)
         gap = int(style["gap"])
-        if anchor == "left":
-            bx = int(round(left - badge_w - gap))
-            by = int(round(top))
-        elif anchor == "right":
-            bx = int(round(left + gap))
-            by = int(round(top))
-        elif anchor == "bottom":
-            bx = int(round(left))
-            by = int(round(top + gap))
+        box_w = max(1, right - left)
+        box_h = max(1, bottom - top)
+        if box_w >= badge_w + gap * 2 and box_h >= badge_h + gap * 2:
+            bx = left + gap
+            by = top + gap
         else:
-            bx = int(round(left))
-            by = int(round(top - badge_h - gap))
+            bx = left
+            by = max(0, top - badge_h - gap)
         bx = max(0, min(int(bx), max(0, int(img_w - badge_w))))
         by = max(0, min(int(by), max(0, int(img_h - badge_h))))
         cv2.rectangle(overlay_bgra, (bx, by), (bx + badge_w, by + badge_h), (0, 0, 0, 224), thickness=-1, lineType=cv2.LINE_AA)
@@ -3757,8 +3730,7 @@ class InteractivePreview(Image):
             color = self._box_color_bgra_u8(box.get("t", "field"), selected=selected, hovered=hovered)
             thickness = 3 if selected else (2 if hovered else 1)
             cv2.rectangle(overlay, (left, top), (right, bottom), color, thickness=thickness, lineType=cv2.LINE_AA)
-            anchor = self._label_anchor_for_box_image(box, left, top, right - left, bottom - top, img_w, img_h)
-            self._draw_cv_badge(overlay, left, top, box.get("id", ""), anchor, img_w, img_h, label_style)
+            self._draw_cv_badge_inside(overlay, left, top, right, bottom, box.get("id", ""), img_w, img_h, label_style)
         rgba = cv2.cvtColor(overlay, cv2.COLOR_BGRA2RGBA)
         overlay_tex = Texture.create(size=(img_w, img_h), colorfmt="rgba")
         overlay_tex.blit_buffer(rgba.tobytes(), colorfmt="rgba", bufferfmt="ubyte")
