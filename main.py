@@ -180,17 +180,14 @@ else:
 
 
 def android_render_pdf_page(path, page_idx=0, preview_zoom=1.5):
-    """Render a PDF page on Android using PdfRenderer and a temp PNG file."""
+    """Render a PDF page on Android and extract pixels directly via Bitmap.getPixel."""
     if platform != "android" or not ANDROID_JAVA_AVAILABLE:
         raise RuntimeError("Android PdfRenderer is unavailable.")
 
     pfd = None
     renderer = None
     page = None
-    fos = None
-    tmp_path = None
     try:
-        AndroidFileOutputStream = autoclass("java.io.FileOutputStream")
         file_obj = autoclass("java.io.File")(path)
         pfd = AndroidParcelFileDescriptor.open(file_obj, AndroidParcelFileDescriptor.MODE_READ_ONLY)
         renderer = AndroidPdfRenderer(pfd)
@@ -206,26 +203,15 @@ def android_render_pdf_page(path, page_idx=0, preview_zoom=1.5):
         bitmap.eraseColor(-1)
         page.render(bitmap, None, None, AndroidPdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
 
-        fd, tmp_path = tempfile.mkstemp(prefix="medimap_preview_", suffix=".png")
-        os.close(fd)
-        java_tmp_file = autoclass("java.io.File")(tmp_path)
-        fos = AndroidFileOutputStream(java_tmp_file)
-        ok = bitmap.compress(AndroidCompressFormat.PNG, 100, fos)
-        fos.flush()
-        fos.close()
-        fos = None
-        if not ok:
-            raise ValueError("Android PdfRenderer failed to compress preview bitmap.")
-        img = cv2.imread(tmp_path, cv2.IMREAD_COLOR)
-        if img is None:
-            raise ValueError("Android preview PNG file could not be read back.")
+        img = np.empty((height, width, 3), dtype=np.uint8)
+        for y in range(height):
+            for x in range(width):
+                color = int(bitmap.getPixel(x, y)) & 0xFFFFFFFF
+                img[y, x, 0] = color & 0xFF
+                img[y, x, 1] = (color >> 8) & 0xFF
+                img[y, x, 2] = (color >> 16) & 0xFF
         return img
     finally:
-        try:
-            if fos is not None:
-                fos.close()
-        except Exception:
-            pass
         try:
             if page is not None:
                 page.close()
@@ -239,11 +225,6 @@ def android_render_pdf_page(path, page_idx=0, preview_zoom=1.5):
         try:
             if pfd is not None:
                 pfd.close()
-        except Exception:
-            pass
-        try:
-            if tmp_path and os.path.exists(tmp_path):
-                os.remove(tmp_path)
         except Exception:
             pass
 
