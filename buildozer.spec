@@ -4,13 +4,16 @@ package.name = medimappro
 package.domain = org.medimap
 
 source.dir = .
-source.include_exts = py,png,jpg,jpeg,kv,atlas,xlsx,pdf,json,csv,java
+source.include_exts = py,png,jpg,jpeg,kv,atlas,xlsx,pdf,json,csv,java,ttf,otf,txt
 version = 1.6.0
 
 requirements = python3==3.10.11,hostpython3==3.10.11,kivy,kivymd,androidssystemfilechooser,opencv,pandas,numpy,openpyxl,pypdf,typing_extensions,reportlab,pillow
 
 orientation = portrait
 fullscreen = 0
+
+icon.filename = assets/icon.png
+presplash.filename = assets/presplash.png
 
 android.archs = arm64-v8a
 android.api = 33
