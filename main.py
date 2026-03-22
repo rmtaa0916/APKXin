@@ -13,6 +13,7 @@ import traceback
 import re
 import ssl
 import urllib.request
+import tempfile
 from urllib.parse import urlparse, parse_qs
 from functools import partial
 from types import SimpleNamespace
@@ -179,14 +180,17 @@ else:
 
 
 def android_render_pdf_page(path, page_idx=0, preview_zoom=1.5):
-    """Render a PDF page on Android using the native PdfRenderer API."""
+    """Render a PDF page on Android using PdfRenderer and a temp PNG file."""
     if platform != "android" or not ANDROID_JAVA_AVAILABLE:
         raise RuntimeError("Android PdfRenderer is unavailable.")
 
     pfd = None
     renderer = None
     page = None
+    fos = None
+    tmp_path = None
     try:
+        AndroidFileOutputStream = autoclass("java.io.FileOutputStream")
         file_obj = autoclass("java.io.File")(path)
         pfd = AndroidParcelFileDescriptor.open(file_obj, AndroidParcelFileDescriptor.MODE_READ_ONLY)
         renderer = AndroidPdfRenderer(pfd)
@@ -202,14 +206,26 @@ def android_render_pdf_page(path, page_idx=0, preview_zoom=1.5):
         bitmap.eraseColor(-1)
         page.render(bitmap, None, None, AndroidPdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
 
-        baos = AndroidByteArrayOutputStream()
-        bitmap.compress(AndroidCompressFormat.PNG, 100, baos)
-        png_bytes = bytes(baos.toByteArray())
-        img = cv2.imdecode(np.frombuffer(png_bytes, np.uint8), cv2.IMREAD_COLOR)
+        fd, tmp_path = tempfile.mkstemp(prefix="medimap_preview_", suffix=".png")
+        os.close(fd)
+        java_tmp_file = autoclass("java.io.File")(tmp_path)
+        fos = AndroidFileOutputStream(java_tmp_file)
+        ok = bitmap.compress(AndroidCompressFormat.PNG, 100, fos)
+        fos.flush()
+        fos.close()
+        fos = None
+        if not ok:
+            raise ValueError("Android PdfRenderer failed to compress preview bitmap.")
+        img = cv2.imread(tmp_path, cv2.IMREAD_COLOR)
         if img is None:
-            raise ValueError("Android PdfRenderer returned an unreadable image.")
+            raise ValueError("Android preview PNG file could not be read back.")
         return img
     finally:
+        try:
+            if fos is not None:
+                fos.close()
+        except Exception:
+            pass
         try:
             if page is not None:
                 page.close()
@@ -223,6 +239,11 @@ def android_render_pdf_page(path, page_idx=0, preview_zoom=1.5):
         try:
             if pfd is not None:
                 pfd.close()
+        except Exception:
+            pass
+        try:
+            if tmp_path and os.path.exists(tmp_path):
+                os.remove(tmp_path)
         except Exception:
             pass
 
