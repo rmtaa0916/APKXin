@@ -1,6 +1,6 @@
 [app]
-title = Alkahestry
-package.name = alkahestry
+title = MediMapPro
+package.name = medimappro
 package.domain = org.medimap
 
 source.dir = .
