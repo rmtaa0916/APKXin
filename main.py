@@ -3489,6 +3489,7 @@ class InteractivePreview(Image):
         self._touch_start = {}
         self._touch_moved = set()
         self._tap_slop = float(dp(14))
+        self._android_badge_widgets = []
         self._pinch_active = False
         self._pinch_last_midpoint = None
         self.bind(texture=self._redraw_overlay, size=self._redraw_overlay, pos=self._redraw_overlay)
@@ -3503,6 +3504,7 @@ class InteractivePreview(Image):
         if img_bgr is None:
             self.texture = None
             self.canvas.after.clear()
+            self._clear_android_badges()
             self.canvas.ask_update()
             return
         rgba = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGBA)
@@ -3538,6 +3540,7 @@ class InteractivePreview(Image):
         self._tap_candidates = {}
         self._touch_start = {}
         self._touch_moved = set()
+        self._clear_android_badges()
         self._redraw_overlay()
 
     def _get_display_rect(self):
@@ -3666,89 +3669,101 @@ class InteractivePreview(Image):
         )
 
 
-    def _raster_label_style(self, tex_w, tex_h):
-        base = max(0.36, min(0.54, float(tex_w) / 2200.0))
-        return {
-            "font_scale": base,
-            "thickness": 1 if tex_w < 1800 else 2,
-            "pad_x": max(2, int(round(tex_w / 520.0))),
-            "pad_y": max(1, int(round(tex_h / 1400.0))),
-            "gap": max(2, int(round(tex_w / 700.0))),
-        }
+    def _clear_android_badges(self):
+        for widget in getattr(self, "_android_badge_widgets", []) or []:
+            try:
+                if widget.parent is self:
+                    self.remove_widget(widget)
+            except Exception:
+                pass
+        self._android_badge_widgets = []
 
-    def _box_color_bgra_u8(self, box_type, selected=False, hovered=False):
-        rgba = self._box_color(box_type, selected=selected, hovered=hovered)
-        r = int(max(0.0, min(1.0, float(rgba[0]))) * 255)
-        g = int(max(0.0, min(1.0, float(rgba[1]))) * 255)
-        b = int(max(0.0, min(1.0, float(rgba[2]))) * 255)
-        return (b, g, r, 255)
-
-    def _draw_cv_badge_inside(self, overlay_bgra, left, top, right, bottom, text, img_w, img_h, style):
+    def _make_android_badge_widget(self, text):
         text = str(text)
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        (tw, th), baseline = cv2.getTextSize(text, font, style["font_scale"], style["thickness"])
-        badge_w = int(tw + (style["pad_x"] * 2))
-        badge_h = int(th + (style["pad_y"] * 2) + baseline)
-        gap = int(style["gap"])
-        box_w = max(1, right - left)
-        box_h = max(1, bottom - top)
-        if box_w >= badge_w + gap * 2 and box_h >= badge_h + gap * 2:
-            bx = left + gap
-            by = top + gap
-        else:
-            bx = left
-            by = max(0, top - badge_h - gap)
-        bx = max(0, min(int(bx), max(0, int(img_w - badge_w))))
-        by = max(0, min(int(by), max(0, int(img_h - badge_h))))
-        cv2.rectangle(overlay_bgra, (bx, by), (bx + badge_w, by + badge_h), (0, 0, 0, 224), thickness=-1, lineType=cv2.LINE_AA)
-        tx = int(bx + style["pad_x"])
-        ty = int(by + style["pad_y"] + th)
-        cv2.putText(overlay_bgra, text, (tx, ty), font, style["font_scale"], (255, 255, 255, 255), style["thickness"], cv2.LINE_AA)
+        style = self._label_style()
+        core = CoreLabel(text=text, font_size=style["font_size"])
+        core.refresh()
+        badge = Label(
+            text=text,
+            size_hint=(None, None),
+            halign="center",
+            valign="middle",
+            color=(1, 1, 1, 1),
+            font_size=style["font_size"],
+        )
+        badge.size = (core.texture.width + (style["pad_x"] * 2.0), core.texture.height + (style["pad_y"] * 2.0))
+        def _sync_text(*_):
+            badge.text_size = badge.size
+        badge.bind(size=_sync_text)
+        _sync_text()
+        with badge.canvas.before:
+            badge._badge_color = Color(0, 0, 0, 0.88)
+            badge._badge_rect = RoundedRectangle(pos=badge.pos, size=badge.size, radius=[dp(3)] * 4)
+        def _sync_bg(*_):
+            badge._badge_rect.pos = badge.pos
+            badge._badge_rect.size = badge.size
+        badge.bind(pos=_sync_bg, size=_sync_bg)
+        return badge
 
-    def _redraw_overlay_android_raster(self, disp):
+    def _compute_widget_badge_pos(self, badge, x, y, w, h, anchor, disp):
+        gap = self._label_style()["gap"]
+        bw, bh = badge.size
+        if anchor == "left":
+            draw_x = x - bw - gap
+            draw_y = y + h - bh
+        elif anchor == "right":
+            draw_x = x + gap
+            draw_y = y + h - bh
+        elif anchor == "bottom":
+            draw_x = x
+            draw_y = y - bh - gap
+        else:
+            draw_x = x
+            draw_y = y + h + gap
+        dx, dy, dw, dh = disp
+        draw_x = max(dx + 1.0, min(float(draw_x), dx + max(1.0, dw - bw - 1.0)))
+        draw_y = max(dy + 1.0, min(float(draw_y), dy + max(1.0, dh - bh - 1.0)))
+        return draw_x, draw_y
+
+    def _redraw_overlay_android_widgets(self, disp):
+        self._clear_android_badges()
+        dx, dy, dw, dh = disp
         tex = self.texture
-        if not tex:
-            return
-        img_w = int(max(1, tex.width))
-        img_h = int(max(1, tex.height))
-        overlay = np.zeros((img_h, img_w, 4), dtype=np.uint8)
-        label_style = self._raster_label_style(img_w, img_h)
+        sx = dw / float(max(tex.width, 1))
+        sy = dh / float(max(tex.height, 1))
+        with self.canvas.after:
+            for box in self.boxes_payload:
+                bx, by, bw, bh = self._resolve_box_image_rect(box)
+                x = dx + bx * sx
+                y = dy + (tex.height - (by + bh)) * sy
+                w = max(1.0, bw * sx)
+                h = max(1.0, bh * sy)
+                selected = box["id"] in self.selected_ids
+                hovered = (box["id"] == self.hovered_box_id)
+                Color(*self._box_color(box.get("t", "field"), selected=selected, hovered=hovered))
+                Line(rectangle=(x, y, w, h), width=3.2 if selected else (2.4 if hovered else 1.35))
         for box in self.boxes_payload:
             bx, by, bw, bh = self._resolve_box_image_rect(box)
-            left = int(round(bx))
-            top = int(round(by))
-            right = int(round(bx + bw))
-            bottom = int(round(by + bh))
-            if right <= left or bottom <= top:
-                continue
-            left = max(0, min(left, img_w - 1))
-            top = max(0, min(top, img_h - 1))
-            right = max(left + 1, min(right, img_w - 1))
-            bottom = max(top + 1, min(bottom, img_h - 1))
-            selected = box["id"] in self.selected_ids
-            hovered = (box["id"] == self.hovered_box_id)
-            color = self._box_color_bgra_u8(box.get("t", "field"), selected=selected, hovered=hovered)
-            thickness = 3 if selected else (2 if hovered else 1)
-            cv2.rectangle(overlay, (left, top), (right, bottom), color, thickness=thickness, lineType=cv2.LINE_AA)
-            self._draw_cv_badge_inside(overlay, left, top, right, bottom, box.get("id", ""), img_w, img_h, label_style)
-        rgba = cv2.cvtColor(overlay, cv2.COLOR_BGRA2RGBA)
-        overlay_tex = Texture.create(size=(img_w, img_h), colorfmt="rgba")
-        overlay_tex.blit_buffer(rgba.tobytes(), colorfmt="rgba", bufferfmt="ubyte")
-        overlay_tex.flip_vertical()
-        self._android_overlay_texture = overlay_tex
-        dx, dy, dw, dh = disp
-        with self.canvas.after:
-            Color(1, 1, 1, 1)
-            Rectangle(texture=overlay_tex, pos=(dx, dy), size=(dw, dh))
+            x = dx + bx * sx
+            y = dy + (tex.height - (by + bh)) * sy
+            w = max(1.0, bw * sx)
+            h = max(1.0, bh * sy)
+            badge = self._make_android_badge_widget(box.get("id", ""))
+            anchor = self._label_anchor_for_box(box, x, y, w, h, disp)
+            badge.pos = self._compute_widget_badge_pos(badge, x, y, w, h, anchor, disp)
+            self.add_widget(badge)
+            self._android_badge_widgets.append(badge)
 
     def _redraw_overlay(self, *args):
         self.canvas.after.clear()
         disp = self._get_display_rect()
         if not disp:
+            self._clear_android_badges()
             return
         if platform == "android":
-            self._redraw_overlay_android_raster(disp)
+            self._redraw_overlay_android_widgets(disp)
             return
+        self._clear_android_badges()
         dx, dy, dw, dh = disp
         tex = self.texture
         sx = dw / float(max(tex.width, 1))
