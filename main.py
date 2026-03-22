@@ -3567,10 +3567,10 @@ class InteractivePreview(Image):
     def _label_style(self):
         if platform == "android":
             return {
-                "font_size": float(dp(9.2)),
-                "pad_x": float(dp(2.6)),
-                "pad_y": float(dp(1.6)),
-                "gap": float(dp(2.2)),
+                "font_size": float(dp(8.6)),
+                "pad_x": float(dp(2.0)),
+                "pad_y": float(dp(1.2)),
+                "gap": float(dp(2.0)),
             }
         return {
             "font_size": 11.0,
@@ -3610,6 +3610,9 @@ class InteractivePreview(Image):
         elif anchor == "bottom":
             draw_x = x
             draw_y = y - gap
+        elif anchor == "inside_top_left":
+            draw_x = x + gap
+            draw_y = y + bg_h + gap
         else:
             draw_x = x
             draw_y = y + bg_h + gap
@@ -3623,17 +3626,6 @@ class InteractivePreview(Image):
         dx, dy, dw, dh = disp
         box_type = str(box.get("t", "field"))
         small_box = (w <= 28 or h <= 22)
-        if platform == "android":
-            top_room = (dy + dh) - (y + h)
-            left_room = x - dx
-            right_room = (dx + dw) - (x + w)
-            if top_room >= float(dp(14)):
-                return "top_left"
-            if right_room >= float(dp(24)):
-                return "right"
-            if left_room >= float(dp(24)):
-                return "left"
-            return "bottom"
         if box_type == "check" or small_box:
             if x - dx > 42:
                 return "left"
@@ -3643,6 +3635,30 @@ class InteractivePreview(Image):
         if y + h + 22 <= dy + dh:
             return "top_left"
         return "bottom"
+
+    def _draw_label_for_box(self, box, x, y, w, h, disp):
+        if platform != "android":
+            self._draw_label(x, y + h, box["id"], anchor=self._label_anchor_for_box(box, x, y, w, h, disp), disp=disp)
+            return
+        style = self._label_style()
+        core = CoreLabel(text=str(box.get("id", "")), font_size=style["font_size"])
+        core.refresh()
+        tex = core.texture
+        pad_x = style["pad_x"]
+        pad_y = style["pad_y"]
+        gap = style["gap"]
+        bg_w = tex.width + pad_x * 2.0
+        bg_h = tex.height + pad_y * 2.0
+        fits_inside = (w >= (bg_w + gap * 2.0) and h >= (bg_h + gap * 2.0))
+        if fits_inside:
+            draw_x = x + gap
+            draw_y = y + h - gap
+            draw_x, draw_y = self._clamp_label_draw(draw_x, draw_y, bg_w, bg_h, disp)
+            Rectangle(pos=(draw_x, draw_y - bg_h), size=(bg_w, bg_h))
+            Color(1, 1, 1, 1)
+            Rectangle(texture=tex, pos=(draw_x + pad_x, draw_y - bg_h + pad_y), size=tex.size)
+            return
+        self._draw_label(x, y + h, box["id"], anchor="top_left", disp=disp)
 
     def _resolve_box_image_rect(self, box):
         if not isinstance(box, dict):
@@ -3686,7 +3702,7 @@ class InteractivePreview(Image):
                 Color(*self._box_color(box.get("t", "field"), selected=selected, hovered=hovered))
                 Line(rectangle=(x, y, w, h), width=3.2 if selected else (2.4 if hovered else 1.35))
                 Color(0, 0, 0, 0.88)
-                self._draw_label(x, y + h, box["id"], anchor=self._label_anchor_for_box(box, x, y, w, h, disp), disp=disp)
+                self._draw_label_for_box(box, x, y, w, h, disp)
 
     def _touch_to_image_point(self, touch):
         disp = self._get_display_rect()
