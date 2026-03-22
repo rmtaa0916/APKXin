@@ -3491,13 +3491,33 @@ class InteractivePreview(Image):
         self._tap_slop = float(dp(14))
         self._pinch_active = False
         self._pinch_last_midpoint = None
-        self.bind(texture=self._redraw_overlay, size=self._redraw_overlay, pos=self._redraw_overlay)
+        self._overlay_settle_ev = None
+        self.bind(texture=self._on_overlay_geometry_dirty, size=self._on_overlay_geometry_dirty, pos=self._on_overlay_geometry_dirty)
         if platform != "android":
             Window.bind(mouse_pos=self._on_mouse_pos)
             self._mouse_bound = True
 
-    def on_parent(self, *args):
+    def _on_overlay_geometry_dirty(self, *args):
         self._redraw_overlay()
+        if platform == "android":
+            self._schedule_overlay_settle()
+
+    def _schedule_overlay_settle(self):
+        if platform != "android":
+            return
+        try:
+            if self._overlay_settle_ev is not None:
+                self._overlay_settle_ev.cancel()
+        except Exception:
+            pass
+        self._overlay_settle_ev = Clock.schedule_once(self._overlay_settle_redraw, 0.08)
+        Clock.schedule_once(self._overlay_settle_redraw, 0.18)
+
+    def _overlay_settle_redraw(self, *args):
+        self._redraw_overlay()
+
+    def on_parent(self, *args):
+        self._on_overlay_geometry_dirty()
 
     def set_texture_from_bgr(self, img_bgr):
         if img_bgr is None:
@@ -3510,9 +3530,11 @@ class InteractivePreview(Image):
         texture.blit_buffer(rgba.tobytes(), colorfmt="rgba", bufferfmt="ubyte")
         texture.flip_vertical()
         self.texture = texture
-        self._redraw_overlay()
+        self._on_overlay_geometry_dirty()
         self.canvas.ask_update()
         Clock.schedule_once(lambda dt: self._redraw_overlay(), 0)
+        if platform == "android":
+            self._schedule_overlay_settle()
 
     def set_boxes_payload(self, boxes_payload, selected_ids=None, preview_zoom=1.0, page_idx=0):
         self.boxes_payload = list(boxes_payload or [])
@@ -3520,7 +3542,7 @@ class InteractivePreview(Image):
         self.page_idx = int(page_idx or 0)
         self.selected_ids = set(selected_ids or [])
         self.hovered_box_id = None
-        self._redraw_overlay()
+        self._on_overlay_geometry_dirty()
 
     def set_selected_ids(self, selected_ids):
         self.selected_ids = set(selected_ids or [])
@@ -3551,6 +3573,11 @@ class InteractivePreview(Image):
         draw_h = tex_h * scale
         x = self.x + (widget_w - draw_w) / 2.0
         y = self.y + (widget_h - draw_h) / 2.0
+        if platform == "android":
+            x = self._snap_overlay_value(x)
+            y = self._snap_overlay_value(y)
+            draw_w = self._snap_overlay_value(draw_w)
+            draw_h = self._snap_overlay_value(draw_h)
         return x, y, draw_w, draw_h
 
     def _box_color(self, box_type, selected=False, hovered=False):
@@ -3564,20 +3591,10 @@ class InteractivePreview(Image):
             return (1.0, 0.85, 0.1, 1.0)
         return (0.1, 1.0, 0.3, 1.0)
 
-    def _label_style(self):
+    def _snap_overlay_value(self, value):
         if platform == "android":
-            return {
-                "font_size": float(dp(8.6)),
-                "pad_x": float(dp(2.0)),
-                "pad_y": float(dp(1.2)),
-                "gap": float(dp(2.0)),
-            }
-        return {
-            "font_size": 11.0,
-            "pad_x": 4.0,
-            "pad_y": 2.0,
-            "gap": 4.0,
-        }
+            return float(round(float(value)))
+        return float(value)
 
     def _clamp_label_draw(self, draw_x, draw_y, bg_w, bg_h, disp):
         dx, dy, dw, dh = disp
@@ -3587,16 +3604,16 @@ class InteractivePreview(Image):
         max_y = dy + max(bg_h + 1.0, dh - 1.0)
         draw_x = min(max(float(draw_x), min_x), max_x)
         draw_y = min(max(float(draw_y), min_y), max_y)
-        return draw_x, draw_y
+        return self._snap_overlay_value(draw_x), self._snap_overlay_value(draw_y)
 
     def _draw_label(self, x, y, text, anchor="top_left", disp=None):
-        style = self._label_style()
-        core = CoreLabel(text=str(text), font_size=style["font_size"])
+        font_size = float(dp(9.6)) if platform == "android" else 11.0
+        core = CoreLabel(text=str(text), font_size=font_size)
         core.refresh()
         tex = core.texture
-        pad_x = style["pad_x"]
-        pad_y = style["pad_y"]
-        gap = style["gap"]
+        pad_x = float(dp(2.2)) if platform == "android" else 4.0
+        pad_y = float(dp(1.3)) if platform == "android" else 2.0
+        gap = float(dp(2.2)) if platform == "android" else 4.0
         bg_w = tex.width + pad_x * 2.0
         bg_h = tex.height + pad_y * 2.0
         draw_x = float(x)
@@ -3610,17 +3627,14 @@ class InteractivePreview(Image):
         elif anchor == "bottom":
             draw_x = x
             draw_y = y - gap
-        elif anchor == "inside_top_left":
-            draw_x = x + gap
-            draw_y = y + bg_h + gap
         else:
             draw_x = x
             draw_y = y + bg_h + gap
         if disp is not None:
             draw_x, draw_y = self._clamp_label_draw(draw_x, draw_y, bg_w, bg_h, disp)
-        Rectangle(pos=(draw_x, draw_y - bg_h), size=(bg_w, bg_h))
+        Rectangle(pos=(self._snap_overlay_value(draw_x), self._snap_overlay_value(draw_y - bg_h)), size=(self._snap_overlay_value(bg_w), self._snap_overlay_value(bg_h)))
         Color(1, 1, 1, 1)
-        Rectangle(texture=tex, pos=(draw_x + pad_x, draw_y - bg_h + pad_y), size=tex.size)
+        Rectangle(texture=tex, pos=(self._snap_overlay_value(draw_x + pad_x), self._snap_overlay_value(draw_y - bg_h + pad_y)), size=tex.size)
 
     def _label_anchor_for_box(self, box, x, y, w, h, disp):
         dx, dy, dw, dh = disp
@@ -3635,30 +3649,6 @@ class InteractivePreview(Image):
         if y + h + 22 <= dy + dh:
             return "top_left"
         return "bottom"
-
-    def _draw_label_for_box(self, box, x, y, w, h, disp):
-        if platform != "android":
-            self._draw_label(x, y + h, box["id"], anchor=self._label_anchor_for_box(box, x, y, w, h, disp), disp=disp)
-            return
-        style = self._label_style()
-        core = CoreLabel(text=str(box.get("id", "")), font_size=style["font_size"])
-        core.refresh()
-        tex = core.texture
-        pad_x = style["pad_x"]
-        pad_y = style["pad_y"]
-        gap = style["gap"]
-        bg_w = tex.width + pad_x * 2.0
-        bg_h = tex.height + pad_y * 2.0
-        fits_inside = (w >= (bg_w + gap * 2.0) and h >= (bg_h + gap * 2.0))
-        if fits_inside:
-            draw_x = x + gap
-            draw_y = y + h - gap
-            draw_x, draw_y = self._clamp_label_draw(draw_x, draw_y, bg_w, bg_h, disp)
-            Rectangle(pos=(draw_x, draw_y - bg_h), size=(bg_w, bg_h))
-            Color(1, 1, 1, 1)
-            Rectangle(texture=tex, pos=(draw_x + pad_x, draw_y - bg_h + pad_y), size=tex.size)
-            return
-        self._draw_label(x, y + h, box["id"], anchor="top_left", disp=disp)
 
     def _resolve_box_image_rect(self, box):
         if not isinstance(box, dict):
@@ -3702,7 +3692,7 @@ class InteractivePreview(Image):
                 Color(*self._box_color(box.get("t", "field"), selected=selected, hovered=hovered))
                 Line(rectangle=(x, y, w, h), width=3.2 if selected else (2.4 if hovered else 1.35))
                 Color(0, 0, 0, 0.88)
-                self._draw_label_for_box(box, x, y, w, h, disp)
+                self._draw_label(x, y + h, box["id"], anchor=self._label_anchor_for_box(box, x, y, w, h, disp), disp=disp)
 
     def _touch_to_image_point(self, touch):
         disp = self._get_display_rect()
