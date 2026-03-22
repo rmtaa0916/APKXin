@@ -180,51 +180,25 @@ else:
 
 
 def android_render_pdf_page(path, page_idx=0, preview_zoom=1.5):
-    """Render a PDF page on Android and extract pixels directly via Bitmap.getPixel."""
+    """Render a PDF page on Android using the native PdfRenderHelper Java bridge."""
     if platform != "android" or not ANDROID_JAVA_AVAILABLE:
         raise RuntimeError("Android PdfRenderer is unavailable.")
 
-    pfd = None
-    renderer = None
-    page = None
+    tmp_path = None
     try:
-        file_obj = autoclass("java.io.File")(path)
-        pfd = AndroidParcelFileDescriptor.open(file_obj, AndroidParcelFileDescriptor.MODE_READ_ONLY)
-        renderer = AndroidPdfRenderer(pfd)
-        total = renderer.getPageCount()
-        if total <= 0:
-            raise ValueError("PDF has no pages.")
-        page_idx = max(0, min(int(page_idx), total - 1))
-        page = renderer.openPage(page_idx)
-
-        width = max(1, int(page.getWidth() * float(preview_zoom)))
-        height = max(1, int(page.getHeight() * float(preview_zoom)))
-        bitmap = AndroidBitmap.createBitmap(width, height, AndroidBitmapConfig.ARGB_8888)
-        bitmap.eraseColor(-1)
-        page.render(bitmap, None, None, AndroidPdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-
-        img = np.empty((height, width, 3), dtype=np.uint8)
-        for y in range(height):
-            for x in range(width):
-                color = int(bitmap.getPixel(x, y)) & 0xFFFFFFFF
-                img[y, x, 0] = color & 0xFF
-                img[y, x, 1] = (color >> 8) & 0xFF
-                img[y, x, 2] = (color >> 16) & 0xFF
+        AndroidPdfRenderHelper = autoclass("org.medimap.medimappro.PdfRenderHelper")
+        fd, tmp_path = tempfile.mkstemp(prefix="medimap_preview_", suffix=".png")
+        os.close(fd)
+        out_path = AndroidPdfRenderHelper.renderPageToPng(path, int(page_idx), float(preview_zoom), tmp_path)
+        out_path = str(out_path or tmp_path)
+        img = cv2.imread(out_path, cv2.IMREAD_COLOR)
+        if img is None:
+            raise ValueError("Android PdfRenderHelper produced an unreadable preview image.")
         return img
     finally:
         try:
-            if page is not None:
-                page.close()
-        except Exception:
-            pass
-        try:
-            if renderer is not None:
-                renderer.close()
-        except Exception:
-            pass
-        try:
-            if pfd is not None:
-                pfd.close()
+            if tmp_path and os.path.exists(tmp_path):
+                os.remove(tmp_path)
         except Exception:
             pass
 
