@@ -16,6 +16,9 @@ import urllib.request
 import tempfile
 import time
 import sys
+import hashlib
+import shutil
+import uuid
 from urllib.parse import urlparse, parse_qs
 from functools import partial
 from types import SimpleNamespace
@@ -113,6 +116,163 @@ from kivy.uix.spinner import Spinner
 from kivy.uix.textinput import TextInput
 from kivy.uix.widget import Widget
 from kivy.utils import platform
+
+
+def _utc_now_iso():
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _safe_slug(value):
+    value = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower())
+    return value.strip("_") or "untitled"
+
+
+def _sha1_json(value):
+    raw = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+
+
+def get_medimap_private_storage_root(app_name="medimap_pro"):
+    try:
+        running_app = App.get_running_app()
+    except Exception:
+        running_app = None
+
+    user_data_dir = str(getattr(running_app, "user_data_dir", "") or "").strip()
+    if user_data_dir:
+        try:
+            os.makedirs(user_data_dir, exist_ok=True)
+            return user_data_dir
+        except Exception:
+            pass
+
+    if platform == "android":
+        try:
+            from android.storage import app_storage_path
+            base = str(app_storage_path() or "").strip()
+            if base:
+                os.makedirs(base, exist_ok=True)
+                return base
+        except Exception:
+            pass
+
+    fallback = os.path.join(os.path.expanduser("~"), f".{_safe_slug(app_name)}")
+    try:
+        os.makedirs(fallback, exist_ok=True)
+        return fallback
+    except Exception:
+        final_fallback = os.path.join(tempfile.gettempdir(), _safe_slug(app_name))
+        os.makedirs(final_fallback, exist_ok=True)
+        return final_fallback
+
+
+class LearningStorage:
+    """App-private storage for learned profiles, revisions, and session state."""
+
+    def __init__(self, base_dir=None, app_name="medimap_pro"):
+        self.base_dir = str(base_dir or get_medimap_private_storage_root(app_name))
+        self.learning_dir = os.path.join(self.base_dir, "learning")
+        self.revisions_dir = os.path.join(self.base_dir, "revisions")
+        self.projects_dir = os.path.join(self.base_dir, "projects")
+        self.cache_dir = os.path.join(self.base_dir, "cache")
+        self._ensure_tree()
+
+    def _ensure_tree(self):
+        for folder in [self.base_dir, self.learning_dir, self.revisions_dir, self.projects_dir, self.cache_dir]:
+            os.makedirs(folder, exist_ok=True)
+
+    def _safe_load_json(self, path, default):
+        try:
+            if not os.path.exists(path):
+                return default
+            with open(path, "r", encoding="utf-8") as fh:
+                return json.load(fh)
+        except Exception:
+            return default
+
+    def _safe_write_json(self, path, payload):
+        self._ensure_tree()
+        parent = os.path.dirname(path)
+        os.makedirs(parent, exist_ok=True)
+        tmp_path = path + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2, ensure_ascii=False)
+        os.replace(tmp_path, path)
+
+    def _rel(self, *parts):
+        return os.path.join(self.base_dir, *parts)
+
+    def load_profile_memory(self):
+        return self._safe_load_json(self._rel("learning", "profile_memory.json"), {
+            "version": 1,
+            "profiles": {},
+            "updated_at": None,
+        })
+
+    def save_profile_memory(self, payload):
+        payload = dict(payload or {})
+        payload["updated_at"] = _utc_now_iso()
+        self._safe_write_json(self._rel("learning", "profile_memory.json"), payload)
+
+    def load_template_stats(self):
+        return self._safe_load_json(self._rel("learning", "template_stats.json"), {
+            "version": 1,
+            "families": {},
+            "updated_at": None,
+        })
+
+    def save_template_stats(self, payload):
+        payload = dict(payload or {})
+        payload["updated_at"] = _utc_now_iso()
+        self._safe_write_json(self._rel("learning", "template_stats.json"), payload)
+
+    def load_correction_log(self):
+        return self._safe_load_json(self._rel("learning", "correction_log.json"), {
+            "version": 1,
+            "events": [],
+            "updated_at": None,
+        })
+
+    def save_correction_log(self, payload):
+        payload = dict(payload or {})
+        payload["updated_at"] = _utc_now_iso()
+        self._safe_write_json(self._rel("learning", "correction_log.json"), payload)
+
+    def save_revision(self, revision):
+        revision = dict(revision or {})
+        revision_id = str(revision.get("revision_id") or f"rev_{time.strftime('%Y%m%d_%H%M%S', time.gmtime())}_{uuid.uuid4().hex[:8]}")
+        revision["revision_id"] = revision_id
+        revision.setdefault("saved_at", _utc_now_iso())
+        self._safe_write_json(self._rel("revisions", f"{revision_id}.json"), revision)
+
+        index_path = self._rel("revisions", "index.json")
+        index = self._safe_load_json(index_path, {"version": 1, "items": []})
+        items = [item for item in index.get("items", []) if str(item.get("revision_id")) != revision_id]
+        items.append({
+            "revision_id": revision_id,
+            "saved_at": revision.get("saved_at"),
+            "reason": revision.get("reason"),
+            "page_idx": revision.get("page_idx"),
+            "pdf_path": revision.get("pdf_path"),
+            "approved": bool(revision.get("approved", False)),
+            "learning_weight": float(revision.get("learning_weight", 0.0) or 0.0),
+        })
+        index["items"] = sorted(items, key=lambda item: str(item.get("saved_at", "")))
+        self._safe_write_json(index_path, index)
+        return revision_id
+
+    def load_revision(self, revision_id):
+        revision_id = str(revision_id or "").strip()
+        if not revision_id:
+            return None
+        return self._safe_load_json(self._rel("revisions", f"{revision_id}.json"), None)
+
+    def save_session(self, payload, name="current_session"):
+        self._safe_write_json(self._rel("projects", f"{_safe_slug(name)}.json"), payload or {})
+
+    def load_session(self, name="current_session"):
+        return self._safe_load_json(self._rel("projects", f"{_safe_slug(name)}.json"), {})
+
 
 try:
     from kivymd.app import MDApp
@@ -1174,6 +1334,17 @@ class MediMapEngine:
         self.boxes_by_page = {}
         self.box_types_by_page = {}
         self.geom_by_page = {}
+
+        self.learning_storage = LearningStorage(app_name="medimap_pro")
+        self.learning_enabled = True
+        self.profile_memory = self.learning_storage.load_profile_memory()
+        self.template_stats = self.learning_storage.load_template_stats()
+        self.correction_log = self.learning_storage.load_correction_log()
+        self.current_detection_context = {}
+        self.current_revision_id = ""
+        self.last_saved_revision_id = ""
+        self.last_loaded_learning_meta = {}
+        self.last_applied_profile_meta = {}
 
     # --------------------------------------------------------
     # Data loading
@@ -2590,6 +2761,397 @@ class MediMapEngine:
             })
         return out
 
+    def _learning_setting_keys(self):
+        return (
+            "F_Area", "F_MinW", "F_MinH", "F_Close",
+            "Line_MinW", "Line_MaxW",
+            "C_Strict", "C_Size", "C_Border", "C_Inner", "ROI_Max",
+            "C_Open", "C_Close", "C_BandPct", "C_AspectTol",
+            "Ext_Low", "Ext_High", "C_FillMin", "C_Eps", "Use_Extent",
+            "Is_Grid", "Grid_N",
+        )
+
+    def _collect_learning_profile_settings(self):
+        out = {}
+        for key in self._learning_setting_keys():
+            value = self.settings.get(key)
+            if isinstance(value, tuple):
+                value = list(value)
+            out[key] = value
+        return out
+
+    def _apply_learning_profile_settings(self, settings_dict):
+        if not isinstance(settings_dict, dict):
+            return
+        for key in self._learning_setting_keys():
+            if key not in settings_dict:
+                continue
+            value = settings_dict.get(key)
+            if key == "C_Size" and isinstance(value, (list, tuple)) and len(value) == 2:
+                self.settings[key] = (int(value[0]), int(value[1]))
+            elif key in {"F_Area", "F_MinW", "F_MinH", "F_Close", "Line_MinW", "Line_MaxW", "C_Strict", "ROI_Max", "C_Open", "C_Close", "Grid_N"}:
+                self.settings[key] = int(value)
+            elif key in {"C_Border", "C_Inner", "C_BandPct", "C_AspectTol", "Ext_Low", "Ext_High", "C_FillMin", "C_Eps"}:
+                self.settings[key] = float(value)
+            elif key in {"Use_Extent", "Is_Grid"}:
+                self.settings[key] = bool(value)
+            else:
+                self.settings[key] = value
+
+    def _serialize_rect(self, rect):
+        rect = rect if isinstance(rect, fitz.Rect) else fitz.Rect(*rect)
+        return [float(rect.x0), float(rect.y0), float(rect.x1), float(rect.y1)]
+
+    def _serialize_rects(self, rects):
+        return [self._serialize_rect(r) for r in (rects or [])]
+
+    def _serialize_geom_payload(self, geom=None):
+        geom = geom or self.geom or {}
+        return {
+            "names": self._serialize_rects(geom.get("names", [])),
+            "dob": self._serialize_rects(geom.get("dob", [])),
+            "phil": self._serialize_rects(geom.get("phil", [])),
+        }
+
+    def _serialize_detection_state(self, page_idx=None):
+        return {
+            "page_idx": int(self.detected_page_idx if page_idx is None else page_idx),
+            "boxes": self._serialize_rects(self.all_boxes),
+            "box_types": list(self.box_types or []),
+            "geom": self._serialize_geom_payload(self.geom),
+            "selected_box_ids": list(self.selected_box_ids or []),
+        }
+
+    def _page_family_hint(self):
+        base = os.path.splitext(os.path.basename(str(self.pdf_path or "")))[0]
+        base = re.sub(r"\d+", " ", base)
+        base = re.sub(r"[_\-]+", " ", base)
+        return _safe_slug(base)
+
+    def build_page_fingerprint(self, page_idx=0, img_bgr=None):
+        if img_bgr is None:
+            img_bgr = self._render_pdf_page_bgr(self.pdf_path, page_idx=page_idx, preview_zoom=ZOOM)
+        if img_bgr is None or getattr(img_bgr, "size", 0) == 0:
+            raise ValueError("Unable to build page fingerprint from an empty image.")
+
+        if len(img_bgr.shape) == 2:
+            img_bgr = cv2.cvtColor(img_bgr, cv2.COLOR_GRAY2BGR)
+
+        h, w = img_bgr.shape[:2]
+        gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+        mean_val = float(np.mean(gray))
+        std_val = float(np.std(gray))
+        _, binv = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        ink_density = float(cv2.countNonZero(binv) / float(max(binv.size, 1)))
+
+        h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (max(12, w // 30), 1))
+        v_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(12, h // 30)))
+        horiz = cv2.morphologyEx(binv, cv2.MORPH_OPEN, h_kernel)
+        vert = cv2.morphologyEx(binv, cv2.MORPH_OPEN, v_kernel)
+
+        features = {
+            "page_idx": int(page_idx),
+            "width": int(w),
+            "height": int(h),
+            "aspect": round(float(w) / float(max(h, 1)), 6),
+            "gray_mean": round(mean_val, 3),
+            "gray_std": round(std_val, 3),
+            "ink_density": round(ink_density, 6),
+            "hline_density": round(float(cv2.countNonZero(horiz) / float(max(horiz.size, 1))), 6),
+            "vline_density": round(float(cv2.countNonZero(vert) / float(max(vert.size, 1))), 6),
+        }
+
+        fingerprint = {
+            "version": 1,
+            "pdf_family_hint": self._page_family_hint(),
+            "page_idx": int(page_idx),
+            "page_count": int(self.total_pages() or 0) if self.pdf_path else 0,
+            "features": features,
+        }
+        fingerprint["fingerprint_key"] = _sha1_json(fingerprint)
+        return fingerprint
+
+    def _score_profile_match(self, fingerprint, profile_entry):
+        if not isinstance(profile_entry, dict):
+            return 0.0
+        score = 0.0
+        if str(profile_entry.get("pdf_family_hint", "")) == str(fingerprint.get("pdf_family_hint", "")):
+            score += 0.42
+        if int(profile_entry.get("page_idx", -1)) == int(fingerprint.get("page_idx", -2)):
+            score += 0.18
+
+        pf = profile_entry.get("feature_snapshot", {}) or {}
+        ff = fingerprint.get("features", {}) or {}
+        for key, weight, scale in [
+            ("aspect", 0.10, 0.20),
+            ("ink_density", 0.12, 0.08),
+            ("hline_density", 0.09, 0.06),
+            ("vline_density", 0.09, 0.06),
+            ("gray_std", 0.05, 45.0),
+        ]:
+            try:
+                a = float(ff.get(key, 0.0))
+                b = float(pf.get(key, 0.0))
+                closeness = max(0.0, 1.0 - (abs(a - b) / float(scale)))
+                score += weight * closeness
+            except Exception:
+                pass
+
+        quality = float(profile_entry.get("avg_quality", 0.0) or 0.0)
+        score += min(0.08, max(0.0, quality) * 0.08)
+        if bool(profile_entry.get("approved", False)):
+            score += 0.05
+        return float(min(1.0, max(0.0, score)))
+
+    def find_best_profile_match(self, fingerprint):
+        profiles = (self.profile_memory or {}).get("profiles", {}) or {}
+        fp_key = str((fingerprint or {}).get("fingerprint_key", "") or "")
+        exact = profiles.get(fp_key)
+        if isinstance(exact, dict):
+            exact = dict(exact)
+            exact["match_score"] = 1.0
+            exact["match_kind"] = "exact"
+            return exact
+
+        best = None
+        best_score = 0.0
+        for entry in profiles.values():
+            score = self._score_profile_match(fingerprint, entry)
+            if score > best_score:
+                best_score = score
+                best = dict(entry)
+        if best is not None:
+            best["match_score"] = float(best_score)
+            best["match_kind"] = "fuzzy"
+        return best
+
+    def prepare_learning_for_detection(self, page_idx=0):
+        if not self.learning_enabled or not self.pdf_path:
+            self.current_detection_context = {"page_idx": int(page_idx)}
+            return self.current_detection_context
+
+        img = self._render_pdf_page_bgr(self.pdf_path, page_idx=page_idx, preview_zoom=ZOOM)
+        fingerprint = self.build_page_fingerprint(page_idx=page_idx, img_bgr=img)
+        profile = self.find_best_profile_match(fingerprint)
+        applied = False
+        if profile and isinstance(profile.get("settings"), dict):
+            match_kind = str(profile.get("match_kind", ""))
+            match_score = float(profile.get("match_score", 0.0) or 0.0)
+            approved = bool(profile.get("approved", False))
+            if match_kind == "exact" or (approved and match_score >= 0.92):
+                self._apply_learning_profile_settings(profile.get("settings", {}))
+                applied = True
+                self.last_applied_profile_meta = {
+                    "profile_key": profile.get("fingerprint_key", ""),
+                    "match_kind": match_kind,
+                    "match_score": match_score,
+                    "applied_at": _utc_now_iso(),
+                }
+
+        self.current_detection_context = {
+            "started_at": _utc_now_iso(),
+            "page_idx": int(page_idx),
+            "fingerprint": fingerprint,
+            "matched_profile": profile,
+            "profile_applied": bool(applied),
+        }
+        return self.current_detection_context
+
+    def finalize_learning_after_detection(self, page_idx=0):
+        ctx = dict(self.current_detection_context or {})
+        ctx["completed_at"] = _utc_now_iso()
+        ctx["page_idx"] = int(page_idx)
+        ctx["raw_detection"] = self._serialize_detection_state(page_idx=page_idx)
+        ctx["profile_used"] = self._collect_learning_profile_settings()
+        self.current_detection_context = ctx
+        self.persist_learning_session(current_page_idx=page_idx)
+        return ctx
+
+    def _rect_signature(self, rect, rect_type=""):
+        rect = rect if isinstance(rect, fitz.Rect) else fitz.Rect(*rect)
+        return f"{rect_type}:{rect.x0:.3f}:{rect.y0:.3f}:{rect.x1:.3f}:{rect.y1:.3f}"
+
+    def _compute_learning_delta(self, raw_detection, final_detection):
+        raw_boxes = raw_detection.get("boxes", []) if isinstance(raw_detection, dict) else []
+        raw_types = raw_detection.get("box_types", []) if isinstance(raw_detection, dict) else []
+        final_boxes = final_detection.get("boxes", []) if isinstance(final_detection, dict) else []
+        final_types = final_detection.get("box_types", []) if isinstance(final_detection, dict) else []
+
+        raw_set = {self._rect_signature(r, raw_types[i] if i < len(raw_types) else "") for i, r in enumerate(raw_boxes)}
+        final_set = {self._rect_signature(r, final_types[i] if i < len(final_types) else "") for i, r in enumerate(final_boxes)}
+
+        removed = sorted(raw_set - final_set)
+        added = sorted(final_set - raw_set)
+        total = max(1, len(raw_set) + len(final_set))
+        net_change = len(removed) + len(added)
+        quality = max(0.0, 1.0 - (net_change / float(total)))
+
+        return {
+            "raw_count": int(len(raw_boxes)),
+            "final_count": int(len(final_boxes)),
+            "added_count": int(len(added)),
+            "removed_count": int(len(removed)),
+            "added_signatures": added[:200],
+            "removed_signatures": removed[:200],
+            "quality_score": round(float(quality), 6),
+        }
+
+    def _capture_revision_snapshot(self, reason="manual", approved=False, learning_weight=0.0, parent_revision_ids=None, source_path=""):
+        page_idx = int((self.current_detection_context or {}).get("page_idx", self.detected_page_idx or 0) or 0)
+        fingerprint = (self.current_detection_context or {}).get("fingerprint") or {
+            "version": 1,
+            "pdf_family_hint": self._page_family_hint(),
+            "page_idx": page_idx,
+            "fingerprint_key": "",
+            "features": {},
+        }
+        raw_detection = (self.current_detection_context or {}).get("raw_detection") or self._serialize_detection_state(page_idx=page_idx)
+        final_detection = self._serialize_detection_state(page_idx=page_idx)
+        learning_delta = self._compute_learning_delta(raw_detection, final_detection)
+        revision = {
+            "revision_id": "",
+            "reason": str(reason or "manual"),
+            "saved_at": _utc_now_iso(),
+            "approved": bool(approved),
+            "learning_weight": float(learning_weight or 0.0),
+            "page_idx": page_idx,
+            "pdf_path": str(self.pdf_path or ""),
+            "pdf_family_hint": str(fingerprint.get("pdf_family_hint", "")),
+            "fingerprint": fingerprint,
+            "profile_used": self._collect_learning_profile_settings(),
+            "matched_profile": (self.current_detection_context or {}).get("matched_profile"),
+            "profile_applied": bool((self.current_detection_context or {}).get("profile_applied", False)),
+            "raw_detection": raw_detection,
+            "final_detection": final_detection,
+            "learning_delta": learning_delta,
+            "custom_mappings": self.collect_config().get("custom_mappings", {}),
+            "parent_revision_ids": list(parent_revision_ids or ([self.current_revision_id] if self.current_revision_id else [])),
+            "source_path": str(source_path or ""),
+        }
+        return revision
+
+    def _update_profile_memory_from_revision(self, revision, weight=None):
+        if not isinstance(revision, dict):
+            return None
+        fingerprint = revision.get("fingerprint", {}) or {}
+        fp_key = str(fingerprint.get("fingerprint_key", "") or "").strip()
+        if not fp_key:
+            return None
+
+        profiles = self.profile_memory.setdefault("profiles", {})
+        existing = profiles.get(fp_key, {}) if isinstance(profiles.get(fp_key), dict) else {}
+
+        weight_val = float(revision.get("learning_weight", 0.0) if weight is None else weight)
+        save_count_prev = int(existing.get("save_count", 0) or 0)
+        quality_prev = float(existing.get("avg_quality", 0.0) or 0.0)
+        quality_new = float((revision.get("learning_delta", {}) or {}).get("quality_score", 0.0) or 0.0)
+        combined_count = save_count_prev + 1
+        avg_quality = ((quality_prev * save_count_prev) + quality_new) / float(max(combined_count, 1))
+
+        updated = dict(existing)
+        updated.update({
+            "fingerprint_key": fp_key,
+            "pdf_family_hint": str(fingerprint.get("pdf_family_hint", "")),
+            "page_idx": int(fingerprint.get("page_idx", revision.get("page_idx", 0)) or 0),
+            "feature_snapshot": dict((fingerprint.get("features") or {})),
+            "settings": dict(revision.get("profile_used", {}) or {}),
+            "save_count": combined_count,
+            "approved_count": int(existing.get("approved_count", 0) or 0) + (1 if revision.get("approved") else 0),
+            "approved": bool(existing.get("approved", False) or revision.get("approved", False)),
+            "learning_weight_total": float(existing.get("learning_weight_total", 0.0) or 0.0) + weight_val,
+            "avg_quality": round(float(avg_quality), 6),
+            "last_revision_id": str(revision.get("revision_id", "")),
+            "last_used_at": _utc_now_iso(),
+        })
+        profiles[fp_key] = updated
+        self.profile_memory["version"] = 1
+        self.profile_memory["updated_at"] = _utc_now_iso()
+        self.learning_storage.save_profile_memory(self.profile_memory)
+
+        families = self.template_stats.setdefault("families", {})
+        fam_key = str(updated.get("pdf_family_hint", "") or "unknown")
+        fam = dict(families.get(fam_key, {}) or {})
+        fam["last_used_at"] = _utc_now_iso()
+        fam["page_hits"] = int(fam.get("page_hits", 0) or 0) + 1
+        fam["last_fingerprint_key"] = fp_key
+        fam["last_revision_id"] = str(revision.get("revision_id", ""))
+        fam["avg_quality"] = updated.get("avg_quality", 0.0)
+        families[fam_key] = fam
+        self.template_stats["version"] = 1
+        self.learning_storage.save_template_stats(self.template_stats)
+        return updated
+
+    def save_learning_revision(self, reason="manual", approved=False, learning_weight=0.0, parent_revision_ids=None, source_path=""):
+        revision = self._capture_revision_snapshot(
+            reason=reason,
+            approved=approved,
+            learning_weight=learning_weight,
+            parent_revision_ids=parent_revision_ids,
+            source_path=source_path,
+        )
+        revision_id = self.learning_storage.save_revision(revision)
+        revision["revision_id"] = revision_id
+        self.current_revision_id = revision_id
+        self.last_saved_revision_id = revision_id
+        self._update_profile_memory_from_revision(revision, weight=learning_weight)
+        self.persist_learning_session(current_page_idx=revision.get("page_idx", 0))
+        return revision
+
+    def approve_revision_for_learning(self, revision_id=None, learning_weight=1.0):
+        revision_id = str(revision_id or self.current_revision_id or "").strip()
+        if not revision_id:
+            return None
+        revision = self.learning_storage.load_revision(revision_id)
+        if not isinstance(revision, dict):
+            return None
+        revision["approved"] = True
+        revision["learning_weight"] = float(learning_weight)
+        self.learning_storage.save_revision(revision)
+        self._update_profile_memory_from_revision(revision, weight=learning_weight)
+        return revision
+
+    def collect_learning_meta(self):
+        ctx = self.current_detection_context or {}
+        fingerprint = ctx.get("fingerprint", {}) if isinstance(ctx, dict) else {}
+        return {
+            "version": 1,
+            "storage_root": str(self.learning_storage.base_dir),
+            "current_revision_id": str(self.current_revision_id or ""),
+            "last_saved_revision_id": str(self.last_saved_revision_id or ""),
+            "fingerprint_key": str((fingerprint or {}).get("fingerprint_key", "") or ""),
+            "page_idx": int(ctx.get("page_idx", self.detected_page_idx or 0) or 0),
+            "profile_applied": bool(ctx.get("profile_applied", False)),
+            "last_applied_profile_meta": dict(self.last_applied_profile_meta or {}),
+            "updated_at": _utc_now_iso(),
+        }
+
+    def apply_learning_meta(self, learning_meta):
+        meta = dict(learning_meta or {})
+        self.last_loaded_learning_meta = meta
+        self.current_revision_id = str(meta.get("current_revision_id", self.current_revision_id or "") or "")
+        self.last_saved_revision_id = str(meta.get("last_saved_revision_id", self.last_saved_revision_id or "") or "")
+        self.last_applied_profile_meta = dict(meta.get("last_applied_profile_meta", {}) or {})
+
+    def persist_learning_session(self, current_page_idx=0):
+        if not self.learning_enabled:
+            return
+        session = {
+            "version": 1,
+            "saved_at": _utc_now_iso(),
+            "pdf_path": str(self.pdf_path or ""),
+            "page_idx": int(current_page_idx or 0),
+            "detected_page_idx": int(self.detected_page_idx or 0),
+            "current_revision_id": str(self.current_revision_id or ""),
+            "learning_meta": self.collect_learning_meta(),
+            "current_detection_context": {
+                "page_idx": int((self.current_detection_context or {}).get("page_idx", 0) or 0),
+                "fingerprint": (self.current_detection_context or {}).get("fingerprint", {}),
+                "profile_applied": bool((self.current_detection_context or {}).get("profile_applied", False)),
+                "matched_profile_key": str((((self.current_detection_context or {}).get("matched_profile") or {}).get("fingerprint_key", "")) or ""),
+            },
+        }
+        self.learning_storage.save_session(session, name="current_session")
+
     def collect_config(self):
         mappings_serial = {}
 
@@ -2681,6 +3243,7 @@ class MediMapEngine:
         self.settings["Grid_N"] = int(cfg.get("Grid_N", self.settings["Grid_N"]))
         self.config_zoom = float(cfg.get("zoom", getattr(self, "config_zoom", ZOOM)))
         self.config_pdf_path = str(cfg.get("pdf_path", getattr(self, "config_pdf_path", "")) or "")
+        self.apply_learning_meta(cfg.get("learning_meta", {}))
 
         self.custom_mappings.clear()
         loaded_mappings = cfg.get("custom_mappings", {}) or {}
@@ -2779,12 +3342,14 @@ class MediMapEngine:
     def save_config(self, path):
         cfg = self.collect_config()
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(cfg, f, indent=2)
+            json.dump(cfg, f, indent=2, ensure_ascii=False)
+        self.persist_learning_session(current_page_idx=self.detected_page_idx or 0)
 
     def load_config(self, path):
         with open(path, "r", encoding="utf-8") as f:
             cfg = json.load(f)
         self.apply_config(cfg)
+        self.persist_learning_session(current_page_idx=self.detected_page_idx or 0)
         return cfg
 
     def _draw_text_op_cv(self, img, text, rects, preview_zoom=1.5, is_grid=False, grid_n=1, ox=0, oy=0, fs_scale=0.65):
@@ -2999,27 +3564,57 @@ class InteractivePreview(Image):
             return (1.0, 0.85, 0.1, 1.0)
         return (0.1, 1.0, 0.3, 1.0)
 
-    def _draw_label(self, x, y, text, anchor="top_left"):
-        core = CoreLabel(text=str(text), font_size=11)
+    def _label_style(self):
+        if platform == "android":
+            return {
+                "font_size": float(dp(9.2)),
+                "pad_x": float(dp(2.6)),
+                "pad_y": float(dp(1.6)),
+                "gap": float(dp(2.2)),
+            }
+        return {
+            "font_size": 11.0,
+            "pad_x": 4.0,
+            "pad_y": 2.0,
+            "gap": 4.0,
+        }
+
+    def _clamp_label_draw(self, draw_x, draw_y, bg_w, bg_h, disp):
+        dx, dy, dw, dh = disp
+        min_x = dx + 1.0
+        max_x = dx + max(1.0, dw - bg_w - 1.0)
+        min_y = dy + bg_h + 1.0
+        max_y = dy + max(bg_h + 1.0, dh - 1.0)
+        draw_x = min(max(float(draw_x), min_x), max_x)
+        draw_y = min(max(float(draw_y), min_y), max_y)
+        return draw_x, draw_y
+
+    def _draw_label(self, x, y, text, anchor="top_left", disp=None):
+        style = self._label_style()
+        core = CoreLabel(text=str(text), font_size=style["font_size"])
         core.refresh()
         tex = core.texture
-        pad_x, pad_y = 4, 2
-        bg_w = tex.width + pad_x * 2
-        bg_h = tex.height + pad_y * 2
+        pad_x = style["pad_x"]
+        pad_y = style["pad_y"]
+        gap = style["gap"]
+        bg_w = tex.width + pad_x * 2.0
+        bg_h = tex.height + pad_y * 2.0
         draw_x = float(x)
         draw_y = float(y)
         if anchor == "left":
-            draw_x = x - bg_w - 4
+            draw_x = x - bg_w - gap
             draw_y = y + bg_h / 2.0
         elif anchor == "right":
-            draw_x = x + 4
+            draw_x = x + gap
             draw_y = y + bg_h / 2.0
         elif anchor == "bottom":
             draw_x = x
-            draw_y = y - 4
+            draw_y = y - gap
         else:
             draw_x = x
-            draw_y = y + bg_h + 4
+            draw_y = y + bg_h + gap
+        if disp is not None:
+            draw_x, draw_y = self._clamp_label_draw(draw_x, draw_y, bg_w, bg_h, disp)
         Rectangle(pos=(draw_x, draw_y - bg_h), size=(bg_w, bg_h))
         Color(1, 1, 1, 1)
         Rectangle(texture=tex, pos=(draw_x + pad_x, draw_y - bg_h + pad_y), size=tex.size)
@@ -3028,6 +3623,17 @@ class InteractivePreview(Image):
         dx, dy, dw, dh = disp
         box_type = str(box.get("t", "field"))
         small_box = (w <= 28 or h <= 22)
+        if platform == "android":
+            top_room = (dy + dh) - (y + h)
+            left_room = x - dx
+            right_room = (dx + dw) - (x + w)
+            if top_room >= float(dp(14)):
+                return "top_left"
+            if right_room >= float(dp(24)):
+                return "right"
+            if left_room >= float(dp(24)):
+                return "left"
+            return "bottom"
         if box_type == "check" or small_box:
             if x - dx > 42:
                 return "left"
@@ -3080,7 +3686,7 @@ class InteractivePreview(Image):
                 Color(*self._box_color(box.get("t", "field"), selected=selected, hovered=hovered))
                 Line(rectangle=(x, y, w, h), width=3.2 if selected else (2.4 if hovered else 1.35))
                 Color(0, 0, 0, 0.88)
-                self._draw_label(x, y + h, box["id"], anchor=self._label_anchor_for_box(box, x, y, w, h, disp))
+                self._draw_label(x, y + h, box["id"], anchor=self._label_anchor_for_box(box, x, y, w, h, disp), disp=disp)
 
     def _touch_to_image_point(self, touch):
         disp = self._get_display_rect()
@@ -7105,6 +7711,7 @@ class MediMapProApp(MDApp):
         else:
             self.set_status(f"Config loaded:\n{os.path.basename(path)}")
 
+        self.engine.persist_learning_session(current_page_idx=self.current_page_idx())
         self.refresh_backend_capabilities_ui()
 
     def on_load_config(self, instance):
@@ -7149,6 +7756,12 @@ class MediMapProApp(MDApp):
             incoming_cfg=incoming,
             keep_current_detection=True,
             prefer="incoming"
+        )
+        self.engine.save_learning_revision(
+            reason="merge_config",
+            approved=False,
+            learning_weight=0.25,
+            source_path=path,
         )
         self.engine.all_boxes = []
         self.engine.box_types = []
@@ -7303,6 +7916,12 @@ class MediMapProApp(MDApp):
             self.engine._config_ui_state = self._collect_runtime_config_state()
             out_path = os.path.join(self.get_app_output_dir(), CONFIG_FILENAME)
             self.engine.save_config(out_path)
+            self.engine.save_learning_revision(
+                reason="save_config",
+                approved=False,
+                learning_weight=0.35,
+                source_path=out_path,
+            )
             self.set_status(f"Config saved:\n{out_path}")
         except Exception as e:
             self.set_status(f"Save config error:\n{e}")
@@ -7378,7 +7997,9 @@ class MediMapProApp(MDApp):
 
             self.apply_ui_settings_to_engine()
             page_idx = self.current_page_idx()
+            self.engine.prepare_learning_for_detection(page_idx=page_idx)
             self.engine.run_detection(page_idx=page_idx)
+            self.engine.finalize_learning_after_detection(page_idx=page_idx)
             self.engine.selected_box_ids = []
             self._stash_page_selection(page_idx)
             self.set_status(
@@ -7577,6 +8198,7 @@ class MediMapProApp(MDApp):
         try:
             self.set_status(f"Loading PDF...\n{os.path.basename(path)}")
             total = self.engine.load_pdf(path)
+            self.engine.persist_learning_session(current_page_idx=0)
 
             cur_idx = self.current_page_idx()
             max_idx = max(total - 1, 0)
@@ -7634,6 +8256,7 @@ class MediMapProApp(MDApp):
                 self.set_status(f"Loading PDF...\n{os.path.basename(path)}")
 
                 total = self.engine.load_pdf(path)
+                self.engine.persist_learning_session(current_page_idx=0)
 
                 cur_idx = self.current_page_idx()
                 max_idx = max(total - 1, 0)
