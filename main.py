@@ -3466,30 +3466,30 @@ class MediMapProApp(MDApp):
             return wrap
 
         if is_mobile:
-            mobile_controls_card, mobile_controls_body = make_card("Controls", "Use tabs to move step by step")
+            main.spacing = dp(12)
+            mobile_scroll = ScrollView(do_scroll_x=False, do_scroll_y=True, bar_width=dp(6), scroll_type=["bars", "content"])
+            mobile_stack = GridLayout(cols=1, spacing=dp(12), size_hint_y=None)
+            mobile_stack.bind(minimum_height=mobile_stack.setter("height"))
+
+            mobile_controls_card, mobile_controls_body = make_card("Controls", "Step-by-step workflow")
             tabs = _make_mobile_section_tabs(["Files", "Session", "Detection", "Mapping", "Export"])
             mobile_controls_body.add_widget(tabs)
             self._mobile_section_host = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
             self._mobile_section_host.bind(minimum_height=self._mobile_section_host.setter("height"))
             mobile_controls_body.add_widget(self._mobile_section_host)
-            controls.add_widget(mobile_controls_card)
             Clock.schedule_once(lambda dt: _show_mobile_section("Files"), 0)
-            controls_scroll.add_widget(controls)
-            controls_wrap.add_widget(controls_scroll)
+            mobile_stack.add_widget(mobile_controls_card)
 
-            preview_outer = BoxLayout(orientation="vertical", spacing=gap, size_hint=(1, None))
             preview_card, preview_body = make_card("Live Preview", "Preview pages and tap boxes")
-            preview_card.size_hint_y = 1
-            preview_outer.height = max(dp(300), Window.height * 0.34)
-            preview_card.bind(minimum_height=preview_card.setter("height"))
-            preview_toolbar = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=2*row_h+dp(8))
+            preview_card.size_hint_y = None
+            preview_toolbar = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=2 * row_h + dp(8))
             for txt, cb, tone in [("Refresh", self.on_preview, "primary"), ("Detect", self.on_run_detect, "accent"), ("Prev", self.on_prev_page, "plain"), ("Next", self.on_next_page, "plain")]:
                 b = make_button(txt, tone=tone)
                 b.bind(on_release=cb)
                 preview_toolbar.add_widget(b)
             preview_body.add_widget(preview_toolbar)
             self.preview_shell = BoxLayout(orientation="vertical", spacing=dp(8), padding=dp(8), size_hint_y=None)
-            self.preview_shell.height = max(dp(220), Window.height * 0.24)
+            self.preview_shell.height = max(dp(320), Window.height * 0.42)
             style_card(self.preview_shell, palette["preview_bg"], radius=dp(24))
             preview_wrap = ScrollView(do_scroll_x=True, do_scroll_y=True, bar_width=dp(6), scroll_type=["bars", "content"])
             self.preview_wrap = preview_wrap
@@ -3500,18 +3500,20 @@ class MediMapProApp(MDApp):
             self.preview.bind(texture=self._update_preview_size)
             self.preview.box_tap_callback = self.on_preview_box_tap
             self.preview.hover_callback = self.on_preview_box_hover
-            self.preview_info = Label(text="Interactive preview ready. Tap a box to select it.", color=palette["text"], size_hint_y=None, height=dp(36), halign="left", valign="middle", font_size=dp(11))
+            self.preview_info = Label(text="Interactive preview ready. Tap a box to select it.", color=palette["text"], size_hint_y=None, height=dp(36), halign="left", valign="middle", font_size=dp(11.5))
             self.preview_info.bind(size=self._sync_label_text_size)
             self._bind_auto_height_label(self.preview_info, min_height=dp(34), extra_pad=dp(8))
             style_card(self.preview_info, palette["chip"], radius=dp(18))
+
             preview_stack.add_widget(self.preview_info)
             preview_stack.add_widget(self.preview)
             preview_wrap.add_widget(preview_stack)
             self.preview_shell.add_widget(preview_wrap)
             preview_body.add_widget(self.preview_shell)
-            preview_outer.add_widget(preview_card)
-            main.add_widget(controls_wrap)
-            main.add_widget(preview_outer)
+            mobile_stack.add_widget(preview_card)
+
+            mobile_scroll.add_widget(mobile_stack)
+            main.add_widget(mobile_scroll)
         else:
             left_wrap = BoxLayout(orientation="vertical", size_hint=(0.23, 1), spacing=dp(10))
             left_scroll = ScrollView(do_scroll_x=False, do_scroll_y=True, bar_width=dp(5), scroll_type=["bars", "content"])
