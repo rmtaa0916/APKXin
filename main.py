@@ -673,7 +673,7 @@ def android_render_pdf_page(path, page_idx=0, preview_zoom=1.5):
 # ============================================================
 # Defaults
 # ============================================================
-APP_TITLE = "MediMap Pro: Intelligent Form Automator"
+APP_TITLE = "Form Alchemist"
 CONFIG_FILENAME = "medimap_config.json"
 if platform == "android":
     ZOOM = 4.0
@@ -5059,7 +5059,20 @@ class MediMapProApp(MDApp):
         brand_wrap.add_widget(hero_sub)
         appbar.add_widget(brand_wrap)
 
-        self.mobile_meta_lbl = None
+        if is_mobile:
+            self.mobile_meta_lbl = Label(
+                text="P1 • B0 • S0",
+                color=palette["muted"],
+                size_hint=(None, None),
+                width=dp(104),
+                height=dp(28),
+                halign="center",
+                valign="middle",
+                font_size=dp(9.8),
+            )
+            self.mobile_meta_lbl.bind(size=self._sync_label_text_size)
+            style_card(self.mobile_meta_lbl, palette["chip"], radius=dp(14))
+            appbar.add_widget(self.mobile_meta_lbl)
 
         status_chip = Label(
             text=("Ready • Open a PDF to begin" if is_mobile else "Ready • Import a PDF, then refresh or run detect"),
@@ -6293,7 +6306,9 @@ class MediMapProApp(MDApp):
         self.statusbar_boxes_lbl.text = f"Boxes: {box_count} • Selected: {sel_count}"
         self.statusbar_ready_lbl.text = f"Ready: {readiness}"
         if hasattr(self, "mobile_meta_lbl") and self.mobile_meta_lbl is not None:
-            self.mobile_meta_lbl.text = ""
+            zoom_attr = "preview_zoom_factor" if getattr(self, "ui_mobile", False) else "desktop_zoom_factor"
+            zoom_pct = int(round(float(getattr(self, zoom_attr, 1.0) or 1.0) * 100))
+            self.mobile_meta_lbl.text = f"Page {page_idx + 1}/{max(total_pages, 1)} • Boxes {box_count} • Sel {sel_count} • Zoom {zoom_pct}%"
 
     def _bind_desktop_shortcuts(self):
         if platform == "android":
@@ -7537,7 +7552,6 @@ class MediMapProApp(MDApp):
             return
         fab = getattr(self, "btn_mobile_tools_fab", None)
         panel = getattr(self, "mobile_bottom_panel", None)
-        tray_open = bool(getattr(self, "mobile_tools_tray_open", False))
         if fab is not None:
             try:
                 fab.pos = (max(dp(8), Window.width - fab.width - dp(12)), dp(12))
@@ -7547,12 +7561,7 @@ class MediMapProApp(MDApp):
             try:
                 panel.width = min(Window.width - dp(24), dp(500))
                 panel.x = max(dp(12), Window.width - panel.width - dp(12))
-                if tray_open:
-                    panel.height = dp(170)
-                    panel.y = dp(72)
-                else:
-                    panel.height = 0
-                    panel.y = -10000
+                panel.y = dp(72)
             except Exception:
                 pass
 
@@ -7566,15 +7575,6 @@ class MediMapProApp(MDApp):
         if panel is not None:
             panel.opacity = 1 if self.mobile_tools_tray_open else 0
             panel.disabled = not self.mobile_tools_tray_open
-            try:
-                panel.size_hint = (None, None)
-                if self.mobile_tools_tray_open:
-                    panel.height = dp(170)
-                else:
-                    panel.height = 0
-                    panel.pos = (-10000, -10000)
-            except Exception:
-                pass
         if fab is not None:
             try:
                 fab.text = "Close" if self.mobile_tools_tray_open else "Tools"
