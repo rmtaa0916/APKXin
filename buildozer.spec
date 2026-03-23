@@ -1,7 +1,7 @@
 [app]
 title = Form Alchemist
-package.name = medimappro
-package.domain = org.medimap
+package.name = formalchemy
+package.domain = org.yourdomain
 
 source.dir = .
 source.include_exts = py,png,jpg,jpeg,kv,atlas,xlsx,pdf,json,csv,java,ttf,otf,txt
