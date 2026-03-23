@@ -1,5 +1,5 @@
 [app]
-title = MediMapPro
+title = Form Alchemist
 package.name = medimappro
 package.domain = org.medimap
 
