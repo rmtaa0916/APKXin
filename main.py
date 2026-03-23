@@ -295,6 +295,7 @@ class NeoMobileButton(Button):
     def __init__(self, tone="primary", theme=None, **kwargs):
         self.tone = tone
         self.theme = theme or {}
+        self.compact_mode = bool(kwargs.pop("compact_mode", False))
         self.corner_radius = kwargs.pop("corner_radius", dp(20))
         requested_font_size = kwargs.pop("font_size", dp(10.4))
         requested_padding = kwargs.pop("padding", [dp(7), dp(4), dp(7), dp(4)])
@@ -362,6 +363,8 @@ class NeoMobileButton(Button):
             "aurora": theme.get("aurora", (0.28, 0.90, 1.0, 1)),
             "starlight": theme.get("starlight", (1.0, 0.94, 0.78, 1)),
             "plain": theme.get("surface_soft", (0.135, 0.16, 0.215, 1)),
+            "ghost": theme.get("ghost", (0.055, 0.082, 0.150, 0.88)),
+            "mini": theme.get("mini", (0.048, 0.072, 0.128, 0.96)),
             "danger": theme.get("danger", (0.87, 0.33, 0.41, 1)),
             "text": theme.get("text", (0.93, 0.96, 1.0, 1)),
             "muted": theme.get("muted", (0.60, 0.68, 0.80, 1)),
@@ -415,26 +418,71 @@ class NeoMobileButton(Button):
             nebula = self._mix(base, pal["secondary"], 0.22)
             glow = self._mix(base, pal["starlight"], 0.08)
             comet = self._mix(pal["starlight"], base, 0.35)
+        elif self.tone == "ghost":
+            nebula = self._mix(base, pal["aurora"], 0.08)
+            glow = self._mix(base, pal["aurora"], 0.03)
+            comet = self._mix(pal["starlight"], pal["aurora"], 0.18)
+        elif self.tone == "mini":
+            nebula = self._mix(base, pal["secondary"], 0.10)
+            glow = self._mix(base, pal["aurora"], 0.02)
+            comet = self._mix(pal["starlight"], base, 0.16)
         elif self.tone == "plain":
             nebula = self._mix(base, pal["secondary"], 0.18)
             glow = self._mix(base, pal["aurora"], 0.08)
             comet = self._mix(pal["starlight"], pal["aurora"], 0.40)
         elif self.tone == "soft":
-            nebula = self._mix(base, pal["secondary"], 0.28)
-            glow = self._mix(base, pal["aurora"], 0.14)
-            comet = self._mix(pal["starlight"], pal["secondary"], 0.30)
+            nebula = self._mix(base, pal["secondary"], 0.22)
+            glow = self._mix(base, pal["aurora"], 0.11)
+            comet = self._mix(pal["starlight"], pal["secondary"], 0.24)
+        elif self.tone == "secondary":
+            nebula = self._mix(base, pal["starlight"], 0.14)
+            glow = self._mix(base, pal["aurora"], 0.08)
+            comet = self._mix(pal["starlight"], pal["secondary"], 0.22)
         else:
             nebula = self._mix(base, pal["secondary"], 0.24)
             glow = self._mix(base, pal["aurora"], 0.18)
             comet = self._mix(pal["starlight"], pal["aurora"], 0.24)
 
         border = self._mix(glow, pal["border"], 0.34)
+        if self.tone == "ghost":
+            border = self._mix(border, pal["text"], 0.08)
+        elif self.tone == "mini":
+            border = self._mix(border, pal["text"], 0.04)
         gloss = (1, 1, 1, 0.08)
         accent = (1, 1, 1, 0.20)
         outer_glow_alpha = 0.035
         shadow_alpha = 0.22
         star_alpha_1 = 0.0
         star_alpha_2 = 0.0
+
+        if self.compact_mode:
+            gloss = (1, 1, 1, 0.032)
+            accent = (1, 1, 1, 0.085)
+            outer_glow_alpha *= 0.28
+            shadow_alpha *= 0.50
+            if self.tone == "ghost":
+                gloss = (1, 1, 1, 0.018)
+                accent = (1, 1, 1, 0.048)
+                outer_glow_alpha *= 0.55
+                shadow_alpha *= 0.62
+            elif self.tone == "mini":
+                gloss = (1, 1, 1, 0.014)
+                accent = (1, 1, 1, 0.034)
+                outer_glow_alpha *= 0.34
+                shadow_alpha *= 0.48
+            elif self.tone == "plain":
+                gloss = (1, 1, 1, 0.024)
+                accent = (1, 1, 1, 0.060)
+            elif self.tone == "soft":
+                gloss = (1, 1, 1, 0.028)
+                accent = (1, 1, 1, 0.070)
+            elif self.tone == "secondary":
+                gloss = (1, 1, 1, 0.024)
+                accent = (1, 1, 1, 0.064)
+            elif self.tone == "accent":
+                gloss = (1, 1, 1, 0.036)
+                accent = (1, 1, 1, 0.095)
+                outer_glow_alpha *= 1.16
 
         if self.disabled:
             base = self._mix(base, (0.12, 0.14, 0.19, 1), 0.60)
@@ -481,7 +529,14 @@ class NeoMobileButton(Button):
         self._base_rect.size = (w, h)
         self._base_rect.radius = [self.corner_radius] * 4
 
-        self._nebula_color.rgba = (*nebula[:3], 0.18 if not self.disabled else 0.07)
+        nebula_alpha = 0.18 if not self.disabled else 0.07
+        if self.compact_mode and not self.disabled:
+            nebula_alpha *= 0.62
+            if self.tone == "ghost":
+                nebula_alpha *= 0.42
+            elif self.tone == "mini":
+                nebula_alpha *= 0.26
+        self._nebula_color.rgba = (*nebula[:3], nebula_alpha)
         self._nebula_rect.pos = (x + inset, y + dp(1))
         self._nebula_rect.size = (max(0, w - inset * 2), max(0, h * 0.62))
         self._nebula_rect.radius = [max(dp(10), self.corner_radius - dp(2))] * 4
@@ -492,7 +547,14 @@ class NeoMobileButton(Button):
         self._shine_rect.size = (max(0, w - inset * 2), max(0, shine_h))
         self._shine_rect.radius = [max(dp(8), self.corner_radius - dp(4))] * 4
 
-        self._core_color.rgba = (*comet[:3], 0.10 if not self.disabled else 0.03)
+        core_alpha = 0.10 if not self.disabled else 0.03
+        if self.compact_mode and not self.disabled:
+            core_alpha *= 0.55
+            if self.tone == "ghost":
+                core_alpha *= 0.42
+            elif self.tone == "mini":
+                core_alpha *= 0.22
+        self._core_color.rgba = (*comet[:3], core_alpha)
         self._core_rect.pos = (x + dp(10), y + dp(7))
         self._core_rect.size = (max(dp(18), w * 0.46), dp(5))
         self._core_rect.radius = [dp(8)] * 4
@@ -505,7 +567,14 @@ class NeoMobileButton(Button):
         self._accent_rect.radius = [dp(8)] * 4
 
         comet_w = min(dp(40), max(dp(20), w * 0.22))
-        self._comet_color.rgba = (*comet[:3], 0.08 if not self.disabled else 0.02)
+        comet_alpha = 0.08 if not self.disabled else 0.02
+        if self.compact_mode and not self.disabled:
+            comet_alpha *= 0.45
+            if self.tone == "ghost":
+                comet_alpha *= 0.34
+            elif self.tone == "mini":
+                comet_alpha *= 0.18
+        self._comet_color.rgba = (*comet[:3], comet_alpha)
         self._comet_rect.pos = (x + w - comet_w - dp(14), y + h - dp(16))
         self._comet_rect.size = (comet_w, dp(3.2))
         self._comet_rect.radius = [dp(8)] * 4
@@ -521,7 +590,10 @@ class NeoMobileButton(Button):
 
         self._border_color.rgba = border
         self._border_line.rounded_rectangle = [x, y, w, h, self.corner_radius]
-        self._inner_border_color.rgba = (1, 1, 1, 0.02 if not self.disabled else 0.0)
+        inner_border_alpha = 0.02 if not self.disabled else 0.0
+        if self.compact_mode and self.tone in ("ghost", "mini"):
+            inner_border_alpha = 0.012 if self.tone == "ghost" else 0.008
+        self._inner_border_color.rgba = (1, 1, 1, inner_border_alpha)
         self._inner_border_line.rounded_rectangle = [x + dp(1), y + dp(1), max(0, w - dp(2)), max(0, h - dp(2)), max(dp(8), self.corner_radius - dp(2))]
 
 
@@ -605,7 +677,7 @@ APP_TITLE = "MediMap Pro: Intelligent Form Automator"
 CONFIG_FILENAME = "medimap_config.json"
 if platform == "android":
     ZOOM = 4.0
-    PREVIEW_SCALE = 1.35
+    PREVIEW_SCALE = 2.2
 else:
     ZOOM = 4.0
     PREVIEW_SCALE = 2.2
@@ -3789,7 +3861,7 @@ class InteractivePreview(Image):
         self._tap_candidates = {}
         self._touch_start = {}
         self._touch_moved = set()
-        self._tap_slop = float(dp(14))
+        self._tap_slop = float(dp(18))
         self._pinch_active = False
         self._pinch_last_midpoint = None
         self.bind(texture=self._redraw_overlay, size=self._redraw_overlay, pos=self._redraw_overlay)
@@ -3925,6 +3997,86 @@ class InteractivePreview(Image):
             float(box.get("h", 0.0) or 0.0),
         )
 
+    def _resolve_box_display_rect(self, box):
+        disp = self._get_display_rect()
+        tex = self.texture
+        if not disp or tex is None:
+            return None
+        dx, dy, dw, dh = disp
+        bx, by, bw, bh = self._resolve_box_image_rect(box)
+        sx = dw / float(max(tex.width, 1))
+        sy = dh / float(max(tex.height, 1))
+        x = dx + bx * sx
+        y = dy + (tex.height - (by + bh)) * sy
+        w = max(1.0, bw * sx)
+        h = max(1.0, bh * sy)
+        return (x, y, w, h, disp)
+
+    def _resolve_label_display_rect(self, box):
+        geom = self._resolve_box_display_rect(box)
+        if not geom:
+            return None
+        x, y, w, h, disp = geom
+        core = CoreLabel(text=str(box.get("id", "")), font_size=11)
+        core.refresh()
+        tex = core.texture
+        pad_x, pad_y = 4, 2
+        bg_w = tex.width + pad_x * 2
+        bg_h = tex.height + pad_y * 2
+        anchor = self._label_anchor_for_box(box, x, y, w, h, disp)
+        draw_x = float(x)
+        draw_y = float(y)
+        if anchor == "left":
+            draw_x = x - bg_w - 4
+            draw_y = y + bg_h / 2.0
+        elif anchor == "right":
+            draw_x = x + 4
+            draw_y = y + bg_h / 2.0
+        elif anchor == "bottom":
+            draw_x = x
+            draw_y = y - 4
+        else:
+            draw_x = x
+            draw_y = y + bg_h + 4
+        return (draw_x, draw_y - bg_h, bg_w, bg_h)
+
+    def _find_hit_box_for_touch(self, touch):
+        pt = self._touch_to_image_point(touch)
+        hit = self._find_hit_box(*pt) if pt is not None else None
+        if hit is not None:
+            return hit
+        if not self.collide_point(*touch.pos):
+            return None
+        label_hits = []
+        for box in self.boxes_payload:
+            rect = self._resolve_label_display_rect(box)
+            if rect is None:
+                continue
+            lx, ly, lw, lh = rect
+            if lx <= touch.x <= lx + lw and ly <= touch.y <= ly + lh:
+                label_hits.append((box, lw * lh))
+        if not label_hits:
+            return None
+        label_hits.sort(key=lambda item: (item[1], int(item[0].get("id", 0))))
+        return label_hits[0][0]
+
+    def _set_pointed_box(self, hit=None, notify=True):
+        new_id = None
+        if isinstance(hit, dict) and "id" in hit:
+            try:
+                new_id = int(hit.get("id"))
+            except Exception:
+                new_id = hit.get("id")
+        changed = (new_id != self.hovered_box_id)
+        self.hovered_box_id = new_id
+        if changed:
+            self._redraw_overlay()
+        if notify and callable(self.hover_callback):
+            try:
+                self.hover_callback(hit)
+            except Exception:
+                pass
+
     def _redraw_overlay(self, *args):
         self.canvas.after.clear()
         disp = self._get_display_rect()
@@ -4042,7 +4194,8 @@ class InteractivePreview(Image):
                 return super().on_touch_down(touch)
 
             pt = self._touch_to_image_point(touch)
-            if pt is None:
+            hit = self._find_hit_box_for_touch(touch)
+            if pt is None and hit is None:
                 return super().on_touch_down(touch)
 
             try:
@@ -4057,7 +4210,6 @@ class InteractivePreview(Image):
                 self._pinch_start_scale = float(getattr(self, "display_scale", 1.0) or 1.0)
                 return True
 
-            hit = self._find_hit_box(*pt)
             tap_count = self._register_tap(touch.x, touch.y)
 
             if hit is not None and tap_count >= 2:
@@ -4066,7 +4218,7 @@ class InteractivePreview(Image):
                     self._recent_taps = []
                     return True
 
-            if hit is None and tap_count >= 3:
+            if hit is None and pt is not None and tap_count >= 3:
                 if callable(self.zoom_request_callback):
                     self.zoom_request_callback("step", "in")
                     self._recent_taps = []
@@ -4082,11 +4234,12 @@ class InteractivePreview(Image):
             return super().on_touch_down(touch)
 
         pt = self._touch_to_image_point(touch)
-        if pt is None:
+        hit = self._find_hit_box_for_touch(touch)
+        if pt is None and hit is None:
             return super().on_touch_down(touch)
 
-        hit = self._find_hit_box(*pt)
         self._touch_refs[touch.uid] = touch
+        self._set_pointed_box(hit, notify=True)
         self._touch_start[touch.uid] = (touch.x, touch.y)
         self._tap_candidates[touch.uid] = ({"hit": hit, "x": touch.x, "y": touch.y} if hit is not None else None)
         self._active_touches[touch.uid] = (touch.x, touch.y)
@@ -4138,6 +4291,8 @@ class InteractivePreview(Image):
                                 "pan": pan_delta,
                             })
                     return True
+                current_hit = self._find_hit_box_for_touch(touch)
+                self._set_pointed_box(current_hit, notify=(current_hit is not None or self.hovered_box_id is not None))
                 if getattr(touch, "grab_current", None) is self:
                     candidate = self._tap_candidates.get(touch.uid)
                     zoomed = float(getattr(self, "display_scale", 1.0) or 1.0) > 1.05
@@ -4201,16 +4356,20 @@ class InteractivePreview(Image):
                     if callable(self.box_double_tap_callback):
                         self.box_double_tap_callback(hit)
                         self._recent_taps = []
+                        self._set_pointed_box(hit, notify=True)
                         return True
                 if hit is not None:
                     if callable(self.box_tap_callback):
                         self.box_tap_callback(hit)
+                        self._set_pointed_box(hit, notify=True)
                         return True
                 if hit is None and tap_count >= 3:
                     if callable(self.zoom_request_callback):
                         self.zoom_request_callback("step", "in")
                         self._recent_taps = []
                         return True
+            elif not had_multi_touch:
+                self._set_pointed_box(None, notify=bool(self.hovered_box_id is not None))
 
             if was_grabbed or had_multi_touch:
                 return True
@@ -4232,18 +4391,9 @@ class InteractivePreview(Image):
             return
         local = self.to_widget(*pos)
         class Dummy: pass
-        d = Dummy(); d.x=local[0]; d.y=local[1]
-        pt = self._touch_to_image_point(d)
-        new_hover = None
-        if pt is not None:
-            hit = self._find_hit_box(*pt)
-            if hit is not None:
-                new_hover = hit["id"]
-                if callable(self.hover_callback):
-                    self.hover_callback(hit)
-        if new_hover != self.hovered_box_id:
-            self.hovered_box_id = new_hover
-            self._redraw_overlay()
+        d = Dummy(); d.x=local[0]; d.y=local[1]; d.pos=(local[0], local[1])
+        hit = self._find_hit_box_for_touch(d)
+        self._set_pointed_box(hit, notify=(hit is not None or self.hovered_box_id is not None))
 
 
 class MediMapProLayout(BoxLayout):
@@ -4331,7 +4481,9 @@ class FloatingPreviewHUD(BoxLayout):
         else:
             self.height = max(self._drag_handle_height + dp(8), float(self._expanded_height or self.height or dp(150)))
         if self._toggle_button is not None:
-            self._toggle_button.text = '✦' if self._collapsed else '—'
+            collapsed_label = getattr(self._toggle_button, '_collapsed_label', '✦')
+            expanded_label = getattr(self._toggle_button, '_expanded_label', '—')
+            self._toggle_button.text = collapsed_label if self._collapsed else expanded_label
         self._emit_collapse_state()
 
     def _local_point_in_widget(self, widget, touch):
@@ -4355,23 +4507,57 @@ class FloatingPreviewHUD(BoxLayout):
             return False
         return ly >= max(0.0, self.height - self._drag_handle_height)
 
-    def _touch_hits_widget_tree(self, widget, touch):
+    def _find_deepest_touch_target(self, widget, touch):
         if widget is None:
-            return False
+            return None
+        try:
+            children = list(getattr(widget, 'children', []) or [])
+        except Exception:
+            children = []
+        for child in children:
+            target = self._find_deepest_touch_target(child, touch)
+            if target is not None:
+                return target
         if self._local_point_in_widget(widget, touch):
-            return True
-        for child in getattr(widget, 'children', []) or []:
-            if self._touch_hits_widget_tree(child, touch):
-                return True
-        return False
+            return widget
+        return None
+
+    def _touch_hits_widget_tree(self, widget, touch):
+        return self._find_deepest_touch_target(widget, touch) is not None
+
+    def _find_interactive_target(self, touch):
+        if self._toggle_button is not None:
+            target = self._find_deepest_touch_target(self._toggle_button, touch)
+            if target is not None:
+                return target
+        for widget in self._interactive_widgets:
+            target = self._find_deepest_touch_target(widget, touch)
+            if target is not None:
+                return target
+        return None
 
     def _touch_hits_interactive(self, touch):
-        if self._toggle_button is not None and self._touch_hits_widget_tree(self._toggle_button, touch):
-            return True
-        for widget in self._interactive_widgets:
-            if self._touch_hits_widget_tree(widget, touch):
-                return True
-        return False
+        return self._find_interactive_target(touch) is not None
+
+    def _dispatch_to_interactive_target(self, touch, method_name):
+        target = None
+        if method_name == 'on_touch_down':
+            target = self._find_interactive_target(touch)
+            if target is not None:
+                touch.ud['floating_preview_hud_target'] = target
+        else:
+            target = touch.ud.get('floating_preview_hud_target')
+            if target is None and self._hud_contains(touch):
+                target = self._find_interactive_target(touch)
+        if target is None:
+            return None
+        handler = getattr(target, method_name, None)
+        if not callable(handler):
+            return None
+        try:
+            return bool(handler(touch))
+        except Exception:
+            return None
 
     def on_touch_down(self, touch):
         if self._drag_enabled and self._handle_contains(touch):
@@ -4385,6 +4571,9 @@ class FloatingPreviewHUD(BoxLayout):
             self.pos_hint = {}
             return True
         if self._hud_contains(touch) and self._touch_hits_interactive(touch):
+            dispatched = self._dispatch_to_interactive_target(touch, 'on_touch_down')
+            if dispatched is not None:
+                return dispatched
             return super().on_touch_down(touch)
         if self._allow_body_passthrough and self._hud_contains(touch):
             return False
@@ -4406,7 +4595,10 @@ class FloatingPreviewHUD(BoxLayout):
             self.x = min(max(0.0, new_x), max_x)
             self.y = min(max(0.0, new_y), max_y)
             return True
-        if self._hud_contains(touch) and self._touch_hits_interactive(touch):
+        if self._hud_contains(touch) and (self._touch_hits_interactive(touch) or touch.ud.get('floating_preview_hud_target') is not None):
+            dispatched = self._dispatch_to_interactive_target(touch, 'on_touch_move')
+            if dispatched is not None:
+                return dispatched
             return super().on_touch_move(touch)
         if self._allow_body_passthrough and self._hud_contains(touch):
             return False
@@ -4417,8 +4609,13 @@ class FloatingPreviewHUD(BoxLayout):
             touch.ungrab(self)
             self._drag_touch = None
             return True
-        if self._hud_contains(touch) and self._touch_hits_interactive(touch):
+        if self._hud_contains(touch) and (self._touch_hits_interactive(touch) or touch.ud.get('floating_preview_hud_target') is not None):
+            dispatched = self._dispatch_to_interactive_target(touch, 'on_touch_up')
+            touch.ud.pop('floating_preview_hud_target', None)
+            if dispatched is not None:
+                return dispatched
             return super().on_touch_up(touch)
+        touch.ud.pop('floating_preview_hud_target', None)
         if self._allow_body_passthrough and self._hud_contains(touch):
             return False
         return super().on_touch_up(touch)
@@ -4456,21 +4653,23 @@ class MediMapProApp(MDApp):
 
         palette = {
             "bg": (0.006, 0.010, 0.030, 1),
-            "surface": (0.030, 0.055, 0.115, 0.992),
-            "surface_alt": (0.045, 0.070, 0.145, 0.995),
-            "surface_soft": (0.070, 0.098, 0.185, 0.995),
-            "primary": (0.265, 0.510, 1.000, 1),
-            "primary_soft": (0.110, 0.170, 0.420, 1),
-            "accent": (0.970, 0.720, 0.320, 1),
-            "accent_soft": (0.300, 0.180, 0.060, 1),
-            "secondary": (0.690, 0.430, 1.000, 1),
-            "aurora": (0.300, 0.920, 1.000, 1),
+            "surface": (0.028, 0.052, 0.110, 0.992),
+            "surface_alt": (0.042, 0.068, 0.138, 0.995),
+            "surface_soft": (0.064, 0.092, 0.172, 0.995),
+            "primary": (0.255, 0.500, 0.980, 1),
+            "primary_soft": (0.094, 0.144, 0.330, 1),
+            "accent": (0.960, 0.710, 0.300, 1),
+            "accent_soft": (0.280, 0.170, 0.058, 1),
+            "secondary": (0.585, 0.515, 0.900, 1),
+            "aurora": (0.255, 0.820, 0.960, 1),
             "starlight": (1.000, 0.950, 0.800, 1),
             "text": (0.970, 0.980, 1.000, 1),
-            "muted": (0.720, 0.790, 0.940, 1),
-            "border": (0.220, 0.300, 0.520, 0.62),
+            "muted": (0.710, 0.785, 0.930, 1),
+            "border": (0.205, 0.275, 0.455, 0.54),
             "preview_bg": (0.004, 0.008, 0.022, 1),
-            "chip": (0.060, 0.086, 0.165, 0.992),
+            "chip": (0.055, 0.080, 0.152, 0.992),
+            "ghost": (0.052, 0.078, 0.146, 0.86),
+            "mini": (0.046, 0.070, 0.126, 0.96),
             "danger": (1.000, 0.360, 0.560, 1),
         }
         Window.clearcolor = palette["bg"]
@@ -4664,17 +4863,18 @@ class MediMapProApp(MDApp):
 
         def labeled_field(label_text, widget, helper=None):
             box = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(4))
-            extra = dp(18) if helper else 0
-            box.height = dp(24) + widget.height + extra
+            box.bind(minimum_height=box.setter("height"))
             lbl = Label(text=label_text, color=palette["text"], size_hint_y=None,
                         height=dp(20), halign="left", valign="middle", font_size=dp(12))
             lbl.bind(size=self._sync_label_text_size)
+            self._bind_auto_height_label(lbl, min_height=dp(18), extra_pad=dp(4))
             box.add_widget(lbl)
             box.add_widget(widget)
             if helper:
                 hlp = Label(text=helper, color=palette["muted"], size_hint_y=None,
                             height=dp(16), halign="left", valign="middle", font_size=dp(10))
                 hlp.bind(size=self._sync_label_text_size)
+                self._bind_auto_height_label(hlp, min_height=dp(14), extra_pad=dp(4))
                 box.add_widget(hlp)
             return box
 
@@ -4696,7 +4896,7 @@ class MediMapProApp(MDApp):
             row.add_widget(lbl)
             if helper:
                 wrap = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(3))
-                wrap.height = dp(68 if is_mobile else 54)
+                wrap.bind(minimum_height=wrap.setter("height"))
                 wrap.add_widget(row)
                 sub = Label(text=helper, color=palette["muted"], size_hint_y=None,
                             height=(dp(22) if is_mobile else dp(14)), halign="left", valign="middle",
@@ -4743,7 +4943,7 @@ class MediMapProApp(MDApp):
             )
             self.preview_hud_title_lbl.bind(size=self._sync_label_text_size)
             hud_drag_hint = Label(
-                text=("tools" if is_mobile else "drag"),
+                text=("selected" if is_mobile else "drag"),
                 color=palette["muted"],
                 size_hint=(None, None),
                 width=(dp(72) if is_mobile else dp(40)),
@@ -4753,7 +4953,9 @@ class MediMapProApp(MDApp):
                 font_size=dp(9.5),
             )
             hud_drag_hint.bind(size=self._sync_label_text_size)
-            self.btn_hud_pin = self._make_compact_action_button("—", tone="accent")
+            self.btn_hud_pin = self._make_compact_action_button(("Hide" if is_mobile else "—"), tone="accent")
+            self.btn_hud_pin._expanded_label = "Hide" if is_mobile else "—"
+            self.btn_hud_pin._collapsed_label = "Show" if is_mobile else "✦"
             self.btn_hud_pin.size_hint = (None, None)
             self.btn_hud_pin.size = ((dp(54), dp(32)) if is_mobile else (dp(38), dp(26)))
             hud_header.add_widget(self.preview_hud_title_lbl)
@@ -4763,7 +4965,7 @@ class MediMapProApp(MDApp):
             hud_body = BoxLayout(orientation="vertical", spacing=dp(5), size_hint_y=None)
             hud_body.bind(minimum_height=hud_body.setter("height"))
             self.preview_hud_detail_lbl = Label(
-                text="Hover or tap a box to inspect it here.",
+                text=("Tap or drag over a box to inspect it here." if is_mobile else "Hover or tap a box to inspect it here."),
                 color=palette["text"],
                 size_hint_y=None,
                 height=dp(32),
@@ -4857,20 +5059,7 @@ class MediMapProApp(MDApp):
         brand_wrap.add_widget(hero_sub)
         appbar.add_widget(brand_wrap)
 
-        if is_mobile:
-            self.mobile_meta_lbl = Label(
-                text="P1 • B0 • S0",
-                color=palette["muted"],
-                size_hint=(None, None),
-                width=dp(104),
-                height=dp(28),
-                halign="center",
-                valign="middle",
-                font_size=dp(9.8),
-            )
-            self.mobile_meta_lbl.bind(size=self._sync_label_text_size)
-            style_card(self.mobile_meta_lbl, palette["chip"], radius=dp(14))
-            appbar.add_widget(self.mobile_meta_lbl)
+        self.mobile_meta_lbl = None
 
         status_chip = Label(
             text=("Ready • Open a PDF to begin" if is_mobile else "Ready • Import a PDF, then refresh or run detect"),
@@ -4961,7 +5150,7 @@ class MediMapProApp(MDApp):
             fg = (1, 1, 1, 1) if active else palette["text"]
             if hasattr(btn, "tone"):
                 try:
-                    btn.tone = "primary" if active else "soft"
+                    btn.tone = "primary" if active else "plain"
                 except Exception:
                     pass
             if hasattr(btn, "md_bg_color"):
@@ -5041,9 +5230,9 @@ class MediMapProApp(MDApp):
                 bar_width=0,
                 scroll_type=["content"],
                 size_hint_y=None,
-                height=dp(34),
+                height=dp(38),
             )
-            row = BoxLayout(orientation="horizontal", spacing=dp(6), size_hint=(None, None), height=dp(34))
+            row = BoxLayout(orientation="horizontal", spacing=dp(7), size_hint=(None, None), height=dp(38))
             row.bind(minimum_width=row.setter("width"))
             display_map = {
                 "Files": "Files",
@@ -5056,7 +5245,7 @@ class MediMapProApp(MDApp):
             for name in section_names:
                 btn = self._make_compact_action_button(display_map.get(name, name), tone="ghost")
                 btn.size_hint = (None, None)
-                btn.size = (dp(78), dp(30))
+                btn.size = (dp(90), dp(34))
                 btn.bind(on_release=lambda inst, n=name: _show_mobile_section(n))
                 self._mobile_section_buttons[name] = btn
                 row.add_widget(btn)
@@ -5135,6 +5324,7 @@ class MediMapProApp(MDApp):
         explain = Label(text="F = field sizing  •  Line = answer lines  •  C = checkbox tuning  •  Ext = contour extent limits",
                         color=palette["muted"], size_hint_y=None, height=dp(18), halign="left", valign="middle", font_size=dp(11))
         explain.bind(size=self._sync_label_text_size)
+        self._bind_auto_height_label(explain, min_height=dp(18), extra_pad=dp(4))
         detect_body.add_widget(explain)
 
         self.f_area = make_input(DEFAULTS["F_Area"], "500", input_filter="int")
@@ -5182,10 +5372,8 @@ class MediMapProApp(MDApp):
             labeled_field("Approx Eps", self.c_eps),
             labeled_checkbox("Use Extent", self.use_extent_chk, "Use contour extent as an extra checkbox filter"),
         ]
-        det_grid = GridLayout(cols=2 if is_mobile else 3, spacing=dp(8), size_hint_y=None)
-        rows = (len(detection_fields)+det_grid.cols-1)//det_grid.cols
-        max_cell_h = max(w.height for w in detection_fields)
-        det_grid.height = rows * max_cell_h + max(rows-1,0)*dp(8)
+        det_grid = GridLayout(cols=1 if is_mobile else 3, spacing=dp(8), size_hint_y=None)
+        det_grid.bind(minimum_height=det_grid.setter("height"))
         for w in detection_fields:
             det_grid.add_widget(w)
         detect_body.add_widget(det_grid)
@@ -5362,14 +5550,15 @@ class MediMapProApp(MDApp):
 
         hover_section_body = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
         hover_section_body.bind(minimum_height=hover_section_body.setter("height"))
-        self.inspector_hover_lbl = Label(text="Hover a box to see quick details.", color=palette["muted"], size_hint_y=None, height=dp(40), halign="left", valign="middle", font_size=dp(11))
+        self.inspector_hover_lbl = Label(text=("Tap or drag over a box to see quick details." if is_mobile else "Hover a box to see quick details."), color=palette["muted"], size_hint_y=None, height=dp(40), halign="left", valign="middle", font_size=dp(11))
         self.inspector_hover_lbl.bind(size=self._sync_label_text_size)
         self._bind_auto_height_label(self.inspector_hover_lbl, min_height=dp(36), extra_pad=dp(6))
-        hover_section_body.add_widget(labeled_field("Hover Details", self.inspector_hover_lbl))
+        pointer_label = "Touched Box" if is_mobile else "Hover Details"
+        hover_section_body.add_widget(labeled_field(pointer_label, self.inspector_hover_lbl))
 
         selection_body.add_widget(self._build_collapsible_panel("Selection Summary", selection_box_body, start_open=True))
         selection_body.add_widget(self._build_collapsible_panel("Mapping Details", mapping_section_body, start_open=True))
-        selection_body.add_widget(self._build_collapsible_panel("Hover Details", hover_section_body, start_open=False))
+        selection_body.add_widget(self._build_collapsible_panel(pointer_label, hover_section_body, start_open=False))
         self._desktop_right_section_cards = {}
         self._desktop_right_section_buttons = {}
         self._desktop_right_section_host = None
@@ -5416,7 +5605,7 @@ class MediMapProApp(MDApp):
             except Exception:
                 pass
 
-            self.btn_sidebar_toggle = self._make_compact_action_button("Tools", tone="ghost")
+            self.btn_sidebar_toggle = self._make_compact_action_button("Menu", tone="ghost")
             self.btn_sidebar_toggle.size_hint = (None, None)
             self.btn_sidebar_toggle.size = (dp(56), dp(30))
             appbar.add_widget(self.btn_sidebar_toggle)
@@ -5464,14 +5653,14 @@ class MediMapProApp(MDApp):
             self.preview_shell.bind(size=self._on_preview_viewport_change, pos=self._on_preview_viewport_change)
             self.preview.bind(size=self._sync_preview_stack_size)
             self.preview_info = Label(
-                text=("" if is_mobile else "Tap boxes to multi-select • Double-tap box to map • Triple-tap empty zoom • Pinch pan"),
+                text=("Tap = select • Double-tap = map • Pinch = pan/zoom" if is_mobile else "Tap boxes to multi-select • Double-tap box to map • Triple-tap empty zoom • Pinch pan"),
                 color=palette["muted"],
                 size_hint_y=None,
-                height=(0 if is_mobile else dp(18)),
+                height=(dp(18) if is_mobile else dp(18)),
                 halign="left",
                 valign="middle",
-                font_size=(dp(9) if is_mobile else dp(10)),
-                opacity=(0 if is_mobile else 1),
+                font_size=(dp(8.8) if is_mobile else dp(10)),
+                opacity=(0.92 if is_mobile else 1),
             )
             self.preview_info.bind(size=self._sync_label_text_size)
             preview_stack.add_widget(self.preview_info)
@@ -5489,58 +5678,41 @@ class MediMapProApp(MDApp):
             self.preview_hud.disabled = True
             preview_stage.add_widget(self.preview_hud)
 
-            self.btn_show_hud = self._make_compact_action_button("HUD", tone="secondary")
-            self.btn_show_hud.size_hint = (None, None)
-            self.btn_show_hud.size = (dp(56), dp(34))
-            self.btn_show_hud.pos_hint = {"right": 0.985, "y": 0.07}
-            self.btn_show_hud.opacity = 0
-            self.btn_show_hud.disabled = True
-            self.btn_show_hud.bind(on_release=lambda *_: self._restore_mobile_hud())
-            preview_stage.add_widget(self.btn_show_hud)
+            self.btn_show_hud = None
 
             self.preview_shell.add_widget(preview_stage)
             stage_column.add_widget(self.preview_shell)
 
             quick_rail = BoxLayout(
                 orientation="vertical",
-                spacing=dp(4),
+                spacing=dp(5),
                 size_hint=(None, None),
                 width=dp(84),
-                height=dp(360),
-                padding=[dp(7), dp(8), dp(7), dp(8)],
+                height=dp(134),
+                padding=[dp(7), dp(7), dp(7), dp(7)],
                 pos_hint={"right": 0.992, "center_y": 0.56},
             )
             style_card(quick_rail, palette["surface_alt"], radius=dp(16))
-            self.btn_mobile_rail_detect = self._make_compact_action_button("Detect", tone="accent")
-            self.btn_mobile_rail_detect.bind(on_release=self.on_run_detect)
-            self.btn_mobile_rail_prev = self._make_compact_action_button("Prev", tone="ghost")
-            self.btn_mobile_rail_prev.bind(on_release=self.on_prev_page)
-            self.btn_mobile_rail_next = self._make_compact_action_button("Next", tone="ghost")
-            self.btn_mobile_rail_next.bind(on_release=self.on_next_page)
+            self.btn_mobile_rail_detect = None
+            self.btn_mobile_rail_prev = None
+            self.btn_mobile_rail_next = None
             self.btn_mobile_rail_fit_page = self._make_compact_action_button("Fit Pg", tone="ghost")
             self.btn_mobile_rail_fit_page.bind(on_release=self._fit_preview_page)
             self.btn_mobile_rail_fit_width = self._make_compact_action_button("Fit W", tone="ghost")
             self.btn_mobile_rail_fit_width.bind(on_release=self._fit_preview_width)
-            self.btn_mobile_rail_zoom_in = self._make_compact_action_button("Zoom +", tone="mini")
-            self.btn_mobile_rail_zoom_in.bind(on_release=lambda *_: self._zoom_preview("in"))
-            self.btn_mobile_rail_zoom_out = self._make_compact_action_button("Zoom -", tone="mini")
-            self.btn_mobile_rail_zoom_out.bind(on_release=lambda *_: self._zoom_preview("out"))
+            self.btn_mobile_rail_zoom_in = None
+            self.btn_mobile_rail_zoom_out = None
             self.btn_mobile_rail_zoom_reset = self._make_compact_action_button("100%", tone="ghost")
             self.btn_mobile_rail_zoom_reset.bind(on_release=lambda *_: self._zoom_preview("reset"))
             self.btn_mobile_map = None
             self.btn_mobile_focus = None
             for w in [
-                self.btn_mobile_rail_detect,
-                self.btn_mobile_rail_prev,
-                self.btn_mobile_rail_next,
-                self.btn_mobile_rail_fit_page,
                 self.btn_mobile_rail_fit_width,
-                self.btn_mobile_rail_zoom_in,
-                self.btn_mobile_rail_zoom_out,
+                self.btn_mobile_rail_fit_page,
                 self.btn_mobile_rail_zoom_reset,
             ]:
                 w.size_hint = (None, None)
-                w.size = (dp(68), dp(34))
+                w.size = (dp(70), dp(34))
                 quick_rail.add_widget(w)
             self.mobile_quick_rail = quick_rail
             self._set_widget_enabled(quick_rail, False)
@@ -5551,59 +5723,71 @@ class MediMapProApp(MDApp):
             bottom_dock = FloatLayout(size_hint=(1, 1))
             bottom_panel = BoxLayout(
                 orientation="vertical",
-                spacing=dp(4),
+                spacing=dp(6),
                 size_hint=(None, None),
-                width=min(Window.width - dp(24), dp(560)),
-                height=dp(132),
-                padding=[dp(6), dp(6), dp(6), dp(6)],
-                pos=(Window.width - min(Window.width - dp(24), dp(560)) - dp(12), dp(64)),
+                width=min(Window.width - dp(24), dp(500)),
+                height=dp(170),
+                padding=[dp(8), dp(8), dp(8), dp(8)],
+                pos=(Window.width - min(Window.width - dp(24), dp(500)) - dp(12), dp(64)),
                 opacity=0,
                 disabled=True,
             )
             style_card(bottom_panel, palette["surface_alt"], radius=dp(16))
-            bottom_bar = GridLayout(
+            primary_row = GridLayout(
                 cols=4,
-                rows=2,
+                rows=1,
                 spacing=dp(4),
                 size_hint=(1, None),
-                height=dp(84),
+                height=dp(40),
+            )
+            view_row = GridLayout(
+                cols=4,
+                rows=1,
+                spacing=dp(4),
+                size_hint=(1, None),
+                height=dp(40),
+            )
+            context_row = GridLayout(
+                cols=4,
+                rows=1,
+                spacing=dp(4),
+                size_hint=(1, None),
+                height=dp(40),
             )
             self.btn_mobile_prev = self._make_compact_action_button("Prev", tone="plain")
             self.btn_mobile_prev.bind(on_release=self.on_prev_page)
             self.page_input_mobile = make_input("0", "Pg", input_filter="int")
             self.page_input_mobile.size_hint = (None, None)
-            self.page_input_mobile.size = (dp(54), dp(34))
+            self.page_input_mobile.size = (dp(58), dp(36))
             self.page_input_mobile.bind(text=self._mirror_page_inputs)
             self.btn_mobile_next = self._make_compact_action_button("Next", tone="plain")
             self.btn_mobile_next.bind(on_release=self.on_next_page)
-            self.btn_mobile_fit_width = self._make_compact_action_button("Fit W", tone="soft")
+            self.btn_mobile_fit_width = self._make_compact_action_button("Fit W", tone="ghost")
             self.btn_mobile_fit_width.bind(on_release=self._fit_preview_width)
-            self.btn_mobile_fit_page = self._make_compact_action_button("Fit Pg", tone="soft")
+            self.btn_mobile_fit_page = self._make_compact_action_button("Fit Pg", tone="ghost")
             self.btn_mobile_fit_page.bind(on_release=self._fit_preview_page)
-            self.btn_mobile_zoom_out = self._make_compact_action_button("Zoom -", tone="soft")
+            self.btn_mobile_zoom_out = self._make_compact_action_button("Zoom -", tone="mini")
             self.btn_mobile_zoom_out.bind(on_release=lambda *_: self._zoom_preview("out"))
-            self.btn_mobile_zoom_in = self._make_compact_action_button("Zoom +", tone="soft")
+            self.btn_mobile_zoom_in = self._make_compact_action_button("Zoom +", tone="mini")
             self.btn_mobile_zoom_in.bind(on_release=lambda *_: self._zoom_preview("in"))
-            self.btn_mobile_zoom_reset = self._make_compact_action_button("100%", tone="soft")
+            self.btn_mobile_zoom_reset = self._make_compact_action_button("100%", tone="ghost")
             self.btn_mobile_zoom_reset.bind(on_release=lambda *_: self._zoom_preview("reset"))
-            self.btn_mobile_focus = self._make_compact_action_button("Focus", tone="plain")
-            self.btn_mobile_focus.bind(on_release=self._focus_selected_preview_box)
-            self.btn_mobile_map = self._make_compact_action_button("Map", tone="secondary")
-            self.btn_mobile_map.bind(on_release=self._open_mapping_from_hud)
+            self.btn_mobile_focus = None
+            self.btn_mobile_map = None
             self.btn_mobile_refresh = self._make_compact_action_button("Refresh", tone="soft")
             self.btn_mobile_refresh.bind(on_release=self.on_preview)
             self.btn_mobile_detect_bar = self._make_compact_action_button("Detect", tone="accent")
             self.btn_mobile_detect_bar.bind(on_release=self.on_run_detect)
             self.btn_mobile_select_mode = self._make_compact_action_button("Select Off", tone="plain")
             self.btn_mobile_select_mode.bind(on_release=self._toggle_mobile_selection_mode)
-            self.btn_mobile_sidebar = self._make_compact_action_button("Menu", tone="primary")
+            self.btn_mobile_sidebar = self._make_compact_action_button("Menu", tone="ghost")
             self.btn_mobile_sidebar.bind(on_release=lambda *_: self._toggle_mobile_sidebar())
-            self.btn_mobile_more = self._make_compact_action_button("More", tone="ghost")
-            self.btn_mobile_more.bind(on_release=self._toggle_mobile_quick_rail)
-            self.btn_mobile_tools_fab = self._make_compact_action_button("≡", tone="accent")
+            self.btn_mobile_more = self._make_compact_action_button("Inspect", tone="secondary")
+            self.btn_mobile_more.bind(on_release=self._toggle_mobile_inspect_panel)
+            self.btn_mobile_tools_fab = self._make_compact_action_button("Tools", tone="primary")
             self.btn_mobile_tools_fab.size_hint = (None, None)
-            self.btn_mobile_tools_fab.size = (dp(50), dp(50))
-            self.btn_mobile_tools_fab.pos = (Window.width - dp(62), dp(12))
+            self.btn_mobile_tools_fab.size = (dp(88), dp(48))
+            self.btn_mobile_tools_fab.pos = (Window.width - dp(86), dp(12))
             self.btn_mobile_tools_fab.bind(on_release=self._toggle_mobile_tools_tray)
             self.page_input = self.page_input_mobile
             self.btn_mobile_prev.text = "Prev"
@@ -5616,32 +5800,42 @@ class MediMapProApp(MDApp):
             self.btn_mobile_detect_bar.text = "Detect"
             self.btn_mobile_select_mode.text = "Select Off"
             self.btn_mobile_sidebar.text = "Menu"
-            self.btn_mobile_more.text = "More"
+            self.btn_mobile_more.text = "Inspect"
             for widget in [
                 self.btn_mobile_prev,
                 self.page_input_mobile,
                 self.btn_mobile_next,
                 self.btn_mobile_detect_bar,
-                self.btn_mobile_zoom_out,
-                self.btn_mobile_zoom_in,
-                self.btn_mobile_fit_width,
-                self.btn_mobile_select_mode,
             ]:
                 widget.size_hint = (1, None)
                 widget.height = dp(38)
-                bottom_bar.add_widget(widget)
-            bottom_panel.add_widget(bottom_bar)
-            aux_row = BoxLayout(orientation="horizontal", spacing=dp(4), size_hint=(1, None), height=dp(38))
-            for widget in [self.btn_mobile_fit_page, self.btn_mobile_zoom_reset, self.btn_mobile_focus, self.btn_mobile_map, self.btn_mobile_refresh, self.btn_mobile_sidebar, self.btn_mobile_more]:
+                primary_row.add_widget(widget)
+            for widget in [
+                self.btn_mobile_fit_width,
+                self.btn_mobile_fit_page,
+                self.btn_mobile_zoom_out,
+                self.btn_mobile_zoom_in,
+            ]:
                 widget.size_hint = (1, None)
                 widget.height = dp(38)
-                aux_row.add_widget(widget)
-            bottom_panel.add_widget(aux_row)
+                view_row.add_widget(widget)
+            for widget in [
+                self.btn_mobile_zoom_reset,
+                self.btn_mobile_select_mode,
+                self.btn_mobile_more,
+                self.btn_mobile_sidebar,
+            ]:
+                widget.size_hint = (1, None)
+                widget.height = dp(38)
+                context_row.add_widget(widget)
+            bottom_panel.add_widget(primary_row)
+            bottom_panel.add_widget(view_row)
+            bottom_panel.add_widget(context_row)
             bottom_dock.add_widget(bottom_panel)
             bottom_dock.add_widget(self.btn_mobile_tools_fab)
             self.mobile_bottom_dock = bottom_dock
             self.mobile_bottom_panel = bottom_panel
-            self.mobile_bottom_bar = bottom_bar
+            self.mobile_bottom_bar = primary_row
             self.mobile_tools_tray_open = False
             workspace.add_widget(bottom_dock)
 
@@ -6099,9 +6293,7 @@ class MediMapProApp(MDApp):
         self.statusbar_boxes_lbl.text = f"Boxes: {box_count} • Selected: {sel_count}"
         self.statusbar_ready_lbl.text = f"Ready: {readiness}"
         if hasattr(self, "mobile_meta_lbl") and self.mobile_meta_lbl is not None:
-            zoom_attr = "preview_zoom_factor" if getattr(self, "ui_mobile", False) else "desktop_zoom_factor"
-            zoom_pct = int(round(float(getattr(self, zoom_attr, 1.0) or 1.0) * 100))
-            self.mobile_meta_lbl.text = f"Page {page_idx + 1}/{max(total_pages, 1)} • Boxes {box_count} • Sel {sel_count} • Zoom {zoom_pct}%"
+            self.mobile_meta_lbl.text = ""
 
     def _bind_desktop_shortcuts(self):
         if platform == "android":
@@ -6743,8 +6935,6 @@ class MediMapProApp(MDApp):
             ("btn_mobile_tools_fab", True),
             ("btn_clear_mapping", bool(getattr(self.engine, "selected_box_ids", []))),
             ("btn_toolbar_export", export_ready),
-            ("btn_mobile_map", assign_ready),
-            ("btn_mobile_focus", bool(getattr(self.engine, "selected_box_ids", []))),
             ("btn_learning_refresh", True),
             ("btn_learning_reload", True),
             ("btn_learning_save_revision", has_pdf),
@@ -7347,6 +7537,7 @@ class MediMapProApp(MDApp):
             return
         fab = getattr(self, "btn_mobile_tools_fab", None)
         panel = getattr(self, "mobile_bottom_panel", None)
+        tray_open = bool(getattr(self, "mobile_tools_tray_open", False))
         if fab is not None:
             try:
                 fab.pos = (max(dp(8), Window.width - fab.width - dp(12)), dp(12))
@@ -7354,25 +7545,43 @@ class MediMapProApp(MDApp):
                 pass
         if panel is not None:
             try:
-                panel.width = min(Window.width - dp(24), dp(560))
+                panel.width = min(Window.width - dp(24), dp(500))
                 panel.x = max(dp(12), Window.width - panel.width - dp(12))
-                panel.y = dp(70)
+                if tray_open:
+                    panel.height = dp(170)
+                    panel.y = dp(72)
+                else:
+                    panel.height = 0
+                    panel.y = -10000
             except Exception:
                 pass
 
     def _set_mobile_tools_tray_visible(self, open_state=True):
         self.mobile_tools_tray_open = bool(open_state)
+        if self.mobile_tools_tray_open and bool(getattr(self, "_mobile_sidebar_open", False)):
+            self._set_mobile_sidebar_state(False)
+        self._set_mobile_quick_rail_visible(False)
         panel = getattr(self, "mobile_bottom_panel", None)
         fab = getattr(self, "btn_mobile_tools_fab", None)
         if panel is not None:
             panel.opacity = 1 if self.mobile_tools_tray_open else 0
             panel.disabled = not self.mobile_tools_tray_open
+            try:
+                panel.size_hint = (None, None)
+                if self.mobile_tools_tray_open:
+                    panel.height = dp(170)
+                else:
+                    panel.height = 0
+                    panel.pos = (-10000, -10000)
+            except Exception:
+                pass
         if fab is not None:
             try:
-                fab.text = "×" if self.mobile_tools_tray_open else "≡"
+                fab.text = "Close" if self.mobile_tools_tray_open else "Tools"
             except Exception:
                 pass
         self._sync_mobile_tools_layout()
+        self._refresh_mobile_hud_restore_button()
 
     def _toggle_mobile_tools_tray(self, *_):
         self._set_mobile_tools_tray_visible(not bool(getattr(self, "mobile_tools_tray_open", False)))
@@ -7401,26 +7610,44 @@ class MediMapProApp(MDApp):
 
     def _set_mobile_quick_rail_visible(self, open_state=True):
         self._mobile_quick_rail_open = bool(open_state)
+        if self._mobile_quick_rail_open and bool(getattr(self, "mobile_tools_tray_open", False)):
+            self._set_mobile_tools_tray_visible(False)
+        if self._mobile_quick_rail_open and bool(getattr(self, "_mobile_sidebar_open", False)):
+            self._set_mobile_sidebar_state(False)
         rail = getattr(self, "mobile_quick_rail", None)
-        btn = getattr(self, "btn_mobile_more", None)
         if rail is not None:
             rail.opacity = 1 if self._mobile_quick_rail_open else 0
             rail.disabled = not self._mobile_quick_rail_open
             try:
                 rail.size_hint = (None, None)
-                rail.size = (dp(84), dp(360)) if self._mobile_quick_rail_open else (0, 0)
+                rail.size = (dp(84), dp(134)) if self._mobile_quick_rail_open else (0, 0)
                 if not self._mobile_quick_rail_open:
                     rail.pos = (-10000, -10000)
             except Exception:
                 pass
-        if btn is not None:
-            try:
-                btn.text = "Less" if self._mobile_quick_rail_open else "More"
-            except Exception:
-                pass
+        self._refresh_mobile_hud_restore_button()
 
     def _toggle_mobile_quick_rail(self, *_):
         self._set_mobile_quick_rail_visible(not bool(getattr(self, "_mobile_quick_rail_open", False)))
+
+    def _toggle_mobile_inspect_panel(self, *_):
+        hud = getattr(self, "preview_hud", None)
+        sel_ids = sorted(set(int(x) for x in getattr(self.engine, "selected_box_ids", []) if isinstance(x, int) or str(x).isdigit())) if hasattr(self, "engine") else []
+        if not sel_ids:
+            self._toggle_mobile_quick_rail()
+            return
+        if hud is None:
+            return
+        self._set_mobile_quick_rail_visible(False)
+        if bool(getattr(hud, "_collapsed", False)):
+            self._restore_mobile_hud()
+        else:
+            try:
+                hud.toggle_collapsed()
+            except Exception:
+                hud._collapsed = True
+                hud._refresh_collapse_state()
+        self._refresh_mobile_hud_restore_button()
 
     def _refresh_mobile_action_visibility(self):
         if not getattr(self, "ui_mobile", False):
@@ -7428,15 +7655,13 @@ class MediMapProApp(MDApp):
         selected = bool(getattr(self.engine, "selected_box_ids", []))
         hud_btn = getattr(self, "btn_show_hud", None)
         if hud_btn is not None:
-            if selected and bool(getattr(getattr(self, "preview_hud", None), "_collapsed", False)):
-                hud_btn.opacity = 1
-                hud_btn.disabled = False
-            elif selected:
-                hud_btn.opacity = 0
-                hud_btn.disabled = True
-            else:
-                hud_btn.opacity = 0
-                hud_btn.disabled = True
+            hud_btn.opacity = 0
+            hud_btn.disabled = True
+            try:
+                hud_btn.size = (0, 0)
+                hud_btn.pos = (-10000, -10000)
+            except Exception:
+                pass
         self._refresh_mobile_select_mode_ui()
         rail = getattr(self, "mobile_quick_rail", None)
         if rail is not None:
@@ -7445,22 +7670,14 @@ class MediMapProApp(MDApp):
             rail.disabled = not rail_open
             try:
                 rail.size_hint = (None, None)
-                if rail_open:
-                    rail.size = (dp(84), dp(360))
-                    rail.pos_hint = {"right": 0.992, "center_y": 0.56}
-                else:
-                    rail.size = (0, 0)
+                rail.size = (dp(84), dp(134)) if rail_open else (0, 0)
+                if not rail_open:
                     rail.pos = (-10000, -10000)
             except Exception:
                 pass
         for attr in (
-            "btn_mobile_rail_detect",
-            "btn_mobile_rail_prev",
-            "btn_mobile_rail_next",
             "btn_mobile_rail_fit_page",
             "btn_mobile_rail_fit_width",
-            "btn_mobile_rail_zoom_in",
-            "btn_mobile_rail_zoom_out",
             "btn_mobile_rail_zoom_reset",
         ):
             btn = getattr(self, attr, None)
@@ -7469,6 +7686,10 @@ class MediMapProApp(MDApp):
 
     def _set_mobile_sidebar_state(self, open_state, *_):
         self._mobile_sidebar_open = bool(open_state)
+        if self._mobile_sidebar_open and bool(getattr(self, "mobile_tools_tray_open", False)):
+            self._set_mobile_tools_tray_visible(False)
+        if self._mobile_sidebar_open and bool(getattr(self, "_mobile_quick_rail_open", False)):
+            self._set_mobile_quick_rail_visible(False)
         sidebar = getattr(self, "mobile_sidebar", None)
         scrim = getattr(self, "mobile_sidebar_scrim", None)
         if sidebar is not None:
@@ -7502,19 +7723,27 @@ class MediMapProApp(MDApp):
         self._set_mobile_sidebar_state(not getattr(self, "_mobile_sidebar_open", False))
 
     def on_preview_box_hover(self, hit):
+        is_mobile = bool(getattr(self, "ui_mobile", False))
+        verb = "Touched" if is_mobile else "Hover"
+        action_word = "touching" if is_mobile else "hovering"
         if not hit:
+            if hasattr(self, "inspector_hover_lbl") and self.inspector_hover_lbl is not None:
+                self.inspector_hover_lbl.text = ("Tap or drag over a box to see quick details." if is_mobile else "Hover a box to see quick details.")
+            if hasattr(self, "desktop_status_detail_lbl") and self.desktop_status_detail_lbl is not None:
+                self.desktop_status_detail_lbl.text = "Ready • No box targeted"
+            self._update_preview_hud(hit=None)
             return
         mapping = hit.get("mapping") or "Unmapped"
-        hover_text = f"Hover Box {hit['id']} | Type: {hit.get('t', 'field')} | {mapping}"
+        hover_text = f"{verb} Box {hit['id']} | Type: {hit.get('t', 'field')} | {mapping}"
         sel_ids = sorted(set(int(x) for x in getattr(self.engine, 'selected_box_ids', []) if isinstance(x, int) or str(x).isdigit()))
         if sel_ids:
             first = sel_ids[0]
             sel_mapping = self.engine.describe_box_mapping(first, self.current_page_idx())
-            self.preview_info.text = f"Selected: {sel_ids} | Hovering box {hit['id']} | {sel_mapping}"
+            self.preview_info.text = f"Selected: {sel_ids} | {action_word.capitalize()} box {hit['id']} | {sel_mapping}"
         else:
             self.preview_info.text = hover_text
         if hasattr(self, "desktop_status_detail_lbl") and self.desktop_status_detail_lbl is not None:
-            self.desktop_status_detail_lbl.text = f"Hover • Box {hit['id']} • {mapping}"
+            self.desktop_status_detail_lbl.text = f"{verb} • Box {hit['id']} • {mapping}"
         if hasattr(self, "inspector_hover_lbl") and self.inspector_hover_lbl is not None:
             self.inspector_hover_lbl.text = hover_text
         self._update_preview_hud(hit=hit)
@@ -7622,17 +7851,21 @@ class MediMapProApp(MDApp):
     def _make_compact_action_button(self, text, tone="plain"):
         palette = getattr(self, "ui_palette", {}) or {}
         if bool(getattr(self, "_is_mobile_ui", getattr(self, "ui_mobile", False))):
-            tone_alias = {"ghost": "soft", "mini": "soft"}
-            actual_tone = tone_alias.get(tone, tone)
+            actual_tone = tone if tone in {"primary", "accent", "secondary", "soft", "plain", "ghost", "mini", "danger"} else "plain"
+            compact_height = dp(34 if tone not in ("mini", "ghost") else (29 if tone == "mini" else 31))
+            compact_font = dp(9.6 if tone not in ("mini", "ghost") else (8.7 if tone == "mini" else 9.0))
+            compact_radius = dp(10 if tone not in ("mini", "ghost") else (9 if tone == "mini" else 10))
+            compact_padding = [dp(8), dp(4), dp(8), dp(4)] if tone != "mini" else [dp(7), dp(3), dp(7), dp(3)]
             btn = NeoMobileButton(
                 text=str(text),
                 tone=actual_tone,
                 theme=palette,
+                compact_mode=True,
                 size_hint_y=None,
-                height=dp(26),
-                font_size=dp(8.8),
-                corner_radius=dp(8),
-                padding=[dp(6), dp(3), dp(6), dp(3)],
+                height=compact_height,
+                font_size=compact_font,
+                corner_radius=compact_radius,
+                padding=compact_padding,
             )
             return btn
         tone_map = {
@@ -7641,8 +7874,9 @@ class MediMapProApp(MDApp):
             "secondary": palette.get("secondary", palette.get("accent", (0.10, 0.78, 0.63, 1))),
             "soft": palette.get("surface_soft", (0.135, 0.16, 0.215, 1)),
             "plain": palette.get("chip", (0.13, 0.18, 0.27, 1)),
-            "ghost": palette.get("chip", (0.13, 0.18, 0.27, 1)),
-            "mini": palette.get("surface_soft", (0.135, 0.16, 0.215, 1)),
+            "ghost": palette.get("ghost", palette.get("chip", (0.13, 0.18, 0.27, 1))),
+            "mini": palette.get("mini", palette.get("surface_soft", (0.135, 0.16, 0.215, 1))),
+            "danger": palette.get("danger", (0.92, 0.32, 0.42, 1)),
         }
         return Button(
             text=str(text),
@@ -7744,13 +7978,34 @@ class MediMapProApp(MDApp):
         btn = getattr(self, "btn_show_hud", None)
         hud = getattr(self, "preview_hud", None)
         sel_ids = sorted(set(int(x) for x in getattr(self.engine, "selected_box_ids", []) if isinstance(x, int) or str(x).isdigit())) if hasattr(self, "engine") else []
-        if btn is None or hud is None:
+        if btn is not None:
+            btn.disabled = True
+            btn.opacity = 0
+            try:
+                btn.size = (0, 0)
+                btn.pos = (-10000, -10000)
+            except Exception:
+                pass
+        inspect_btn = getattr(self, "btn_mobile_more", None)
+        if inspect_btn is None:
             return
-        collapsed = bool(getattr(hud, "_collapsed", False))
-        should_show = bool(sel_ids) and collapsed
-        btn.disabled = not should_show
-        btn.opacity = 1 if should_show else 0
-        btn.height = dp(34) if should_show else 0
+        has_selection = bool(sel_ids)
+        collapsed = bool(getattr(hud, "_collapsed", False)) if hud is not None else False
+        rail_open = bool(getattr(self, "_mobile_quick_rail_open", False))
+        try:
+            if has_selection:
+                inspect_btn.text = "Show HUD" if collapsed else "Hide HUD"
+                inspect_btn.tone = "secondary"
+                inspect_btn.opacity = 1.0
+            else:
+                inspect_btn.text = "Hide View" if rail_open else "View"
+                inspect_btn.tone = "ghost"
+                inspect_btn.opacity = 0.92
+            if hasattr(inspect_btn, "_update_graphics"):
+                inspect_btn._update_graphics()
+            inspect_btn.disabled = False
+        except Exception:
+            pass
 
     def _restore_mobile_hud(self, *_):
         hud = getattr(self, "preview_hud", None)
@@ -7776,12 +8031,9 @@ class MediMapProApp(MDApp):
             if not sel_ids:
                 hud.opacity = 0
                 hud.disabled = True
-                if bool(getattr(hud, "_collapsed", False)):
-                    self._refresh_mobile_hud_restore_button()
-                else:
-                    self.btn_show_hud.opacity = 0 if hasattr(self, "btn_show_hud") else 0
+                self._refresh_mobile_hud_restore_button()
                 title = "Preview HUD"
-                detail = "Select a box to show actions."
+                detail = ("Tap a box to show actions." if getattr(self, "ui_mobile", False) else "Select a box to show actions.")
                 mapping = "Mapping: —"
                 if hasattr(self, "preview_hud_title_lbl") and self.preview_hud_title_lbl is not None:
                     self.preview_hud_title_lbl.text = title
@@ -7799,7 +8051,8 @@ class MediMapProApp(MDApp):
             box_id = int(hit.get("id", -1))
             rect_txt = f"{int(hit.get('x', 0))},{int(hit.get('y', 0))} • {int(hit.get('w', 0))}×{int(hit.get('h', 0))}"
             map_txt = hit.get("mapping") or "Unmapped"
-            title = f"Hover • Box {box_id}"
+            verb = "Touched" if getattr(self, "ui_mobile", False) else "Hover"
+            title = f"{verb} • Box {box_id}"
             detail = f"Type: {hit.get('t', 'field')} • Rect: {rect_txt}"
             mapping = f"Mapping: {map_txt}"
         elif sel_ids:
@@ -7815,7 +8068,7 @@ class MediMapProApp(MDApp):
             mapping = f"Mapping: {map_txt if map_txt and map_txt != 'EMPTY' else 'Unmapped'}"
         else:
             title = "Preview HUD"
-            detail = "Hover or tap a box to inspect it here."
+            detail = ("Tap or drag over a box to inspect it here." if getattr(self, "ui_mobile", False) else "Hover or tap a box to inspect it here.")
             mapping = "Mapping: —"
 
         if hasattr(self, "preview_hud_title_lbl") and self.preview_hud_title_lbl is not None:
