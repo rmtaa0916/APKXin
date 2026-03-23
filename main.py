@@ -1471,8 +1471,17 @@ class MediMapEngine:
         gray = cv2.GaussianBlur(gray, (3, 3), 0)
         return norm_bgr, gray
 
+    def _coerce_rect(self, rect):
+        if rect is None:
+            raise TypeError("rect is None")
+        if hasattr(rect, "x0") and hasattr(rect, "y0") and hasattr(rect, "x1") and hasattr(rect, "y1"):
+            return fitz.Rect(float(rect.x0), float(rect.y0), float(rect.x1), float(rect.y1))
+        if isinstance(rect, (list, tuple)) and len(rect) == 4:
+            return fitz.Rect(float(rect[0]), float(rect[1]), float(rect[2]), float(rect[3]))
+        raise TypeError(f"Unsupported rect type for coercion: {type(rect)!r}")
+
     def _stable_box_sort_key(self, rect, box_type="field"):
-        rect = rect if isinstance(rect, fitz.Rect) else fitz.Rect(*rect)
+        rect = self._coerce_rect(rect)
         type_rank = {"check": 0, "field": 1, "line": 2}.get(str(box_type or "field"), 9)
         return (
             round(float(rect.y0), 2),
@@ -1485,7 +1494,7 @@ class MediMapEngine:
         )
 
     def _stable_box_uid(self, rect, box_type="field"):
-        rect = rect if isinstance(rect, fitz.Rect) else fitz.Rect(*rect)
+        rect = self._coerce_rect(rect)
         return (
             f"{str(box_type or 'field')}|"
             f"{round(float(rect.x0), 2):.2f}|{round(float(rect.y0), 2):.2f}|"
@@ -1501,7 +1510,7 @@ class MediMapEngine:
         paired = []
         for i, rect in enumerate(self.all_boxes):
             box_type = self.box_types[i] if i < len(self.box_types) else "field"
-            paired.append((fitz.Rect(rect), str(box_type or "field")))
+            paired.append((self._coerce_rect(rect), str(box_type or "field")))
         paired.sort(key=lambda item: self._stable_box_sort_key(item[0], item[1]))
         self.all_boxes = [rect for rect, _ in paired]
         self.box_types = [box_type for _, box_type in paired]
@@ -1533,25 +1542,25 @@ class MediMapEngine:
 
     def _cache_detection_for_page(self, page_idx):
         page_idx = int(page_idx)
-        self.boxes_by_page[page_idx] = [fitz.Rect(r) for r in self.all_boxes]
+        self.boxes_by_page[page_idx] = [self._coerce_rect(r) for r in self.all_boxes]
         self.box_types_by_page[page_idx] = list(self.box_types)
         self.box_uids_by_page[page_idx] = list(self.box_uids or [])
         geom_copy = {}
         for key, rects in (self.geom or {}).items():
-            geom_copy[key] = [fitz.Rect(r) for r in rects]
+            geom_copy[key] = [self._coerce_rect(r) for r in rects]
         self.geom_by_page[page_idx] = geom_copy
 
     def _restore_detection_for_page(self, page_idx):
         page_idx = int(page_idx)
         if page_idx not in self.boxes_by_page:
             return False
-        self.all_boxes = [fitz.Rect(r) for r in self.boxes_by_page.get(page_idx, [])]
+        self.all_boxes = [self._coerce_rect(r) for r in self.boxes_by_page.get(page_idx, [])]
         self.box_types = list(self.box_types_by_page.get(page_idx, []))
         self.box_uids = list(self.box_uids_by_page.get(page_idx, []))
         if len(self.box_uids) != len(self.all_boxes):
             self.box_uids = [self._stable_box_uid(r, self.box_types[i] if i < len(self.box_types) else "field") for i, r in enumerate(self.all_boxes)]
         geom_src = self.geom_by_page.get(page_idx, {}) or {}
-        self.geom = {k: [fitz.Rect(r) for r in rects] for k, rects in geom_src.items()}
+        self.geom = {k: [self._coerce_rect(r) for r in rects] for k, rects in geom_src.items()}
         self.detected_page_idx = page_idx
         return True
 
@@ -2531,11 +2540,13 @@ class MediMapEngine:
         return matches.iloc[0]
 
     def _coerce_rect(self, rect):
-        if isinstance(rect, fitz.Rect):
-            return rect
-        if isinstance(rect, RectCompat):
-            return rect
-        return fitz.Rect(*rect)
+        if rect is None:
+            raise TypeError("rect is None")
+        if hasattr(rect, "x0") and hasattr(rect, "y0") and hasattr(rect, "x1") and hasattr(rect, "y1"):
+            return fitz.Rect(float(rect.x0), float(rect.y0), float(rect.x1), float(rect.y1))
+        if isinstance(rect, (list, tuple)) and len(rect) == 4:
+            return fitz.Rect(float(rect[0]), float(rect[1]), float(rect[2]), float(rect[3]))
+        raise TypeError(f"Unsupported rect type for coercion: {type(rect)!r}")
 
     def _collect_overlay_ops(self, patient_name, page_idx=0):
         self._ensure_detection_for_page(page_idx=page_idx)
