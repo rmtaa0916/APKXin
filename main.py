@@ -605,7 +605,7 @@ APP_TITLE = "MediMap Pro: Intelligent Form Automator"
 CONFIG_FILENAME = "medimap_config.json"
 if platform == "android":
     ZOOM = 2.4
-    DETECTION_ZOOM = 3.6
+    DETECTION_ZOOM = 4.0
     PREVIEW_SCALE = 1.35
 else:
     ZOOM = 4.0
@@ -1986,7 +1986,7 @@ class MediMapEngine:
     # --------------------------------------------------------
     # Main detection entry
     # --------------------------------------------------------
-    def run_detection(self, page_idx=0):
+    def run_detection(self, page_idx=0, prepared_bgr=None, prepared_gray=None):
         if not self.pdf_path or not os.path.exists(self.pdf_path):
             raise FileNotFoundError("PDF path is missing or invalid.")
         if not self.supports_detection_backend():
@@ -1998,11 +1998,17 @@ class MediMapEngine:
         self.geom = {"names": [], "dob": [], "phil": []}
 
         detection_zoom = self.get_detection_zoom()
-        img = self._render_detection_page_bgr(self.pdf_path, page_idx=page_idx)
-        if img is None or getattr(img, "size", 0) == 0:
-            raise ValueError("Failed to render PDF page into image.")
-
-        norm_img, norm_gray = self._prepare_detection_inputs(img)
+        if prepared_bgr is None or getattr(prepared_bgr, "size", 0) == 0:
+            img = self._render_detection_page_bgr(self.pdf_path, page_idx=page_idx)
+            if img is None or getattr(img, "size", 0) == 0:
+                raise ValueError("Failed to render PDF page into image.")
+            norm_img, norm_gray = self._prepare_detection_inputs(img)
+        else:
+            norm_img = prepared_bgr
+            if prepared_gray is None:
+                _, norm_gray = self._prepare_detection_inputs(prepared_bgr)
+            else:
+                norm_gray = prepared_gray
         img = norm_img
 
         h_img, w_img = img.shape[:2]
@@ -2900,13 +2906,15 @@ class MediMapEngine:
         base = re.sub(r"[_\-]+", " ", base)
         return _safe_slug(base)
 
-    def build_page_fingerprint(self, page_idx=0, img_bgr=None):
+    def build_page_fingerprint(self, page_idx=0, img_bgr=None, prepared_gray=None):
         if img_bgr is None:
             img_bgr = self._render_detection_page_bgr(self.pdf_path, page_idx=page_idx)
         if img_bgr is None or getattr(img_bgr, "size", 0) == 0:
             raise ValueError("Unable to build page fingerprint from an empty image.")
 
-        img_bgr, gray = self._prepare_detection_inputs(img_bgr)
+        gray = prepared_gray
+        if gray is None:
+            img_bgr, gray = self._prepare_detection_inputs(img_bgr)
 
         h, w = img_bgr.shape[:2]
         mean_val = float(np.mean(gray))
@@ -2995,13 +3003,15 @@ class MediMapEngine:
             best["match_kind"] = "fuzzy"
         return best
 
-    def prepare_learning_for_detection(self, page_idx=0):
+    def prepare_learning_for_detection(self, page_idx=0, img_bgr=None, prepared_gray=None):
         if not self.learning_enabled or not self.pdf_path:
             self.current_detection_context = {"page_idx": int(page_idx)}
             return self.current_detection_context
 
-        img = self._render_detection_page_bgr(self.pdf_path, page_idx=page_idx)
-        fingerprint = self.build_page_fingerprint(page_idx=page_idx, img_bgr=img)
+        img = img_bgr
+        if img is None:
+            img = self._render_detection_page_bgr(self.pdf_path, page_idx=page_idx)
+        fingerprint = self.build_page_fingerprint(page_idx=page_idx, img_bgr=img, prepared_gray=prepared_gray)
         profile = self.find_best_profile_match(fingerprint)
         applied = False
         if profile and isinstance(profile.get("settings"), dict):
@@ -3508,6 +3518,7 @@ class MediMapEngine:
         session = {
             "version": 1,
             "saved_at": _utc_now_iso(),
+            "auto_restore_pdf": bool(False if ANDROID else True),
             "pdf_path": str(self.pdf_path or ""),
             "page_idx": int(current_page_idx or 0),
             "detected_page_idx": int(self.detected_page_idx or 0),
@@ -6732,7 +6743,13 @@ class MediMapProApp(MDApp):
                 self.engine.apply_learning_meta(learning_meta)
             if current_ctx:
                 self.engine.current_detection_context = current_ctx
+            self.engine.detected_page_idx = int(session.get("detected_page_idx", page_idx) or page_idx)
+            auto_restore_pdf = bool(session.get("auto_restore_pdf", False if ANDROID else True))
             if not pdf_path or not os.path.exists(pdf_path):
+                self.refresh_learning_ui()
+                return
+            if ANDROID and not auto_restore_pdf:
+                self.set_status(f"Last session restored.\nReopen PDF manually: {os.path.basename(pdf_path)}")
                 self.refresh_learning_ui()
                 return
             total = self.engine.load_pdf(pdf_path)
@@ -8909,8 +8926,12 @@ class MediMapProApp(MDApp):
 
             self.apply_ui_settings_to_engine()
             page_idx = self.current_page_idx()
-            self.engine.prepare_learning_for_detection(page_idx=page_idx)
-            self.engine.run_detection(page_idx=page_idx)
+            prepared_bgr = self.engine._render_detection_page_bgr(self.engine.pdf_path, page_idx=page_idx)
+            if prepared_bgr is None or getattr(prepared_bgr, "size", 0) == 0:
+                raise ValueError("Failed to render PDF page into image.")
+            prepared_bgr, prepared_gray = self.engine._prepare_detection_inputs(prepared_bgr)
+            self.engine.prepare_learning_for_detection(page_idx=page_idx, img_bgr=prepared_bgr, prepared_gray=prepared_gray)
+            self.engine.run_detection(page_idx=page_idx, prepared_bgr=prepared_bgr, prepared_gray=prepared_gray)
             self.engine.finalize_learning_after_detection(page_idx=page_idx)
             self.engine.selected_box_ids = []
             self._stash_page_selection(page_idx)
@@ -9329,3 +9350,4 @@ class MediMapProApp(MDApp):
 
 if __name__ == "__main__":
     MediMapProApp().run()
+
