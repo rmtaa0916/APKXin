@@ -605,7 +605,7 @@ APP_TITLE = "MediMap Pro: Intelligent Form Automator"
 CONFIG_FILENAME = "medimap_config.json"
 if platform == "android":
     ZOOM = 4.0
-    PREVIEW_SCALE = 2.2
+    PREVIEW_SCALE = 1.35
 else:
     ZOOM = 4.0
     PREVIEW_SCALE = 2.2
