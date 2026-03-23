@@ -90,6 +90,7 @@ elif not hasattr(fitz, "Rect"):
 
 from kivy.app import App
 from kivy.clock import Clock
+from kivy.animation import Animation
 from kivy.core.text import Label as CoreLabel
 from kivy.core.window import Window
 from kivy.graphics import Color, Line, Rectangle, RoundedRectangle, Ellipse
@@ -6055,11 +6056,34 @@ class MediMapProApp(MDApp):
 
         if is_mobile:
             root.add_widget(main)
+        root.opacity = 0
+        self._startup_fade_duration = 0.55
         Clock.schedule_once(lambda dt: self.refresh_backend_capabilities_ui(), 0)
         Clock.schedule_once(lambda dt: self.refresh_learning_ui(), 0)
         Clock.schedule_once(lambda dt: self._maybe_restore_learning_session(), 0.15)
 
         return root
+
+    def on_start(self):
+        try:
+            super().on_start()
+        except Exception:
+            pass
+        Clock.schedule_once(self._start_main_ui_fade, 0.08)
+
+    def _start_main_ui_fade(self, *_):
+        root = getattr(self, "root", None)
+        if root is None:
+            return
+        try:
+            Animation.cancel_all(root, "opacity")
+        except Exception:
+            pass
+        root.opacity = 0
+        try:
+            Animation(opacity=1, duration=float(getattr(self, "_startup_fade_duration", 0.55) or 0.55), t="out_quad").start(root)
+        except Exception:
+            root.opacity = 1
 
     # --------------------------------------------------------
     # UI helpers
@@ -7552,6 +7576,7 @@ class MediMapProApp(MDApp):
             return
         fab = getattr(self, "btn_mobile_tools_fab", None)
         panel = getattr(self, "mobile_bottom_panel", None)
+        tray_open = bool(getattr(self, "mobile_tools_tray_open", False))
         if fab is not None:
             try:
                 fab.pos = (max(dp(8), Window.width - fab.width - dp(12)), dp(12))
@@ -7561,7 +7586,12 @@ class MediMapProApp(MDApp):
             try:
                 panel.width = min(Window.width - dp(24), dp(500))
                 panel.x = max(dp(12), Window.width - panel.width - dp(12))
-                panel.y = dp(72)
+                if tray_open:
+                    panel.height = dp(170)
+                    panel.y = dp(72)
+                else:
+                    panel.height = 0
+                    panel.y = -10000
             except Exception:
                 pass
 
@@ -7575,6 +7605,15 @@ class MediMapProApp(MDApp):
         if panel is not None:
             panel.opacity = 1 if self.mobile_tools_tray_open else 0
             panel.disabled = not self.mobile_tools_tray_open
+            try:
+                panel.size_hint = (None, None)
+                if self.mobile_tools_tray_open:
+                    panel.height = dp(170)
+                else:
+                    panel.height = 0
+                    panel.pos = (-10000, -10000)
+            except Exception:
+                pass
         if fab is not None:
             try:
                 fab.text = "Close" if self.mobile_tools_tray_open else "Tools"
