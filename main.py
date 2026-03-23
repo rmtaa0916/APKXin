@@ -604,12 +604,10 @@ def android_render_pdf_page(path, page_idx=0, preview_zoom=1.5):
 APP_TITLE = "MediMap Pro: Intelligent Form Automator"
 CONFIG_FILENAME = "medimap_config.json"
 if platform == "android":
-    ZOOM = 2.4
-    DETECTION_ZOOM = 4.0
-    PREVIEW_SCALE = 1.35
+    ZOOM = 4.0
+    PREVIEW_SCALE = 2.2
 else:
     ZOOM = 4.0
-    DETECTION_ZOOM = 4.0
     PREVIEW_SCALE = 2.2
 
 DEFAULTS = {
@@ -1320,7 +1318,6 @@ class MediMapEngine:
         self.geom = {"names": [], "dob": [], "phil": []}
         self.all_boxes = []
         self.box_types = []
-        self.box_uids = []
         self.custom_mappings = {}
         self.selected_box_ids = []
 
@@ -1330,7 +1327,6 @@ class MediMapEngine:
         self.detected_page_idx = None
         self.boxes_by_page = {}
         self.box_types_by_page = {}
-        self.box_uids_by_page = {}
         self.geom_by_page = {}
 
         self.learning_storage = LearningStorage(app_name="medimap_pro")
@@ -1343,7 +1339,6 @@ class MediMapEngine:
         self.last_saved_revision_id = ""
         self.last_loaded_learning_meta = {}
         self.last_applied_profile_meta = {}
-        self.detection_zoom = float(DETECTION_ZOOM)
 
     # --------------------------------------------------------
     # Data loading
@@ -1421,12 +1416,10 @@ class MediMapEngine:
         self.pdf_path = path
         self.all_boxes = []
         self.box_types = []
-        self.box_uids = []
         self.geom = {"names": [], "dob": [], "phil": []}
         self.detected_page_idx = None
         self.boxes_by_page = {}
         self.box_types_by_page = {}
-        self.box_uids_by_page = {}
         self.geom_by_page = {}
         return total
 
@@ -1443,78 +1436,6 @@ class MediMapEngine:
 
     def _render_pdf_page_bgr(self, path, page_idx=0, preview_zoom=1.5):
         return self.pdf_source.render_page_bgr(path, page_idx=page_idx, preview_zoom=preview_zoom)
-
-    def get_detection_zoom(self):
-        try:
-            return float(getattr(self, "detection_zoom", DETECTION_ZOOM) or DETECTION_ZOOM)
-        except Exception:
-            return float(DETECTION_ZOOM)
-
-    def _render_detection_page_bgr(self, path, page_idx=0):
-        return self._render_pdf_page_bgr(path, page_idx=page_idx, preview_zoom=self.get_detection_zoom())
-
-    def _normalize_detection_bgr(self, img_bgr):
-        if img_bgr is None or getattr(img_bgr, "size", 0) == 0:
-            raise ValueError("Empty image passed to detection normalization.")
-        if len(img_bgr.shape) == 2:
-            img_bgr = cv2.cvtColor(img_bgr, cv2.COLOR_GRAY2BGR)
-        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
-        l, a, b = cv2.split(lab)
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        l = clahe.apply(l)
-        norm = cv2.cvtColor(cv2.merge((l, a, b)), cv2.COLOR_LAB2BGR)
-        return norm
-
-    def _prepare_detection_inputs(self, img_bgr):
-        norm_bgr = self._normalize_detection_bgr(img_bgr)
-        gray = cv2.cvtColor(norm_bgr, cv2.COLOR_BGR2GRAY)
-        gray = cv2.GaussianBlur(gray, (3, 3), 0)
-        return norm_bgr, gray
-
-    def _coerce_rect(self, rect):
-        if rect is None:
-            raise TypeError("rect is None")
-        if hasattr(rect, "x0") and hasattr(rect, "y0") and hasattr(rect, "x1") and hasattr(rect, "y1"):
-            return fitz.Rect(float(rect.x0), float(rect.y0), float(rect.x1), float(rect.y1))
-        if isinstance(rect, (list, tuple)) and len(rect) == 4:
-            return fitz.Rect(float(rect[0]), float(rect[1]), float(rect[2]), float(rect[3]))
-        raise TypeError(f"Unsupported rect type for coercion: {type(rect)!r}")
-
-    def _stable_box_sort_key(self, rect, box_type="field"):
-        rect = self._coerce_rect(rect)
-        type_rank = {"check": 0, "field": 1, "line": 2}.get(str(box_type or "field"), 9)
-        return (
-            round(float(rect.y0), 2),
-            round(float(rect.x0), 2),
-            type_rank,
-            round(float(rect.height), 2),
-            round(float(rect.width), 2),
-            round(float(rect.y1), 2),
-            round(float(rect.x1), 2),
-        )
-
-    def _stable_box_uid(self, rect, box_type="field"):
-        rect = self._coerce_rect(rect)
-        return (
-            f"{str(box_type or 'field')}|"
-            f"{round(float(rect.x0), 2):.2f}|{round(float(rect.y0), 2):.2f}|"
-            f"{round(float(rect.width), 2):.2f}|{round(float(rect.height), 2):.2f}"
-        )
-
-    def _finalize_detected_boxes(self):
-        if not self.all_boxes:
-            self.all_boxes = []
-            self.box_types = []
-            self.box_uids = []
-            return
-        paired = []
-        for i, rect in enumerate(self.all_boxes):
-            box_type = self.box_types[i] if i < len(self.box_types) else "field"
-            paired.append((self._coerce_rect(rect), str(box_type or "field")))
-        paired.sort(key=lambda item: self._stable_box_sort_key(item[0], item[1]))
-        self.all_boxes = [rect for rect, _ in paired]
-        self.box_types = [box_type for _, box_type in paired]
-        self.box_uids = [self._stable_box_uid(rect, box_type) for rect, box_type in paired]
 
 
     def supports_detection_backend(self):
@@ -1542,25 +1463,21 @@ class MediMapEngine:
 
     def _cache_detection_for_page(self, page_idx):
         page_idx = int(page_idx)
-        self.boxes_by_page[page_idx] = [self._coerce_rect(r) for r in self.all_boxes]
+        self.boxes_by_page[page_idx] = [fitz.Rect(r) for r in self.all_boxes]
         self.box_types_by_page[page_idx] = list(self.box_types)
-        self.box_uids_by_page[page_idx] = list(self.box_uids or [])
         geom_copy = {}
         for key, rects in (self.geom or {}).items():
-            geom_copy[key] = [self._coerce_rect(r) for r in rects]
+            geom_copy[key] = [fitz.Rect(r) for r in rects]
         self.geom_by_page[page_idx] = geom_copy
 
     def _restore_detection_for_page(self, page_idx):
         page_idx = int(page_idx)
         if page_idx not in self.boxes_by_page:
             return False
-        self.all_boxes = [self._coerce_rect(r) for r in self.boxes_by_page.get(page_idx, [])]
+        self.all_boxes = [fitz.Rect(r) for r in self.boxes_by_page.get(page_idx, [])]
         self.box_types = list(self.box_types_by_page.get(page_idx, []))
-        self.box_uids = list(self.box_uids_by_page.get(page_idx, []))
-        if len(self.box_uids) != len(self.all_boxes):
-            self.box_uids = [self._stable_box_uid(r, self.box_types[i] if i < len(self.box_types) else "field") for i, r in enumerate(self.all_boxes)]
         geom_src = self.geom_by_page.get(page_idx, {}) or {}
-        self.geom = {k: [self._coerce_rect(r) for r in rects] for k, rects in geom_src.items()}
+        self.geom = {k: [fitz.Rect(r) for r in rects] for k, rects in geom_src.items()}
         self.detected_page_idx = page_idx
         return True
 
@@ -1995,7 +1912,7 @@ class MediMapEngine:
     # --------------------------------------------------------
     # Main detection entry
     # --------------------------------------------------------
-    def run_detection(self, page_idx=0, prepared_bgr=None, prepared_gray=None):
+    def run_detection(self, page_idx=0):
         if not self.pdf_path or not os.path.exists(self.pdf_path):
             raise FileNotFoundError("PDF path is missing or invalid.")
         if not self.supports_detection_backend():
@@ -2003,22 +1920,14 @@ class MediMapEngine:
 
         self.all_boxes = []
         self.box_types = []
-        self.box_uids = []
         self.geom = {"names": [], "dob": [], "phil": []}
 
-        detection_zoom = self.get_detection_zoom()
-        if prepared_bgr is None or getattr(prepared_bgr, "size", 0) == 0:
-            img = self._render_detection_page_bgr(self.pdf_path, page_idx=page_idx)
-            if img is None or getattr(img, "size", 0) == 0:
-                raise ValueError("Failed to render PDF page into image.")
-            norm_img, norm_gray = self._prepare_detection_inputs(img)
-        else:
-            norm_img = prepared_bgr
-            if prepared_gray is None:
-                _, norm_gray = self._prepare_detection_inputs(prepared_bgr)
-            else:
-                norm_gray = prepared_gray
-        img = norm_img
+        img = self._render_pdf_page_bgr(self.pdf_path, page_idx=page_idx, preview_zoom=ZOOM)
+        if img is None or getattr(img, "size", 0) == 0:
+            raise ValueError("Failed to render PDF page into image.")
+
+        if len(img.shape) == 2:
+            img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
 
         h_img, w_img = img.shape[:2]
 
@@ -2048,7 +1957,7 @@ class MediMapEngine:
         self.geom = {"names": [], "dob": [], "phil": []}
         if page_idx == 0:
             y0_roi, y1_roi = int(0.22 * h_img), int(0.82 * h_img)
-            gray_roi = norm_gray[y0_roi:y1_roi, :]
+            gray_roi = cv2.cvtColor(img[y0_roi:y1_roi, :], cv2.COLOR_BGR2GRAY)
             _, bin_roi = cv2.threshold(gray_roi, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
             num, _, stats, _ = cv2.connectedComponentsWithStats(bin_roi)
 
@@ -2062,10 +1971,10 @@ class MediMapEngine:
                 b = [c for c in cands if l <= c[1] / gray_roi.shape[0] <= h]
                 return [
                     fitz.Rect(
-                        x / detection_zoom,
-                        (y + y0_roi) / detection_zoom,
-                        (x + ww) / detection_zoom,
-                        (y + hh + y0_roi) / detection_zoom
+                        x / ZOOM,
+                        (y + y0_roi) / ZOOM,
+                        (x + ww) / ZOOM,
+                        (y + hh + y0_roi) / ZOOM
                     )
                     for x, y, ww, hh in sorted(b, key=lambda t: t[0])
                 ]
@@ -2077,7 +1986,7 @@ class MediMapEngine:
             }
 
         # --- General detection
-        full_gray = norm_gray
+        full_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         base_bin = cv2.threshold(full_gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
 
         bin_checks = base_bin.copy()
@@ -2112,7 +2021,7 @@ class MediMapEngine:
         # --- answer lines
         line_rects = self.find_answer_lines(
             img,
-            detection_zoom,
+            ZOOM,
             min_line_w=line_min_w_val,
             max_line_w=line_max_w_val
         )
@@ -2123,7 +2032,7 @@ class MediMapEngine:
         # --- color-assisted red checkbox detection
         red_color_boxes = self.find_red_checkbox_candidates(
             img,
-            zoom_factor=detection_zoom,
+            zoom_factor=ZOOM,
             min_sz=max(7, checkbox_min_sz - 5),
             max_sz=min(int(checkbox_max_sz), 42),
             border_min=max(0.05, float(red_border_min) * 0.7),
@@ -2154,7 +2063,7 @@ class MediMapEngine:
             ):
                 if self.looks_like_checkbox(bin_checks, x, y, w, h, area):
                     self._append_box_unique(
-                        fitz.Rect(x / detection_zoom, y / detection_zoom, (x + w) / detection_zoom, (y + h) / detection_zoom),
+                        fitz.Rect(x / ZOOM, y / ZOOM, (x + w) / ZOOM, (y + h) / ZOOM),
                         "check",
                         iou_thresh=0.45
                     )
@@ -2166,7 +2075,7 @@ class MediMapEngine:
             ):
                 for fx, fy, fw, fh in self.find_checkbox_rects_in_roi(bin_checks, x, y, w, h):
                     self._append_box_unique(
-                        fitz.Rect(fx / detection_zoom, fy / detection_zoom, (fx + fw) / detection_zoom, (fy + fh) / detection_zoom),
+                        fitz.Rect(fx / ZOOM, fy / ZOOM, (fx + fw) / ZOOM, (fy + fh) / ZOOM),
                         "check",
                         iou_thresh=0.45
                     )
@@ -2178,7 +2087,7 @@ class MediMapEngine:
             ):
                 for fx, fy, fw, fh in self.find_checkbox_rects_in_roi(bin_checks, x, y, w, h):
                     self._append_box_unique(
-                        fitz.Rect(fx / detection_zoom, fy / detection_zoom, (fx + fw) / detection_zoom, (fy + fh) / detection_zoom),
+                        fitz.Rect(fx / ZOOM, fy / ZOOM, (fx + fw) / ZOOM, (fy + fh) / ZOOM),
                         "check",
                         iou_thresh=0.45
                     )
@@ -2186,7 +2095,7 @@ class MediMapEngine:
             elif max(w, h) <= int(red_roi_max_val) and min(w, h) >= checkbox_min_sz:
                 for fx, fy, fw, fh in self.find_checkbox_rects_in_roi(bin_checks, x, y, w, h):
                     self._append_box_unique(
-                        fitz.Rect(fx / detection_zoom, fy / detection_zoom, (fx + fw) / detection_zoom, (fy + fh) / detection_zoom),
+                        fitz.Rect(fx / ZOOM, fy / ZOOM, (fx + fw) / ZOOM, (fy + fh) / ZOOM),
                         "check",
                         iou_thresh=0.45
                     )
@@ -2208,7 +2117,7 @@ class MediMapEngine:
             refined_rect = self._refine_field_rect_from_mask(
                 bin_fields,
                 x, y, w, h,
-                zoom_factor=detection_zoom,
+                zoom_factor=ZOOM,
                 row_frac_thresh=0.45,
                 col_frac_thresh=0.18,
                 min_inner_h=max(18, int(field_min_h_val * 0.45)),
@@ -2220,7 +2129,6 @@ class MediMapEngine:
 
         self._cleanup_field_fragments()
         self._cleanup_line_field_conflicts()
-        self._finalize_detected_boxes()
         self.detected_page_idx = int(page_idx)
         self._cache_detection_for_page(page_idx)
 
@@ -2540,13 +2448,11 @@ class MediMapEngine:
         return matches.iloc[0]
 
     def _coerce_rect(self, rect):
-        if rect is None:
-            raise TypeError("rect is None")
-        if hasattr(rect, "x0") and hasattr(rect, "y0") and hasattr(rect, "x1") and hasattr(rect, "y1"):
-            return fitz.Rect(float(rect.x0), float(rect.y0), float(rect.x1), float(rect.y1))
-        if isinstance(rect, (list, tuple)) and len(rect) == 4:
-            return fitz.Rect(float(rect[0]), float(rect[1]), float(rect[2]), float(rect[3]))
-        raise TypeError(f"Unsupported rect type for coercion: {type(rect)!r}")
+        if isinstance(rect, fitz.Rect):
+            return rect
+        if isinstance(rect, RectCompat):
+            return rect
+        return fitz.Rect(*rect)
 
     def _collect_overlay_ops(self, patient_name, page_idx=0):
         self._ensure_detection_for_page(page_idx=page_idx)
@@ -2906,7 +2812,6 @@ class MediMapEngine:
             "page_idx": int(self.detected_page_idx if page_idx is None else page_idx),
             "boxes": self._serialize_rects(self.all_boxes),
             "box_types": list(self.box_types or []),
-            "box_uids": list(self.box_uids or []),
             "geom": self._serialize_geom_payload(self.geom),
             "selected_box_ids": list(self.selected_box_ids or []),
         }
@@ -2917,17 +2822,17 @@ class MediMapEngine:
         base = re.sub(r"[_\-]+", " ", base)
         return _safe_slug(base)
 
-    def build_page_fingerprint(self, page_idx=0, img_bgr=None, prepared_gray=None):
+    def build_page_fingerprint(self, page_idx=0, img_bgr=None):
         if img_bgr is None:
-            img_bgr = self._render_detection_page_bgr(self.pdf_path, page_idx=page_idx)
+            img_bgr = self._render_pdf_page_bgr(self.pdf_path, page_idx=page_idx, preview_zoom=ZOOM)
         if img_bgr is None or getattr(img_bgr, "size", 0) == 0:
             raise ValueError("Unable to build page fingerprint from an empty image.")
 
-        gray = prepared_gray
-        if gray is None:
-            img_bgr, gray = self._prepare_detection_inputs(img_bgr)
+        if len(img_bgr.shape) == 2:
+            img_bgr = cv2.cvtColor(img_bgr, cv2.COLOR_GRAY2BGR)
 
         h, w = img_bgr.shape[:2]
+        gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
         mean_val = float(np.mean(gray))
         std_val = float(np.std(gray))
         _, binv = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
@@ -3014,15 +2919,13 @@ class MediMapEngine:
             best["match_kind"] = "fuzzy"
         return best
 
-    def prepare_learning_for_detection(self, page_idx=0, img_bgr=None, prepared_gray=None):
+    def prepare_learning_for_detection(self, page_idx=0):
         if not self.learning_enabled or not self.pdf_path:
             self.current_detection_context = {"page_idx": int(page_idx)}
             return self.current_detection_context
 
-        img = img_bgr
-        if img is None:
-            img = self._render_detection_page_bgr(self.pdf_path, page_idx=page_idx)
-        fingerprint = self.build_page_fingerprint(page_idx=page_idx, img_bgr=img, prepared_gray=prepared_gray)
+        img = self._render_pdf_page_bgr(self.pdf_path, page_idx=page_idx, preview_zoom=ZOOM)
+        fingerprint = self.build_page_fingerprint(page_idx=page_idx, img_bgr=img)
         profile = self.find_best_profile_match(fingerprint)
         applied = False
         if profile and isinstance(profile.get("settings"), dict):
@@ -3521,7 +3424,6 @@ class MediMapEngine:
         self.current_revision_id = str(meta.get("current_revision_id", self.current_revision_id or "") or "")
         self.last_saved_revision_id = str(meta.get("last_saved_revision_id", self.last_saved_revision_id or "") or "")
         self.last_applied_profile_meta = dict(meta.get("last_applied_profile_meta", {}) or {})
-        self.detection_zoom = float(meta.get("detection_zoom", getattr(self, "detection_zoom", DETECTION_ZOOM)) or getattr(self, "detection_zoom", DETECTION_ZOOM))
 
     def persist_learning_session(self, current_page_idx=0):
         if not self.learning_enabled:
@@ -3529,7 +3431,6 @@ class MediMapEngine:
         session = {
             "version": 1,
             "saved_at": _utc_now_iso(),
-            "auto_restore_pdf": bool(False if ANDROID else True),
             "pdf_path": str(self.pdf_path or ""),
             "page_idx": int(current_page_idx or 0),
             "detected_page_idx": int(self.detected_page_idx or 0),
@@ -3568,7 +3469,6 @@ class MediMapEngine:
             "version": 5,
             "pdf_path": self.pdf_path,
             "zoom": float(ZOOM),
-            "detection_zoom": float(self.get_detection_zoom()),
             "ui_state": ui_state,
             "learning_meta": self.collect_learning_meta(),
             "current_detection_context": dict(self.current_detection_context or {}),
@@ -3639,7 +3539,6 @@ class MediMapEngine:
         self.settings["Is_Grid"] = bool(cfg.get("Is_Grid", self.settings["Is_Grid"]))
         self.settings["Grid_N"] = int(cfg.get("Grid_N", self.settings["Grid_N"]))
         self.config_zoom = float(cfg.get("zoom", getattr(self, "config_zoom", ZOOM)))
-        self.detection_zoom = float(cfg.get("detection_zoom", getattr(self, "detection_zoom", DETECTION_ZOOM)))
         self.config_pdf_path = str(cfg.get("pdf_path", getattr(self, "config_pdf_path", "")) or "")
         self.apply_learning_meta(cfg.get("learning_meta", {}))
         restored_ctx = cfg.get("current_detection_context", {}) or {}
@@ -6433,7 +6332,7 @@ class MediMapProApp(MDApp):
                 self.set_status("Load PDF first.")
                 return
             page_idx = int(self.current_page_idx())
-            img = self.engine._render_detection_page_bgr(self.engine.pdf_path, page_idx=page_idx)
+            img = self.engine._render_pdf_page_bgr(self.engine.pdf_path, page_idx=page_idx, preview_zoom=ZOOM)
             fingerprint = self.engine.build_page_fingerprint(page_idx=page_idx, img_bgr=img)
             profile = self.engine.find_best_profile_match(fingerprint)
             if not isinstance(profile, dict) or not isinstance(profile.get("settings"), dict):
@@ -6754,13 +6653,7 @@ class MediMapProApp(MDApp):
                 self.engine.apply_learning_meta(learning_meta)
             if current_ctx:
                 self.engine.current_detection_context = current_ctx
-            self.engine.detected_page_idx = int(session.get("detected_page_idx", page_idx) or page_idx)
-            auto_restore_pdf = bool(session.get("auto_restore_pdf", False if ANDROID else True))
             if not pdf_path or not os.path.exists(pdf_path):
-                self.refresh_learning_ui()
-                return
-            if ANDROID and not auto_restore_pdf:
-                self.set_status(f"Last session restored.\nReopen PDF manually: {os.path.basename(pdf_path)}")
                 self.refresh_learning_ui()
                 return
             total = self.engine.load_pdf(pdf_path)
@@ -7135,10 +7028,8 @@ class MediMapProApp(MDApp):
     def _build_preview_boxes_payload(self, page_idx, preview_zoom):
         payload = []
         for i, r in enumerate(self.engine.all_boxes):
-            uid = self.engine.box_uids[i] if i < len(getattr(self.engine, "box_uids", []) or []) else self.engine._stable_box_uid(r, self.engine.box_types[i] if i < len(self.engine.box_types) else "field")
             payload.append({
                 "id": i,
-                "uid": uid,
                 "pdf_x": float(r.x0),
                 "pdf_y": float(r.y0),
                 "pdf_w": float(r.width),
@@ -8937,12 +8828,8 @@ class MediMapProApp(MDApp):
 
             self.apply_ui_settings_to_engine()
             page_idx = self.current_page_idx()
-            prepared_bgr = self.engine._render_detection_page_bgr(self.engine.pdf_path, page_idx=page_idx)
-            if prepared_bgr is None or getattr(prepared_bgr, "size", 0) == 0:
-                raise ValueError("Failed to render PDF page into image.")
-            prepared_bgr, prepared_gray = self.engine._prepare_detection_inputs(prepared_bgr)
-            self.engine.prepare_learning_for_detection(page_idx=page_idx, img_bgr=prepared_bgr, prepared_gray=prepared_gray)
-            self.engine.run_detection(page_idx=page_idx, prepared_bgr=prepared_bgr, prepared_gray=prepared_gray)
+            self.engine.prepare_learning_for_detection(page_idx=page_idx)
+            self.engine.run_detection(page_idx=page_idx)
             self.engine.finalize_learning_after_detection(page_idx=page_idx)
             self.engine.selected_box_ids = []
             self._stash_page_selection(page_idx)
@@ -9361,4 +9248,3 @@ class MediMapProApp(MDApp):
 
 if __name__ == "__main__":
     MediMapProApp().run()
-
