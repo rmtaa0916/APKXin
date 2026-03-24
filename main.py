@@ -5401,15 +5401,15 @@ class FormAlchemistApp(MDApp):
         self.trigger_input = make_input("", "Trigger")
         self.grid_flag_chk = (MDSwitch(active=False) if KIVYMD_AVAILABLE and MDSwitch is not None else CheckBox(active=False))
         self.grid_n_input = make_input("1", "1", input_filter="int")
-        map_body.add_widget(labeled_field("Selected Box IDs", self.box_ids_input, "Tap boxes in preview to add or remove them" if is_mobile else "Click boxes in preview to add or remove them"))
+        map_body.add_widget(labeled_field("Selected", self.box_ids_input, "Tap boxes in preview to add or remove them" if is_mobile else "Click boxes in preview to add or remove them"))
         map_body.add_widget(labeled_field("Column", self.column_spinner, "Data column written into the selected target"))
-        map_body.add_widget(labeled_field("Trigger", self.trigger_input, "Leave blank for text fill, use value for checkbox X mark"))
+        map_body.add_widget(labeled_field("Trigger", self.trigger_input, "Optional for checkbox mappings" if is_mobile else "Leave blank for text fill, use value for checkbox X mark"))
         map_opts = GridLayout(cols=1 if is_mobile else 2, spacing=dp(8), size_hint_y=None)
         map_opts.bind(minimum_height=map_opts.setter("height"))
-        map_opts.add_widget(labeled_checkbox("Is Grid?", self.grid_flag_chk, "Split characters across boxes or cells"))
-        map_opts.add_widget(labeled_field("Grid N", self.grid_n_input, "Characters or cells to distribute"))
+        map_opts.add_widget(labeled_checkbox("Grid Fill", self.grid_flag_chk, "Split characters across boxes or cells"))
+        map_opts.add_widget(labeled_field("Grid Count", self.grid_n_input, "Characters or cells to distribute"))
         map_body.add_widget(map_opts)
-        self.btn_assign = make_button("Assign Mapping", tone="primary")
+        self.btn_assign = make_button("Assign", tone="primary")
         self.btn_assign.height = dp(42) if is_mobile else self.btn_assign.height
         self.btn_assign.bind(on_release=self.on_assign_mapping)
         map_body.add_widget(self.btn_assign)
@@ -5871,7 +5871,7 @@ class FormAlchemistApp(MDApp):
             sidebar_title.bind(size=self._sync_label_text_size)
             self.btn_sidebar_close = self._make_compact_action_button("Close", tone="plain")
             self.btn_sidebar_close.size_hint = (None, None)
-            self.btn_sidebar_close.size = (dp(52), dp(30))
+            self.btn_sidebar_close.size = (dp(86), dp(30))
             sidebar_header.add_widget(sidebar_title)
             sidebar_header.add_widget(self.btn_sidebar_close)
             self.mobile_sidebar.add_widget(sidebar_header)
@@ -5896,7 +5896,7 @@ class FormAlchemistApp(MDApp):
             sidebar_tabs = _make_mobile_section_tabs(["Files", "Detection", "Learning", "Mapping", "Session", "Export"])
             self.mobile_sidebar.add_widget(sidebar_tabs)
 
-            sidebar_scroll = ScrollView(do_scroll_x=False, do_scroll_y=True, bar_width=dp(4), scroll_type=["bars", "content"])
+            sidebar_scroll = ScrollView(do_scroll_x=False, do_scroll_y=True, bar_width=dp(4), bar_margin=dp(6), scroll_type=["bars", "content"])
             self._mobile_section_host = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
             self._mobile_section_host.bind(minimum_height=self._mobile_section_host.setter("height"))
             sidebar_scroll.add_widget(self._mobile_section_host)
@@ -8707,7 +8707,7 @@ class FormAlchemistApp(MDApp):
 
         trigger_input = TextInput(
             text=current_trigger,
-            hint_text="Trigger value (leave blank for text fill)",
+            hint_text="Checkbox value (optional)",
             multiline=False,
             size_hint_y=None,
             height=dp(46),
@@ -8726,10 +8726,12 @@ class FormAlchemistApp(MDApp):
         popup_grid_chk = CheckBox(active=(str(current_grid_flag).strip() == "1"))
         grid_flag_wrap = BoxLayout(orientation="horizontal", spacing=dp(8), padding=[dp(10), dp(6), dp(10), dp(6)], size_hint_y=None, height=dp(46))
         self._style_popup_card(grid_flag_wrap, palette.get("surface_alt", (0.11, 0.135, 0.185, 1)), radius=dp(16))
-        grid_flag_wrap.add_widget(popup_grid_chk)
         grid_flag_lbl = Label(text="Grid Fill", color=palette.get("text", (0.93, 0.96, 1.0, 1)), halign="left", valign="middle", font_size=dp(12))
         grid_flag_lbl.bind(size=self._sync_label_text_size)
         grid_flag_wrap.add_widget(grid_flag_lbl)
+        popup_grid_chk.size_hint_x = None
+        popup_grid_chk.width = dp(36)
+        grid_flag_wrap.add_widget(popup_grid_chk)
         grid_n_input = TextInput(
             text=current_grid_n,
             hint_text="Grid N",
