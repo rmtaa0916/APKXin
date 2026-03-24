@@ -1,4 +1,4 @@
-package org.medimap.medimappro;
+package org.formalchemist.formalchemist;
 
 import android.content.ContentResolver;
 import android.content.Context;
