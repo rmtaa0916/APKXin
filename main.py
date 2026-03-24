@@ -4738,7 +4738,7 @@ class FormAlchemistApp(MDApp):
             )
             ttl.bind(size=self._sync_label_text_size)
             if is_mobile:
-                self._bind_auto_height_label(ttl, min_height=dp(22), extra_pad=dp(2))
+                self._bind_auto_height_label(ttl, min_height=dp(22), extra_pad=dp(1))
             head.add_widget(ttl)
 
             if subtitle:
@@ -5110,7 +5110,7 @@ class FormAlchemistApp(MDApp):
                 spacing=dp(3),
                 size_hint_y=None,
                 height=dp(56),
-                padding=[dp(10), dp(8), dp(10), dp(8)],
+                padding=[dp(8), dp(6), dp(8), dp(6)],
             )
             style_card(mobile_flow_card, palette["surface_alt"], radius=dp(16))
 
@@ -5327,7 +5327,7 @@ class FormAlchemistApp(MDApp):
 
         detect_card, detect_body = make_card("Detection", "Tune detection thresholds" if is_mobile else "Field, line, checkbox, and extent thresholds")
         explain = Label(text="F = field sizing  •  Line = answer lines  •  C = checkbox tuning  •  Ext = contour extent limits",
-                        color=palette["muted"], size_hint_y=None, height=dp(18), halign="left", valign="middle", font_size=dp(11))
+                        color=palette["muted"], size_hint_y=None, height=dp(18), halign="left", valign="middle", font_size=dp(10.5 if is_mobile else 11))
         explain.bind(size=self._sync_label_text_size)
         self._bind_auto_height_label(explain, min_height=dp(18), extra_pad=dp(4))
         detect_body.add_widget(explain)
@@ -5457,7 +5457,7 @@ class FormAlchemistApp(MDApp):
         self._bind_auto_height_label(learning_note, min_height=dp(30), extra_pad=dp(4))
         learning_body.add_widget(learning_note)
 
-        def _make_learning_info_label(initial_text, color=None, min_height=dp(34)):
+        def _make_learning_info_label(initial_text, color=None, min_height=dp(32)):
             lbl = Label(
                 text=initial_text,
                 color=color or palette["text"],
@@ -8301,7 +8301,7 @@ class FormAlchemistApp(MDApp):
         title_lbl = Label(text="Detection Tuning Console", color=palette.get("text", (0.93, 0.96, 1.0, 1)), size_hint_y=None, height=dp(28), halign="left", valign="middle", font_size=dp(18), bold=True)
         title_lbl.bind(size=self._sync_label_text_size)
         self._bind_auto_height_label(title_lbl, min_height=dp(28), extra_pad=dp(4))
-        sub_lbl = Label(text="Adjust detection settings, then apply and run Detect again.", color=palette.get("muted", (0.60, 0.68, 0.80, 1)), size_hint_y=None, height=dp(20), halign="left", valign="middle", font_size=dp(11))
+        sub_lbl = Label(text="Tune detection, then apply or detect.", color=palette.get("muted", (0.60, 0.68, 0.80, 1)), size_hint_y=None, height=dp(20), halign="left", valign="middle", font_size=dp(11))
         sub_lbl.bind(size=self._sync_label_text_size)
         self._bind_auto_height_label(sub_lbl, min_height=dp(20), extra_pad=dp(6))
         head.add_widget(title_lbl)
@@ -8314,11 +8314,11 @@ class FormAlchemistApp(MDApp):
         scroll.add_widget(content)
 
         def _popup_input_block(widget, helper_text=""):
-            block = BoxLayout(orientation="vertical", spacing=dp(4), size_hint_y=None)
+            block = BoxLayout(orientation="vertical", spacing=dp(3), size_hint_y=None)
             block.bind(minimum_height=block.setter("height"))
             block.add_widget(widget)
             if helper_text:
-                helper = Label(text=helper_text, color=palette.get("muted", (0.60, 0.68, 0.80, 0.92)), size_hint_y=None, height=(dp(16) if getattr(self, "ui_mobile", False) else dp(14)), halign="left", valign="middle", font_size=(dp(8.6) if getattr(self, "ui_mobile", False) else dp(9.6)))
+                helper = Label(text=helper_text, color=palette.get("muted", (0.60, 0.68, 0.80, 0.92)), size_hint_y=None, height=(dp(16) if getattr(self, "ui_mobile", False) else dp(14)), halign="left", valign="middle", font_size=(dp(8.0) if getattr(self, "ui_mobile", False) else dp(9.2)))
                 helper.bind(size=self._sync_label_text_size)
                 self._bind_auto_height_label(helper, min_height=(dp(14) if getattr(self, "ui_mobile", False) else dp(14)), extra_pad=dp(2))
                 block.add_widget(helper)
@@ -8370,9 +8370,9 @@ class FormAlchemistApp(MDApp):
                 start_val = float(src_widget.text)
             except Exception:
                 start_val = float(spec["min"])
-            row = BoxLayout(orientation="vertical", spacing=dp(6), size_hint_y=None)
+            row = BoxLayout(orientation="vertical", spacing=dp(4), size_hint_y=None)
             row.bind(minimum_height=row.setter("height"))
-            top = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint_y=None, height=dp(20))
+            top = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint_y=None, height=dp(18 if is_mobile else 20))
             lbl = Label(text=spec["label"], color=palette.get("text", (0.93, 0.96, 1.0, 1)), halign="left", valign="middle", font_size=dp(11))
             lbl.bind(size=self._sync_label_text_size)
             top.add_widget(lbl)
@@ -8386,14 +8386,14 @@ class FormAlchemistApp(MDApp):
                 text=_format_slider_value(start_val, spec["decimals"], spec["widget_type"] == "int"),
                 multiline=False,
                 size_hint_y=None,
-                height=dp(30 if is_mobile else 28),
+                height=dp(28 if is_mobile else 28),
                 input_filter=("int" if spec["widget_type"] == "int" else None),
                 background_normal="",
                 background_active="",
                 background_color=palette.get("surface_soft", (0.135, 0.16, 0.215, 1)),
                 foreground_color=palette.get("text", (0.93, 0.96, 1.0, 1)),
                 cursor_color=palette.get("accent", (0.10, 0.78, 0.63, 1)),
-                padding=[dp(10), dp(8), dp(10), dp(8)],
+                padding=[dp(8), dp(6), dp(8), dp(6)],
             )
 
             def _sync_from_slider(_instance, value):
@@ -8418,8 +8418,8 @@ class FormAlchemistApp(MDApp):
                 control_row = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint_y=None, height=dp(34))
                 slider.size_hint_x = 1
                 input_widget.size_hint_x = None
-                input_widget.width = dp(78)
-                input_widget.height = dp(34)
+                input_widget.width = dp(72)
+                input_widget.height = dp(32)
                 control_row.add_widget(slider)
                 control_row.add_widget(input_widget)
                 row.add_widget(control_row)
@@ -8430,9 +8430,9 @@ class FormAlchemistApp(MDApp):
             return _popup_input_block(row, spec.get("helper", ""))
 
         for group_name, specs in groups:
-            card = BoxLayout(orientation="vertical", spacing=dp(8), padding=[dp(10), dp(10), dp(10), dp(10)], size_hint_y=None)
+            card = BoxLayout(orientation="vertical", spacing=dp(6 if getattr(self, "ui_mobile", False) else 8), padding=[dp(8), dp(8), dp(8), dp(8)] if getattr(self, "ui_mobile", False) else [dp(10), dp(10), dp(10), dp(10)], size_hint_y=None)
             card.bind(minimum_height=card.setter("height"))
-            title = Label(text=group_name, color=palette.get("text", (0.93, 0.96, 1.0, 1)), size_hint_y=None, height=dp(20), halign="left", valign="middle", font_size=dp(13), bold=True)
+            title = Label(text=group_name, color=palette.get("text", (0.93, 0.96, 1.0, 1)), size_hint_y=None, height=dp(18 if getattr(self, "ui_mobile", False) else 20), halign="left", valign="middle", font_size=dp(12 if getattr(self, "ui_mobile", False) else 13), bold=True)
             title.bind(size=self._sync_label_text_size)
             grid = GridLayout(cols=1 if getattr(self, "ui_mobile", False) else 3, spacing=dp(10), size_hint_y=None)
             grid.bind(minimum_height=grid.setter("height"))
@@ -8444,7 +8444,7 @@ class FormAlchemistApp(MDApp):
             content.add_widget(card)
 
         extent_toggle = CheckBox(active=bool(getattr(self.use_extent_chk, "active", False)))
-        extent_wrap = BoxLayout(orientation="horizontal", spacing=dp(8), padding=[dp(10), dp(8), dp(10), dp(8)], size_hint_y=None, height=dp(44))
+        extent_wrap = BoxLayout(orientation="horizontal", spacing=dp(8), padding=[dp(8), dp(6), dp(8), dp(6)], size_hint_y=None, height=dp(44))
         self._style_popup_card(extent_wrap, palette.get("surface_alt", (0.11, 0.135, 0.185, 1)), radius=dp(16))
         extent_wrap.add_widget(extent_toggle)
         extent_lbl = Label(text="Use contour extent filter", color=palette.get("text", (0.93, 0.96, 1.0, 1)), halign="left", valign="middle", font_size=dp(11))
@@ -8454,13 +8454,13 @@ class FormAlchemistApp(MDApp):
 
         outer.add_widget(scroll)
 
-        preset_wrap = BoxLayout(orientation="vertical", spacing=dp(6), size_hint_y=None, height=dp(76))
-        preset_lbl = Label(text=("Presets" if getattr(self, "ui_mobile", False) else "Quick presets"), color=palette.get("muted", (0.60, 0.68, 0.80, 0.96)), size_hint_y=None, height=dp(15), halign="left", valign="middle", font_size=dp(10.0))
+        preset_wrap = BoxLayout(orientation="vertical", spacing=dp(4), size_hint_y=None, height=dp(56 if getattr(self, "ui_mobile", False) else 76))
+        preset_lbl = Label(text=("" if getattr(self, "ui_mobile", False) else "Quick presets"), color=palette.get("muted", (0.60, 0.68, 0.80, 0.96)), size_hint_y=None, height=dp(0 if getattr(self, "ui_mobile", False) else 15), halign="left", valign="middle", font_size=dp(10.0))
         preset_lbl.bind(size=self._sync_label_text_size)
-        preset_row = GridLayout(cols=3, spacing=dp(8), size_hint_y=None, height=dp(44))
-        btn_preset_balanced = self._make_compact_action_button("Balanced", tone="ghost")
-        btn_preset_sensitive = self._make_compact_action_button("Sensitive", tone="ghost")
-        btn_preset_strict = self._make_compact_action_button("Strict", tone="ghost")
+        preset_row = GridLayout(cols=3, spacing=dp(6), size_hint_y=None, height=dp(38 if getattr(self, "ui_mobile", False) else 44))
+        btn_preset_balanced = self._make_compact_action_button("Balanced", tone="mini")
+        btn_preset_sensitive = self._make_compact_action_button("Sensitive", tone="mini")
+        btn_preset_strict = self._make_compact_action_button("Strict", tone="mini")
         for btn in [btn_preset_balanced, btn_preset_sensitive, btn_preset_strict]:
             preset_row.add_widget(btn)
         preset_wrap.add_widget(preset_lbl)
@@ -8473,10 +8473,10 @@ class FormAlchemistApp(MDApp):
             top_actions = GridLayout(cols=3, spacing=dp(8), size_hint_y=None, height=dp(44))
             btn_defaults = self._make_compact_action_button("Reset", tone="ghost")
             btn_apply = self._make_compact_action_button("Apply", tone="primary")
-            btn_detect = self._make_compact_action_button("Detect", tone="soft")
+            btn_detect = self._make_compact_action_button("Detect", tone="ghost")
             for btn in [btn_defaults, btn_apply, btn_detect]:
                 top_actions.add_widget(btn)
-            btn_close = self._make_compact_action_button("Close", tone="plain")
+            btn_close = self._make_compact_action_button("Close", tone="ghost")
             btn_close.size_hint_y = None
             btn_close.height = dp(42)
             btn_row.add_widget(top_actions)
