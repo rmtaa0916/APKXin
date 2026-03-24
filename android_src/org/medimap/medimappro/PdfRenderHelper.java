@@ -1,4 +1,4 @@
-package org.medimap.medimappro;
+package org.formalchemist.formalchemist;
 
 import android.graphics.Bitmap;
 import android.graphics.pdf.PdfRenderer;
