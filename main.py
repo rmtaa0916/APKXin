@@ -127,7 +127,7 @@ def _sha1_json(value):
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
 
-def get_medimap_private_storage_root(app_name="medimap_pro"):
+def get_form_alchemist_private_storage_root(app_name="form_alchemist"):
     try:
         running_app = App.get_running_app()
     except Exception:
@@ -164,8 +164,8 @@ def get_medimap_private_storage_root(app_name="medimap_pro"):
 class LearningStorage:
     """App-private storage for learned profiles, revisions, and session state."""
 
-    def __init__(self, base_dir=None, app_name="medimap_pro"):
-        self.base_dir = str(base_dir or get_medimap_private_storage_root(app_name))
+    def __init__(self, base_dir=None, app_name="form_alchemist"):
+        self.base_dir = str(base_dir or get_form_alchemist_private_storage_root(app_name))
         self.learning_dir = os.path.join(self.base_dir, "learning")
         self.revisions_dir = os.path.join(self.base_dir, "revisions")
         self.projects_dir = os.path.join(self.base_dir, "projects")
@@ -655,7 +655,7 @@ def android_render_pdf_page(path, page_idx=0, preview_zoom=1.5):
     tmp_path = None
     try:
         AndroidPdfRenderHelper = autoclass("org.formalchemist.formalchemist.PdfRenderHelper")
-        fd, tmp_path = tempfile.mkstemp(prefix="medimap_preview_", suffix=".png")
+        fd, tmp_path = tempfile.mkstemp(prefix="form_alchemist_preview_", suffix=".png")
         os.close(fd)
         out_path = AndroidPdfRenderHelper.renderPageToPng(path, int(page_idx), float(preview_zoom), tmp_path)
         out_path = str(out_path or tmp_path)
@@ -675,7 +675,7 @@ def android_render_pdf_page(path, page_idx=0, preview_zoom=1.5):
 # Defaults
 # ============================================================
 APP_TITLE = "Form Alchemist"
-CONFIG_FILENAME = "medimap_config.json"
+CONFIG_FILENAME = "form_alchemist_config.json"
 if platform == "android":
     ZOOM = 4.0
     PREVIEW_SCALE = 2.2
@@ -850,7 +850,7 @@ def _looks_like_ssl_cert_failure(exc):
 def download_url_bytes(url, timeout=30):
     """Download bytes from a URL with a cautious Android SSL fallback."""
     headers = {
-        "User-Agent": "Mozilla/5.0 MediMapPro/1.0",
+        "User-Agent": "Mozilla/5.0 FormAlchemist/1.0",
         "Accept": "text/csv,text/plain,application/octet-stream,*/*",
     }
 
@@ -1375,7 +1375,7 @@ class PdfPageSource:
 # ============================================================
 # Detection / mapping engine
 # ============================================================
-class MediMapEngine:
+class FormAlchemistEngine:
     def __init__(self):
         self.pdf_path = ""
         self.df = pd.DataFrame()
@@ -1402,7 +1402,7 @@ class MediMapEngine:
         self.box_types_by_page = {}
         self.geom_by_page = {}
 
-        self.learning_storage = LearningStorage(app_name="medimap_pro")
+        self.learning_storage = LearningStorage(app_name="form_alchemist")
         self.learning_enabled = True
         self.profile_memory = self.learning_storage.load_profile_memory()
         self.template_stats = self.learning_storage.load_template_stats()
@@ -1824,7 +1824,7 @@ class MediMapEngine:
 # =========================
 # PART 2 / 4
 # Detection Engine Continuation
-# Add this BELOW Part 1, inside the MediMapEngine class
+# Add this BELOW Part 1, inside the FormAlchemistEngine class
 # =========================
 
     # --------------------------------------------------------
@@ -2415,7 +2415,7 @@ class MediMapEngine:
 # =========================
 # PART 3 / 4
 # Fill + Config Engine
-# Add this BELOW Part 2, inside the MediMapEngine class
+# Add this BELOW Part 2, inside the FormAlchemistEngine class
 # =========================
 
     # --------------------------------------------------------
@@ -4397,7 +4397,9 @@ class InteractivePreview(Image):
         self._set_pointed_box(hit, notify=(hit is not None or self.hovered_box_id is not None))
 
 
-class MediMapProLayout(BoxLayout):
+# Main application layout
+
+class FormAlchemistLayout(BoxLayout):
     pass
 
 
@@ -4622,12 +4624,14 @@ class FloatingPreviewHUD(BoxLayout):
         return super().on_touch_up(touch)
 
 
-class MediMapProApp(MDApp):
+# Main application class
+
+class FormAlchemistApp(MDApp):
 
     def build(self):
         self.title = APP_TITLE
         self.icon = "assets/icon.png"
-        self.engine = MediMapEngine()
+        self.engine = FormAlchemistEngine()
         self.import_store = LocalImportStore(self.get_app_output_dir)
         self.android_picker = AndroidDocumentPickerService(self.import_store, status_callback=self.set_status)
 
@@ -4821,7 +4825,7 @@ class MediMapProApp(MDApp):
             return btn
 
         def make_input(default="", hint="", input_filter=None):
-            if KIVYMD_AVAILABLE and MDTextField is not None:
+            if (not is_mobile) and KIVYMD_AVAILABLE and MDTextField is not None:
                 field = MDTextField(
                     text=str(default),
                     hint_text=hint,
@@ -5030,7 +5034,7 @@ class MediMapProApp(MDApp):
         brand_wrap = BoxLayout(orientation="vertical", spacing=dp(4), size_hint_y=None, size_hint_x=1)
         brand_wrap.bind(minimum_height=brand_wrap.setter("height"))
         hero_title = Label(
-            text=("MediMap" if is_mobile else "MediMap Pro"),
+            text=(APP_TITLE if is_mobile else APP_TITLE),
             color=palette["text"],
             bold=True,
             size_hint_y=None,
@@ -5397,10 +5401,11 @@ class MediMapProApp(MDApp):
         self.trigger_input = make_input("", "Trigger")
         self.grid_flag_chk = (MDSwitch(active=False) if KIVYMD_AVAILABLE and MDSwitch is not None else CheckBox(active=False))
         self.grid_n_input = make_input("1", "1", input_filter="int")
-        map_body.add_widget(labeled_field("Selected Box IDs", self.box_ids_input, "Click boxes in preview to add or remove them"))
+        map_body.add_widget(labeled_field("Selected Box IDs", self.box_ids_input, "Tap boxes in preview to add or remove them" if is_mobile else "Click boxes in preview to add or remove them"))
         map_body.add_widget(labeled_field("Column", self.column_spinner, "Data column written into the selected target"))
         map_body.add_widget(labeled_field("Trigger", self.trigger_input, "Leave blank for text fill, use value for checkbox X mark"))
-        map_opts = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=max((dp(84) if is_mobile else dp(52)), self.grid_n_input.height + dp(26)))
+        map_opts = GridLayout(cols=1 if is_mobile else 2, spacing=dp(8), size_hint_y=None)
+        map_opts.bind(minimum_height=map_opts.setter("height"))
         map_opts.add_widget(labeled_checkbox("Is Grid?", self.grid_flag_chk, "Split characters across boxes or cells"))
         map_opts.add_widget(labeled_field("Grid N", self.grid_n_input, "Characters or cells to distribute"))
         map_body.add_widget(map_opts)
@@ -5551,10 +5556,10 @@ class MediMapProApp(MDApp):
 
         hover_section_body = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
         hover_section_body.bind(minimum_height=hover_section_body.setter("height"))
-        self.inspector_hover_lbl = Label(text=("Tap or drag over a box to see quick details." if is_mobile else "Hover a box to see quick details."), color=palette["muted"], size_hint_y=None, height=dp(40), halign="left", valign="middle", font_size=dp(11))
+        self.inspector_hover_lbl = Label(text=("Tap a box to inspect it." if is_mobile else "Hover a box to inspect it."), color=palette["muted"], size_hint_y=None, height=dp(40), halign="left", valign="middle", font_size=dp(11))
         self.inspector_hover_lbl.bind(size=self._sync_label_text_size)
         self._bind_auto_height_label(self.inspector_hover_lbl, min_height=dp(36), extra_pad=dp(6))
-        pointer_label = "Touched Box" if is_mobile else "Hover Details"
+        pointer_label = "Selected Box"
         hover_section_body.add_widget(labeled_field(pointer_label, self.inspector_hover_lbl))
 
         selection_body.add_widget(self._build_collapsible_panel("Selection Summary", selection_box_body, start_open=True))
@@ -5608,7 +5613,7 @@ class MediMapProApp(MDApp):
 
             self.btn_sidebar_toggle = self._make_compact_action_button("Menu", tone="ghost")
             self.btn_sidebar_toggle.size_hint = (None, None)
-            self.btn_sidebar_toggle.size = (dp(56), dp(30))
+            self.btn_sidebar_toggle.size = (dp(84), dp(34))
             appbar.add_widget(self.btn_sidebar_toggle)
 
             stage_column = BoxLayout(
@@ -5654,7 +5659,7 @@ class MediMapProApp(MDApp):
             self.preview_shell.bind(size=self._on_preview_viewport_change, pos=self._on_preview_viewport_change)
             self.preview.bind(size=self._sync_preview_stack_size)
             self.preview_info = Label(
-                text=("Tap = select • Double-tap = map • Pinch = pan/zoom" if is_mobile else "Tap boxes to multi-select • Double-tap box to map • Triple-tap empty zoom • Pinch pan"),
+                text=("Tap to inspect • Select ON to multi-select • Double-tap to map" if is_mobile else "Tap boxes to multi-select • Double-tap box to map • Pinch to pan and zoom"),
                 color=palette["muted"],
                 size_hint_y=None,
                 height=(dp(18) if is_mobile else dp(18)),
@@ -5694,15 +5699,10 @@ class MediMapProApp(MDApp):
                 pos_hint={"right": 0.992, "center_y": 0.56},
             )
             style_card(quick_rail, palette["surface_alt"], radius=dp(16))
-            self.btn_mobile_rail_detect = None
-            self.btn_mobile_rail_prev = None
-            self.btn_mobile_rail_next = None
             self.btn_mobile_rail_fit_page = self._make_compact_action_button("Fit Pg", tone="ghost")
             self.btn_mobile_rail_fit_page.bind(on_release=self._fit_preview_page)
             self.btn_mobile_rail_fit_width = self._make_compact_action_button("Fit W", tone="ghost")
             self.btn_mobile_rail_fit_width.bind(on_release=self._fit_preview_width)
-            self.btn_mobile_rail_zoom_in = None
-            self.btn_mobile_rail_zoom_out = None
             self.btn_mobile_rail_zoom_reset = self._make_compact_action_button("100%", tone="ghost")
             self.btn_mobile_rail_zoom_reset.bind(on_release=lambda *_: self._zoom_preview("reset"))
             self.btn_mobile_map = None
@@ -5990,7 +5990,7 @@ class MediMapProApp(MDApp):
             preview_wrap.bind(size=self._on_preview_viewport_change, pos=self._on_preview_viewport_change)
             self.preview_shell.bind(size=self._on_preview_viewport_change, pos=self._on_preview_viewport_change)
             self.preview.bind(size=self._sync_preview_stack_size)
-            self.preview_info = Label(text="Preview ready. Tap to select • Double-tap box to map • Triple-tap empty space to zoom • Use the HUD for quick actions.", color=palette["text"], size_hint_y=None, height=dp(32), halign="left", valign="middle", font_size=dp(11))
+            self.preview_info = Label(text="Preview ready. Tap a box to inspect or select. Use Detect after changing settings.", color=palette["text"], size_hint_y=None, height=dp(32), halign="left", valign="middle", font_size=dp(11))
             self.preview_info.bind(size=self._sync_label_text_size)
             style_card(self.preview_info, palette["chip"], radius=dp(16))
             preview_stack.add_widget(self.preview_info)
@@ -6053,7 +6053,7 @@ class MediMapProApp(MDApp):
         self._startup_presplash = self._build_startup_presplash()
         if self._startup_presplash is not None:
             app_shell.add_widget(self._startup_presplash)
-            Clock.schedule_once(self._start_presplash_fade, 1.10)
+            Clock.schedule_once(self._start_presplash_fade, 1.35)
 
         Clock.schedule_once(lambda dt: self.refresh_backend_capabilities_ui(), 0)
         Clock.schedule_once(lambda dt: self.refresh_learning_ui(), 0)
@@ -6069,21 +6069,22 @@ class MediMapProApp(MDApp):
         muted = palette.get("muted", (0.710, 0.785, 0.930, 1))
         accent = palette.get("accent", (0.960, 0.710, 0.300, 1))
 
-        asset_candidates = [
+        presplash_candidates = [
             os.path.join("assets", "presplash.png"),
             os.path.join("assets", "presplash.jpg"),
             os.path.join("assets", "presplash.webp"),
-            os.path.join("assets", "icon.png"),
         ]
-        splash_asset = next((p for p in asset_candidates if os.path.exists(p)), None)
+        splash_asset = next((p for p in presplash_candidates if os.path.exists(p)), None)
+        logo_asset = os.path.join("assets", "icon.png") if os.path.exists(os.path.join("assets", "icon.png")) else None
         overlay._splash_asset = splash_asset
+        overlay._logo_asset = logo_asset
 
         with overlay.canvas.before:
             overlay._bg_color = Color(*bg)
             overlay._bg_rect = Rectangle()
             overlay._img_color = Color(1, 1, 1, 1)
             overlay._img_rect = Rectangle(source=splash_asset or "")
-            overlay._dim_color = Color(0.012, 0.020, 0.050, 0.14 if splash_asset else 0.82)
+            overlay._dim_color = Color(0.012, 0.020, 0.050, 0.08 if splash_asset else 0.82)
             overlay._dim_rect = Rectangle()
             overlay._glow_color = Color(accent[0], accent[1], accent[2], 0.05 if splash_asset else 0.08)
             overlay._glow_1 = Ellipse()
@@ -6106,40 +6107,20 @@ class MediMapProApp(MDApp):
 
         overlay.bind(pos=_upd_overlay, size=_upd_overlay)
 
+        if not splash_asset and logo_asset:
+            logo = Image(source=logo_asset, allow_stretch=True, keep_ratio=True, size_hint=(None, None), opacity=0.94)
+            overlay._logo_widget = logo
+            overlay.add_widget(logo)
+            def _upd_logo(*_):
+                w, h = overlay.size
+                size = min(w, h) * 0.34
+                logo.size = (size, size)
+                logo.pos = (overlay.x + w * 0.5 - size * 0.5, overlay.y + h * 0.56 - size * 0.5)
+            overlay.bind(pos=_upd_logo, size=_upd_logo)
+            _upd_logo()
+
         if splash_asset and os.path.basename(splash_asset).lower().startswith("presplash"):
-            footer = BoxLayout(
-                orientation="vertical",
-                spacing=dp(6),
-                padding=[dp(20), 0, dp(20), dp(28)],
-                size_hint=(1, None),
-                height=dp(72 if getattr(self, "ui_mobile", False) else 84),
-                pos_hint={"x": 0, "y": 0},
-            )
-            title = Label(
-                text=APP_TITLE,
-                color=text_color,
-                bold=True,
-                size_hint_y=None,
-                height=dp(28),
-                halign="center",
-                valign="middle",
-                font_size=dp(18 if getattr(self, "ui_mobile", False) else 20),
-            )
-            title.bind(size=self._sync_label_text_size)
-            subtitle = Label(
-                text="Loading workspace…",
-                color=muted,
-                size_hint_y=None,
-                height=dp(18),
-                halign="center",
-                valign="middle",
-                font_size=dp(10.8 if getattr(self, "ui_mobile", False) else 11.8),
-            )
-            subtitle.bind(size=self._sync_label_text_size)
-            footer.add_widget(Widget())
-            footer.add_widget(title)
-            footer.add_widget(subtitle)
-            overlay.add_widget(footer)
+            pass
         else:
             center = BoxLayout(orientation="vertical", spacing=dp(12), padding=[dp(20), dp(20), dp(20), dp(24)], size_hint=(None, None))
             center.width = min(max(dp(220), Window.width * 0.62), dp(360))
@@ -6203,7 +6184,7 @@ class MediMapProApp(MDApp):
             Animation.cancel_all(overlay)
         except Exception:
             pass
-        anim = Animation(opacity=0, duration=1.80, t="out_quad")
+        anim = Animation(opacity=0, duration=2.20, t="out_quad")
         anim.bind(on_complete=lambda *_: self._finish_presplash_fade())
         anim.start(overlay)
 
@@ -7083,14 +7064,9 @@ class MediMapProApp(MDApp):
             ("btn_fit_width", has_pdf),
             ("btn_fit_page", has_pdf),
             ("btn_zoom_reset", has_pdf),
-            ("btn_mobile_rail_zoom_in", has_pdf),
-            ("btn_mobile_rail_zoom_out", has_pdf),
             ("btn_mobile_rail_zoom_reset", has_pdf),
             ("btn_mobile_rail_fit_page", has_pdf),
             ("btn_mobile_rail_fit_width", has_pdf),
-            ("btn_mobile_rail_prev", page_ready),
-            ("btn_mobile_rail_next", page_ready),
-            ("btn_mobile_rail_detect", detect_ready),
             ("btn_mobile_prev", page_ready),
             ("btn_mobile_next", page_ready),
             ("btn_mobile_fit_width", has_pdf),
@@ -7254,7 +7230,7 @@ class MediMapProApp(MDApp):
         """Return a writable app-controlled directory for generated files/configs."""
         base_dir = getattr(self, "user_data_dir", None)
         if not base_dir:
-            base_dir = os.path.join(os.path.expanduser("~"), "MediMapPro")
+            base_dir = os.path.join(os.path.expanduser("~"), "FormAlchemist")
 
         out_dir = os.path.join(base_dir, "output")
         os.makedirs(out_dir, exist_ok=True)
@@ -7668,9 +7644,9 @@ class MediMapProApp(MDApp):
         if not ids:
             if getattr(self, "ui_mobile", False):
                 mode_txt = "Select ON" if bool(getattr(self, "mobile_select_mode", False)) else "Select OFF"
-                self.preview_info.text = f"Interactive preview ready. {mode_txt} • Tap focuses one box • Turn Select ON to multi-select • Double-tap maps • Pinch keeps focus under your fingers."
+                self.preview_info.text = f"Preview ready. {mode_txt} • Tap to inspect • Double-tap to map."
             else:
-                self.preview_info.text = "Interactive preview ready. Tap boxes to multi-select • Double-tap a box to map • Triple-tap empty space to zoom • Zoom changes keep overlays synced."
+                self.preview_info.text = "Preview ready. Tap to inspect • Double-tap a box to map."
             self._update_selection_inspector()
             self._update_bottom_statusbar()
             return
@@ -7678,7 +7654,7 @@ class MediMapProApp(MDApp):
         first = ids[0]
         box_type = self.engine.box_types[first] if first < len(self.engine.box_types) else "field"
         mapping = self.engine.describe_box_mapping(first, self.current_page_idx())
-        self.preview_info.text = f"Selected: {ids} | Type: {box_type} | {mapping} | Double-tap selected box to map"
+        self.preview_info.text = f"Selected: {ids} • {mapping}"
         self._update_selection_inspector()
         self._update_bottom_statusbar()
         try:
@@ -7895,11 +7871,11 @@ class MediMapProApp(MDApp):
 
     def on_preview_box_hover(self, hit):
         is_mobile = bool(getattr(self, "ui_mobile", False))
-        verb = "Touched" if is_mobile else "Hover"
+        verb = "Selected" if is_mobile else "Hover"
         action_word = "touching" if is_mobile else "hovering"
         if not hit:
             if hasattr(self, "inspector_hover_lbl") and self.inspector_hover_lbl is not None:
-                self.inspector_hover_lbl.text = ("Tap or drag over a box to see quick details." if is_mobile else "Hover a box to see quick details.")
+                self.inspector_hover_lbl.text = ("Tap or drag over a box to inspect it." if is_mobile else "Hover a box to inspect it.")
             if hasattr(self, "desktop_status_detail_lbl") and self.desktop_status_detail_lbl is not None:
                 self.desktop_status_detail_lbl.text = "Ready • No box targeted"
             self._update_preview_hud(hit=None)
@@ -7910,7 +7886,7 @@ class MediMapProApp(MDApp):
         if sel_ids:
             first = sel_ids[0]
             sel_mapping = self.engine.describe_box_mapping(first, self.current_page_idx())
-            self.preview_info.text = f"Selected: {sel_ids} | {action_word.capitalize()} box {hit['id']} | {sel_mapping}"
+            self.preview_info.text = f"Selected: {sel_ids} • {sel_mapping}"
         else:
             self.preview_info.text = hover_text
         if hasattr(self, "desktop_status_detail_lbl") and self.desktop_status_detail_lbl is not None:
@@ -8018,6 +7994,41 @@ class MediMapProApp(MDApp):
         chip.add_widget(lbl)
         return chip
 
+
+    def _set_popup_background_softened(self, is_open, state_store):
+        for attr in ("btn_mobile_tools_toggle", "mobile_bottom_tools", "preview_hud"):
+            widget = getattr(self, attr, None)
+            if widget is None:
+                continue
+            try:
+                key = id(widget)
+                if is_open:
+                    if key not in state_store:
+                        state_store[key] = {
+                            "widget": widget,
+                            "opacity": getattr(widget, "opacity", 1),
+                            "disabled": bool(getattr(widget, "disabled", False)) if hasattr(widget, "disabled") else None,
+                        }
+                    widget.opacity = 0
+                    if hasattr(widget, "disabled"):
+                        widget.disabled = True
+                else:
+                    state = state_store.pop(key, None)
+                    if state is None:
+                        continue
+                    widget.opacity = state.get("opacity", 1)
+                    if hasattr(widget, "disabled") and state.get("disabled", None) is not None:
+                        widget.disabled = bool(state.get("disabled", False))
+            except Exception:
+                pass
+
+    def _bind_popup_background_softening(self, popup):
+        popup_soften_state = {}
+        popup.bind(
+            on_open=lambda *_: self._set_popup_background_softened(True, popup_soften_state),
+            on_dismiss=lambda *_: self._set_popup_background_softened(False, popup_soften_state),
+        )
+        return popup_soften_state
 
     def _make_compact_action_button(self, text, tone="plain"):
         palette = getattr(self, "ui_palette", {}) or {}
@@ -8222,7 +8233,7 @@ class MediMapProApp(MDApp):
             box_id = int(hit.get("id", -1))
             rect_txt = f"{int(hit.get('x', 0))},{int(hit.get('y', 0))} • {int(hit.get('w', 0))}×{int(hit.get('h', 0))}"
             map_txt = hit.get("mapping") or "Unmapped"
-            verb = "Touched" if getattr(self, "ui_mobile", False) else "Hover"
+            verb = "Selected" if getattr(self, "ui_mobile", False) else "Hover"
             title = f"{verb} • Box {box_id}"
             detail = f"Type: {hit.get('t', 'field')} • Rect: {rect_txt}"
             mapping = f"Mapping: {map_txt}"
@@ -8285,11 +8296,14 @@ class MediMapProApp(MDApp):
         outer = BoxLayout(orientation="vertical", spacing=dp(10), padding=[dp(14), dp(14), dp(14), dp(14)])
         self._style_popup_card(outer, palette.get("surface", (0.085, 0.105, 0.145, 1)), radius=dp(22))
 
-        head = BoxLayout(orientation="vertical", spacing=dp(6), size_hint_y=None, height=dp(66))
-        title_lbl = Label(text="Detection Tuning Console", color=palette.get("text", (0.93, 0.96, 1.0, 1)), size_hint_y=None, height=dp(24), halign="left", valign="middle", font_size=dp(18), bold=True)
+        head = BoxLayout(orientation="vertical", spacing=dp(6), size_hint_y=None)
+        head.bind(minimum_height=head.setter("height"))
+        title_lbl = Label(text="Detection Tuning Console", color=palette.get("text", (0.93, 0.96, 1.0, 1)), size_hint_y=None, height=dp(28), halign="left", valign="middle", font_size=dp(18), bold=True)
         title_lbl.bind(size=self._sync_label_text_size)
-        sub_lbl = Label(text="Grouped popup controls inspired by pdfautomatorv2. Adjust, apply, then re-run detection.", color=palette.get("muted", (0.60, 0.68, 0.80, 1)), size_hint_y=None, height=dp(18), halign="left", valign="middle", font_size=dp(11))
+        self._bind_auto_height_label(title_lbl, min_height=dp(28), extra_pad=dp(4))
+        sub_lbl = Label(text="Adjust detection settings, then apply and run Detect again.", color=palette.get("muted", (0.60, 0.68, 0.80, 1)), size_hint_y=None, height=dp(20), halign="left", valign="middle", font_size=dp(11))
         sub_lbl.bind(size=self._sync_label_text_size)
+        self._bind_auto_height_label(sub_lbl, min_height=dp(20), extra_pad=dp(6))
         head.add_widget(title_lbl)
         head.add_widget(sub_lbl)
         outer.add_widget(head)
@@ -8299,23 +8313,14 @@ class MediMapProApp(MDApp):
         content.bind(minimum_height=content.setter("height"))
         scroll.add_widget(content)
 
-        def _popup_input_block(label_text, widget, helper_text=""):
+        def _popup_input_block(widget, helper_text=""):
             block = BoxLayout(orientation="vertical", spacing=dp(4), size_hint_y=None)
-            block.height = dp(72 if helper_text else 54)
-            if hasattr(widget, "height"):
-                try:
-                    block.height = max(block.height, widget.height + dp(24) + (dp(16) if helper_text else 0))
-                except Exception:
-                    pass
-            lbl = Label(text=label_text, color=palette.get("muted", (0.60, 0.68, 0.80, 1)), size_hint_y=None, height=(dp(22) if getattr(self, "ui_mobile", False) else dp(18)), halign="left", valign="middle", font_size=(dp(11.5) if getattr(self, "ui_mobile", False) else dp(11)))
-            lbl.bind(size=self._sync_label_text_size)
-            self._bind_auto_height_label(lbl, min_height=(dp(18) if getattr(self, "ui_mobile", False) else dp(16)), extra_pad=dp(4))
-            block.add_widget(lbl)
+            block.bind(minimum_height=block.setter("height"))
             block.add_widget(widget)
             if helper_text:
-                helper = Label(text=helper_text, color=palette.get("muted", (0.60, 0.68, 0.80, 1)), size_hint_y=None, height=(dp(22) if getattr(self, "ui_mobile", False) else dp(14)), halign="left", valign="middle", font_size=(dp(9.5) if getattr(self, "ui_mobile", False) else dp(10)))
+                helper = Label(text=helper_text, color=palette.get("muted", (0.60, 0.68, 0.80, 0.92)), size_hint_y=None, height=(dp(16) if getattr(self, "ui_mobile", False) else dp(14)), halign="left", valign="middle", font_size=(dp(8.6) if getattr(self, "ui_mobile", False) else dp(9.6)))
                 helper.bind(size=self._sync_label_text_size)
-                self._bind_auto_height_label(helper, min_height=(dp(18) if getattr(self, "ui_mobile", False) else dp(14)), extra_pad=dp(4))
+                self._bind_auto_height_label(helper, min_height=(dp(14) if getattr(self, "ui_mobile", False) else dp(14)), extra_pad=dp(2))
                 block.add_widget(helper)
             return block
 
@@ -8360,24 +8365,28 @@ class MediMapProApp(MDApp):
 
         def _make_slider_control(spec):
             src_widget = getattr(self, spec["key"])
+            is_mobile = bool(getattr(self, "ui_mobile", False))
             try:
                 start_val = float(src_widget.text)
             except Exception:
                 start_val = float(spec["min"])
-            row = BoxLayout(orientation="vertical", spacing=dp(4), size_hint_y=None, height=dp(82))
+            row = BoxLayout(orientation="vertical", spacing=dp(6), size_hint_y=None)
+            row.bind(minimum_height=row.setter("height"))
             top = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint_y=None, height=dp(20))
             lbl = Label(text=spec["label"], color=palette.get("text", (0.93, 0.96, 1.0, 1)), halign="left", valign="middle", font_size=dp(11))
             lbl.bind(size=self._sync_label_text_size)
-            val_lbl = Label(text=_format_slider_value(start_val, spec["decimals"], spec["widget_type"] == "int"), color=palette.get("accent", (0.10, 0.78, 0.63, 1)), halign="right", valign="middle", font_size=dp(11))
-            val_lbl.bind(size=self._sync_label_text_size)
             top.add_widget(lbl)
-            top.add_widget(val_lbl)
-            slider = Slider(min=spec["min"], max=spec["max"], value=start_val, step=spec["step"], size_hint_y=None, height=dp(30))
+            val_lbl = None
+            if not is_mobile:
+                val_lbl = Label(text=_format_slider_value(start_val, spec["decimals"], spec["widget_type"] == "int"), color=palette.get("accent", (0.10, 0.78, 0.63, 1)), halign="right", valign="middle", font_size=dp(11))
+                val_lbl.bind(size=self._sync_label_text_size)
+                top.add_widget(val_lbl)
+            slider = Slider(min=spec["min"], max=spec["max"], value=start_val, step=spec["step"], size_hint_y=None, height=dp(28 if is_mobile else 30))
             input_widget = TextInput(
                 text=_format_slider_value(start_val, spec["decimals"], spec["widget_type"] == "int"),
                 multiline=False,
                 size_hint_y=None,
-                height=dp(28),
+                height=dp(30 if is_mobile else 28),
                 input_filter=("int" if spec["widget_type"] == "int" else None),
                 background_normal="",
                 background_active="",
@@ -8388,8 +8397,11 @@ class MediMapProApp(MDApp):
             )
 
             def _sync_from_slider(_instance, value):
-                val_lbl.text = _format_slider_value(value, spec["decimals"], spec["widget_type"] == "int")
-                input_widget.text = _format_slider_value(value, spec["decimals"], spec["widget_type"] == "int")
+                formatted = _format_slider_value(value, spec["decimals"], spec["widget_type"] == "int")
+                if val_lbl is not None:
+                    val_lbl.text = formatted
+                if input_widget.text != formatted:
+                    input_widget.text = formatted
 
             def _sync_from_input(_instance=None):
                 try:
@@ -8402,23 +8414,32 @@ class MediMapProApp(MDApp):
             slider.bind(value=_sync_from_slider)
             input_widget.bind(on_text_validate=_sync_from_input, focus=lambda inst, focused: (None if focused else _sync_from_input(inst)))
             row.add_widget(top)
-            row.add_widget(slider)
-            row.add_widget(input_widget)
+            if is_mobile:
+                control_row = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint_y=None, height=dp(34))
+                slider.size_hint_x = 1
+                input_widget.size_hint_x = None
+                input_widget.width = dp(78)
+                input_widget.height = dp(34)
+                control_row.add_widget(slider)
+                control_row.add_widget(input_widget)
+                row.add_widget(control_row)
+            else:
+                row.add_widget(slider)
+                row.add_widget(input_widget)
             controls[spec["key"]] = {"slider": slider, "input": input_widget, "spec": spec}
-            return _popup_input_block(spec["label"], row, spec.get("helper", ""))
+            return _popup_input_block(row, spec.get("helper", ""))
 
         for group_name, specs in groups:
             card = BoxLayout(orientation="vertical", spacing=dp(8), padding=[dp(10), dp(10), dp(10), dp(10)], size_hint_y=None)
+            card.bind(minimum_height=card.setter("height"))
             title = Label(text=group_name, color=palette.get("text", (0.93, 0.96, 1.0, 1)), size_hint_y=None, height=dp(20), halign="left", valign="middle", font_size=dp(13), bold=True)
             title.bind(size=self._sync_label_text_size)
-            grid = GridLayout(cols=2 if getattr(self, "ui_mobile", False) else 3, spacing=dp(8), size_hint_y=None)
+            grid = GridLayout(cols=1 if getattr(self, "ui_mobile", False) else 3, spacing=dp(10), size_hint_y=None)
             grid.bind(minimum_height=grid.setter("height"))
             for spec in specs:
                 grid.add_widget(_make_slider_control(spec))
             card.add_widget(title)
             card.add_widget(grid)
-            card.height = dp(42) + max(dp(86), grid.minimum_height)
-            grid.bind(minimum_height=lambda _inst, value, c=card: setattr(c, "height", dp(42) + value))
             self._style_popup_card(card, palette.get("surface_alt", (0.11, 0.135, 0.185, 1)), radius=dp(18))
             content.add_widget(card)
 
@@ -8434,36 +8455,53 @@ class MediMapProApp(MDApp):
         outer.add_widget(scroll)
 
         preset_wrap = BoxLayout(orientation="vertical", spacing=dp(6), size_hint_y=None, height=dp(76))
-        preset_lbl = Label(text="Quick presets", color=palette.get("muted", (0.60, 0.68, 0.80, 1)), size_hint_y=None, height=dp(16), halign="left", valign="middle", font_size=dp(10.5))
+        preset_lbl = Label(text=("Presets" if getattr(self, "ui_mobile", False) else "Quick presets"), color=palette.get("muted", (0.60, 0.68, 0.80, 0.96)), size_hint_y=None, height=dp(15), halign="left", valign="middle", font_size=dp(10.0))
         preset_lbl.bind(size=self._sync_label_text_size)
         preset_row = GridLayout(cols=3, spacing=dp(8), size_hint_y=None, height=dp(44))
-        btn_preset_balanced = self._make_compact_action_button("Balanced", tone="plain")
-        btn_preset_sensitive = self._make_compact_action_button("Sensitive", tone="soft")
-        btn_preset_strict = self._make_compact_action_button("Strict", tone="accent")
+        btn_preset_balanced = self._make_compact_action_button("Balanced", tone="ghost")
+        btn_preset_sensitive = self._make_compact_action_button("Sensitive", tone="ghost")
+        btn_preset_strict = self._make_compact_action_button("Strict", tone="ghost")
         for btn in [btn_preset_balanced, btn_preset_sensitive, btn_preset_strict]:
             preset_row.add_widget(btn)
         preset_wrap.add_widget(preset_lbl)
         preset_wrap.add_widget(preset_row)
         outer.add_widget(preset_wrap)
 
-        btn_row = GridLayout(cols=4, spacing=dp(8), size_hint_y=None, height=dp(46))
-        btn_defaults = self._make_compact_action_button("Defaults", tone="plain")
-        btn_apply = self._make_compact_action_button("Apply", tone="primary")
-        btn_detect = self._make_compact_action_button("Apply + Detect", tone="accent")
-        btn_close = self._make_compact_action_button("Close", tone="soft")
-        for btn in [btn_defaults, btn_apply, btn_detect, btn_close]:
-            btn_row.add_widget(btn)
+        if getattr(self, "ui_mobile", False):
+            btn_row = BoxLayout(orientation="vertical", spacing=dp(8), size_hint_y=None)
+            btn_row.bind(minimum_height=btn_row.setter("height"))
+            top_actions = GridLayout(cols=3, spacing=dp(8), size_hint_y=None, height=dp(44))
+            btn_defaults = self._make_compact_action_button("Reset", tone="ghost")
+            btn_apply = self._make_compact_action_button("Apply", tone="primary")
+            btn_detect = self._make_compact_action_button("Detect", tone="soft")
+            for btn in [btn_defaults, btn_apply, btn_detect]:
+                top_actions.add_widget(btn)
+            btn_close = self._make_compact_action_button("Close", tone="plain")
+            btn_close.size_hint_y = None
+            btn_close.height = dp(42)
+            btn_row.add_widget(top_actions)
+            btn_row.add_widget(btn_close)
+        else:
+            btn_row = GridLayout(cols=4, spacing=dp(8), size_hint_y=None, height=dp(46))
+            btn_defaults = self._make_compact_action_button("Defaults", tone="ghost")
+            btn_apply = self._make_compact_action_button("Apply", tone="primary")
+            btn_detect = self._make_compact_action_button("Detect", tone="soft")
+            btn_close = self._make_compact_action_button("Close", tone="plain")
+            for btn in [btn_defaults, btn_apply, btn_detect, btn_close]:
+                btn_row.add_widget(btn)
         outer.add_widget(btn_row)
 
         popup = Popup(
             title="",
             separator_height=0,
             background="",
-            background_color=(0, 0, 0, 0.72),
+            background_color=(0, 0, 0, 0.80),
             content=outer,
-            size_hint=(0.95 if getattr(self, "ui_mobile", False) else 0.86, 0.90 if getattr(self, "ui_mobile", False) else 0.88),
+            size_hint=(0.96 if getattr(self, "ui_mobile", False) else 0.86, 0.92 if getattr(self, "ui_mobile", False) else 0.88),
             auto_dismiss=True,
         )
+
+        self._bind_popup_background_softening(popup)
 
         def _apply_settings(run_detect=False):
             try:
@@ -8566,9 +8604,10 @@ class MediMapProApp(MDApp):
         outer = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(10))
         self._style_popup_card(outer, palette.get("surface", (0.085, 0.105, 0.145, 1)), radius=dp(22))
 
-        head = BoxLayout(orientation="vertical", spacing=dp(8), size_hint_y=None, height=dp(118))
+        head = BoxLayout(orientation="vertical", spacing=dp(8), size_hint_y=None)
+        head.bind(minimum_height=head.setter("height"))
         title_lbl = Label(
-            text="Preview Mapping Inspector",
+            text=("Map Selection" if getattr(self, "ui_mobile", False) else "Preview Mapping Inspector"),
             color=palette.get("text", (0.93, 0.96, 1.0, 1)),
             size_hint_y=None,
             height=dp(28),
@@ -8578,8 +8617,12 @@ class MediMapProApp(MDApp):
             bold=True,
         )
         title_lbl.bind(size=self._sync_label_text_size)
+        if getattr(self, "ui_mobile", False):
+            subtitle_text = f"Box {focus_id} • {len(ids)} selected"
+        else:
+            subtitle_text = f"Page {page_idx} • Focus box {focus_id} • {len(ids)} selected"
         subtitle = Label(
-            text=f"Page {page_idx} • Focus box {focus_id} • {len(ids)} selected",
+            text=subtitle_text,
             color=palette.get("muted", (0.60, 0.68, 0.80, 1)),
             size_hint_y=None,
             height=dp(22),
@@ -8588,23 +8631,26 @@ class MediMapProApp(MDApp):
             font_size=dp(11.5),
         )
         subtitle.bind(size=self._sync_label_text_size)
-        chip_row = GridLayout(cols=3, spacing=dp(8), size_hint_y=None, height=dp(34))
-        chip_row.add_widget(self._make_popup_chip(f"Boxes: {', '.join(str(i) for i in ids[:5])}{'…' if len(ids) > 5 else ''}", tone="primary"))
-        chip_row.add_widget(self._make_popup_chip(f"Mode: {'Grid' if str(current_grid_flag).strip() == '1' else 'Direct'}", tone="accent"))
-        chip_row.add_widget(self._make_popup_chip("Mapped" if existing else "New Mapping", tone="muted" if existing else "danger"))
         head.add_widget(title_lbl)
         head.add_widget(subtitle)
-        head.add_widget(chip_row)
+        if not getattr(self, "ui_mobile", False):
+            chip_row = GridLayout(cols=3, spacing=dp(8), size_hint_y=None)
+            chip_row.bind(minimum_height=chip_row.setter("height"))
+            chip_row.add_widget(self._make_popup_chip(f"Boxes: {len(ids)}", tone="primary"))
+            chip_row.add_widget(self._make_popup_chip(f"Mode: {'Grid' if str(current_grid_flag).strip() == '1' else 'Direct'}", tone="accent"))
+            chip_row.add_widget(self._make_popup_chip("Mapped" if existing else "New Mapping", tone="muted" if existing else "danger"))
+            head.add_widget(chip_row)
         outer.add_widget(head)
 
-        summary_text = "Existing mapping found for this box." if existing else "No existing mapping for the focused box yet."
         if existing:
-            summary_text = f"Existing mapping: column={existing.get('column', '')} | trigger={existing.get('trigger', '') or '—'} | grid={bool(existing.get('g', False))} | n={int(existing.get('n', 1))}"
+            summary_text = f"Current: {existing.get('column', '') or '—'}"
+        else:
+            summary_text = ("Choose a column to map this selection." if getattr(self, "ui_mobile", False) else "Choose a column and optional trigger for this selection.")
         summary_lbl = Label(
             text=summary_text,
             color=palette.get("text", (0.93, 0.96, 1.0, 1)),
             size_hint_y=None,
-            height=dp(48),
+            height=dp(42),
             halign="left",
             valign="middle",
             font_size=dp(11.5),
@@ -8612,13 +8658,16 @@ class MediMapProApp(MDApp):
         summary_lbl.bind(size=self._sync_label_text_size)
         self._bind_auto_height_label(summary_lbl, min_height=dp(44), extra_pad=dp(8))
         self._style_popup_card(summary_lbl, palette.get("chip", (0.13, 0.18, 0.27, 1)), radius=dp(16))
-        outer.add_widget(summary_lbl)
+        body_scroll = ScrollView(do_scroll_x=False, do_scroll_y=True, bar_width=dp(6), size_hint=(1, 1))
+        body = BoxLayout(orientation="vertical", spacing=dp(10), size_hint_y=None)
+        body.bind(minimum_height=body.setter("height"))
+        body.add_widget(summary_lbl)
 
         live_preview_lbl = Label(
-            text="Live value preview: —",
+            text="Preview: —",
             color=palette.get("text", (0.93, 0.96, 1.0, 1)),
             size_hint_y=None,
-            height=dp(50),
+            height=dp(42),
             halign="left",
             valign="middle",
             font_size=dp(11.5),
@@ -8626,19 +8675,20 @@ class MediMapProApp(MDApp):
         live_preview_lbl.bind(size=self._sync_label_text_size)
         self._bind_auto_height_label(live_preview_lbl, min_height=dp(44), extra_pad=dp(8))
         self._style_popup_card(live_preview_lbl, palette.get("surface_alt", (0.11, 0.135, 0.185, 1)), radius=dp(16))
-        outer.add_widget(live_preview_lbl)
+        body.add_widget(live_preview_lbl)
 
         def _popup_field_block(label_text, widget, helper_text=""):
             block = BoxLayout(orientation="vertical", spacing=dp(4), size_hint_y=None)
-            helper_lines = 1 + (1 if helper_text else 0)
-            block.height = dp(24 + 52 + (16 if helper_text else 0))
+            block.bind(minimum_height=block.setter("height"))
             label = Label(text=label_text, color=palette.get("muted", (0.60, 0.68, 0.80, 1)), size_hint_y=None, height=dp(18), halign="left", valign="middle", font_size=dp(11.5))
             label.bind(size=self._sync_label_text_size)
+            self._bind_auto_height_label(label, min_height=dp(18), extra_pad=dp(2))
             block.add_widget(label)
             block.add_widget(widget)
             if helper_text:
                 helper_lbl = Label(text=helper_text, color=palette.get("muted", (0.60, 0.68, 0.80, 1)), size_hint_y=None, height=dp(14), halign="left", valign="middle", font_size=dp(10.5))
                 helper_lbl.bind(size=self._sync_label_text_size)
+                self._bind_auto_height_label(helper_lbl, min_height=dp(14), extra_pad=dp(4))
                 block.add_widget(helper_lbl)
             return block
 
@@ -8653,7 +8703,7 @@ class MediMapProApp(MDApp):
             background_normal="",
             background_color=palette.get("surface_soft", (0.135, 0.16, 0.215, 1)),
         )
-        form.add_widget(_popup_field_block("Column", column_spinner, "Target data column for the selected box or group"))
+        form.add_widget(_popup_field_block("Column", column_spinner, "Choose the target column" if getattr(self, "ui_mobile", False) else "Target data column for the selected box or group"))
 
         trigger_input = TextInput(
             text=current_trigger,
@@ -8669,9 +8719,10 @@ class MediMapProApp(MDApp):
             hint_text_color=palette.get("muted", (0.60, 0.68, 0.80, 1)),
             padding=[dp(12), dp(12), dp(12), dp(12)],
         )
-        form.add_widget(_popup_field_block("Trigger", trigger_input, "Useful for checkbox-style mappings"))
+        form.add_widget(_popup_field_block("Trigger", trigger_input, "Optional for checkbox mappings" if getattr(self, "ui_mobile", False) else "Optional for checkbox-style mappings"))
 
-        grid_row = GridLayout(cols=2, size_hint_y=None, height=dp(86), spacing=dp(8))
+        grid_row = GridLayout(cols=1 if getattr(self, "ui_mobile", False) else 2, size_hint_y=None, spacing=dp(8))
+        grid_row.bind(minimum_height=grid_row.setter("height"))
         popup_grid_chk = CheckBox(active=(str(current_grid_flag).strip() == "1"))
         grid_flag_wrap = BoxLayout(orientation="horizontal", spacing=dp(8), padding=[dp(10), dp(6), dp(10), dp(6)], size_hint_y=None, height=dp(46))
         self._style_popup_card(grid_flag_wrap, palette.get("surface_alt", (0.11, 0.135, 0.185, 1)), radius=dp(16))
@@ -8694,12 +8745,15 @@ class MediMapProApp(MDApp):
             hint_text_color=palette.get("muted", (0.60, 0.68, 0.80, 1)),
             padding=[dp(12), dp(12), dp(12), dp(12)],
         )
-        grid_row.add_widget(_popup_field_block("Fill Mode", grid_flag_wrap, "Enable when the selection should behave like a grid"))
-        grid_row.add_widget(_popup_field_block("Grid Count", grid_n_input, "How many cells/characters to distribute"))
+        grid_row.add_widget(_popup_field_block("Grid Fill", grid_flag_wrap, "Enable when this selection should fill as a grid"))
+        grid_row.add_widget(_popup_field_block("Grid Count", grid_n_input, "How many cells/characters to distribute" if not getattr(self, "ui_mobile", False) else "Number of grid cells/characters"))
         form.add_widget(grid_row)
+        body.add_widget(form)
+        body_scroll.add_widget(body)
+        outer.add_widget(body_scroll)
 
         def _refresh_live_preview(*_):
-            live_preview_lbl.text = "Live value preview: " + self._get_selected_column_preview(
+            live_preview_lbl.text = "Preview: " + self._get_selected_column_preview(
                 column_spinner.text,
                 trigger=trigger_input.text.strip(),
                 is_grid=bool(getattr(popup_grid_chk, "active", False)),
@@ -8712,26 +8766,42 @@ class MediMapProApp(MDApp):
         grid_n_input.bind(text=_refresh_live_preview)
         _refresh_live_preview()
 
-        outer.add_widget(form)
 
-        btn_row = GridLayout(cols=3, size_hint_y=None, height=dp(48), spacing=dp(8))
-        btn_assign = Button(text="Assign Mapping", background_normal="", background_down="", background_color=palette.get("primary", (0.24, 0.48, 0.96, 1)), color=(1, 1, 1, 1))
-        btn_clear = Button(text="Clear Mapping", background_normal="", background_down="", background_color=palette.get("surface_soft", (0.135, 0.16, 0.215, 1)), color=palette.get("text", (0.93, 0.96, 1.0, 1)))
-        btn_close = Button(text="Close", background_normal="", background_down="", background_color=palette.get("chip", (0.13, 0.18, 0.27, 1)), color=palette.get("text", (0.93, 0.96, 1.0, 1)))
-        btn_row.add_widget(btn_assign)
-        btn_row.add_widget(btn_clear)
-        btn_row.add_widget(btn_close)
+        if getattr(self, "ui_mobile", False):
+            btn_row = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(8))
+            btn_row.bind(minimum_height=btn_row.setter("height"))
+            primary_row = GridLayout(cols=2, size_hint_y=None, spacing=dp(8), height=dp(46))
+            btn_assign = self._make_compact_action_button("Assign", tone="primary")
+            btn_clear = self._make_compact_action_button("Clear", tone="soft")
+            primary_row.add_widget(btn_assign)
+            primary_row.add_widget(btn_clear)
+            btn_close = self._make_compact_action_button("Close", tone="plain")
+            btn_close.size_hint_y = None
+            btn_close.height = dp(44)
+            btn_row.add_widget(primary_row)
+            btn_row.add_widget(btn_close)
+        else:
+            btn_row = GridLayout(cols=3, size_hint_y=None, spacing=dp(8), height=dp(48))
+            btn_assign = self._make_compact_action_button("Assign Mapping", tone="primary")
+            btn_clear = self._make_compact_action_button("Clear Mapping", tone="soft")
+            btn_close = self._make_compact_action_button("Close", tone="plain")
+            for btn in (btn_assign, btn_clear, btn_close):
+                btn.size_hint_y = None
+                btn.height = dp(42)
+                btn_row.add_widget(btn)
         outer.add_widget(btn_row)
 
         popup = Popup(
             title="",
             separator_height=0,
             background="",
-            background_color=(0, 0, 0, 0.70),
+            background_color=(0, 0, 0, 0.80),
             content=outer,
-            size_hint=(0.94 if getattr(self, "ui_mobile", False) else 0.62, 0.76 if getattr(self, "ui_mobile", False) else 0.64),
+            size_hint=(0.96 if getattr(self, "ui_mobile", False) else 0.62, 0.90 if getattr(self, "ui_mobile", False) else 0.64),
             auto_dismiss=True,
         )
+
+        self._bind_popup_background_softening(popup)
 
         def _assign(*_):
             try:
@@ -8986,7 +9056,7 @@ class MediMapProApp(MDApp):
             "Select Config File",
             ["*.json"],
             self._handle_load_config_selection,
-            subtitle="Open a saved MediMap JSON configuration.",
+            subtitle="Open a saved Form Alchemist JSON configuration.",
         )
 
     def _handle_load_config_selection(self, selection, popup):
@@ -9159,7 +9229,7 @@ class MediMapProApp(MDApp):
             Clock.schedule_once(lambda dt, open_state=sidebar_open: self._set_mobile_sidebar_state(open_state), 0)
         try:
             if getattr(self.engine, "pdf_path", ""):
-                self.preview_info.text = "Config loaded. Preview state restored for the active page. Tap to select • Double-tap box to map • Triple-tap empty space to zoom."
+                self.preview_info.text = "Config loaded. Preview restored for the active page."
             else:
                 self.preview_info.text = "Config loaded. Preview state restored. Load the saved PDF to resume preview on the active page."
         except Exception:
@@ -9670,5 +9740,7 @@ class MediMapProApp(MDApp):
             self.set_status("Batch Error: " + str(e))
 
 
+# App entry point
+
 if __name__ == "__main__":
-    MediMapProApp().run()
+    FormAlchemistApp().run()
