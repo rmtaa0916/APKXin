@@ -6053,7 +6053,7 @@ class FormAlchemistApp(MDApp):
         self._startup_presplash = self._build_startup_presplash()
         if self._startup_presplash is not None:
             app_shell.add_widget(self._startup_presplash)
-            Clock.schedule_once(self._start_presplash_fade, 1.35)
+            Clock.schedule_once(self._start_presplash_fade, 2.50)
 
         Clock.schedule_once(lambda dt: self.refresh_backend_capabilities_ui(), 0)
         Clock.schedule_once(lambda dt: self.refresh_learning_ui(), 0)
@@ -6184,7 +6184,7 @@ class FormAlchemistApp(MDApp):
             Animation.cancel_all(overlay)
         except Exception:
             pass
-        anim = Animation(opacity=0, duration=2.20, t="out_quad")
+        anim = Animation(opacity=0, duration=3.50, t="in_out_quad")
         anim.bind(on_complete=lambda *_: self._finish_presplash_fade())
         anim.start(overlay)
 
