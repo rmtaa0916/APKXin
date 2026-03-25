@@ -6098,8 +6098,6 @@ class FormAlchemistApp(MDApp):
         with overlay.canvas.before:
             overlay._bg_color = Color(*bg)
             overlay._bg_rect = Rectangle()
-            overlay._img_color = Color(1, 1, 1, 1)
-            overlay._img_rect = Rectangle(source=splash_asset or "")
             overlay._dim_color = Color(0.012, 0.020, 0.050, 0.08 if splash_asset else 0.82)
             overlay._dim_rect = Rectangle()
             overlay._glow_color = Color(accent[0], accent[1], accent[2], 0.05 if splash_asset else 0.08)
@@ -6111,8 +6109,9 @@ class FormAlchemistApp(MDApp):
             w, h = overlay.size
             overlay._bg_rect.pos = (x, y)
             overlay._bg_rect.size = (w, h)
-            overlay._img_rect.pos = (x, y)
-            overlay._img_rect.size = (w, h)
+            if getattr(overlay, "_splash_widget", None) is not None:
+                overlay._splash_widget.size = (w, h)
+                overlay._splash_widget.pos = (x, y)
             overlay._dim_rect.pos = (x, y)
             overlay._dim_rect.size = (w, h)
             glow = max(w, h) * (0.92 if splash_asset else 0.72)
@@ -6122,6 +6121,19 @@ class FormAlchemistApp(MDApp):
             overlay._glow_2.size = (glow * 0.68, glow * 0.68)
 
         overlay.bind(pos=_upd_overlay, size=_upd_overlay)
+        if splash_asset:
+            splash_widget = Image(
+                source=splash_asset,
+                size_hint=(None, None),
+                allow_stretch=True,
+                keep_ratio=True,
+                opacity=1,
+            )
+            overlay._splash_widget = splash_widget
+            overlay.add_widget(splash_widget)
+        else:
+            overlay._splash_widget = None
+
 
         if not splash_asset and logo_asset:
             logo = Image(source=logo_asset, allow_stretch=True, keep_ratio=True, size_hint=(None, None), opacity=0.94)
