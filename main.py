@@ -6072,6 +6072,9 @@ class FormAlchemistApp(MDApp):
         Clock.schedule_once(lambda dt: self.refresh_backend_capabilities_ui(), 0)
         Clock.schedule_once(lambda dt: self.refresh_learning_ui(), 0)
         Clock.schedule_once(lambda dt: self._maybe_restore_learning_session(), 0.15)
+        Clock.schedule_once(self._hide_android_loading_screen, 0)
+        Clock.schedule_once(self._hide_android_loading_screen, 0.12)
+        Clock.schedule_once(self._hide_android_loading_screen, 0.45)
 
         return app_shell
 
@@ -6087,6 +6090,22 @@ class FormAlchemistApp(MDApp):
     def _finish_presplash_fade(self, *_):
         self._startup_presplash = None
         return
+
+    def _hide_android_loading_screen(self, *_):
+        if platform != "android":
+            return
+        try:
+            from android import loadingscreen
+        except Exception:
+            return
+        try:
+            loadingscreen.hide_loading_screen()
+        except Exception:
+            pass
+        try:
+            Window.canvas.ask_update()
+        except Exception:
+            pass
 
     # --------------------------------------------------------
     # UI helpers

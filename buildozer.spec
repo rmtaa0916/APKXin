@@ -25,6 +25,8 @@ android.allow_backup = True
 
 android.permissions = INTERNET
 android.add_src = android_src
+android.entrypoint = org.kivy.android.PythonActivity
+android.activity_class_name = org.formalchemist.formalchemist.MainActivity
 
 [buildozer]
 log_level = 2
