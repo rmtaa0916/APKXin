@@ -5364,7 +5364,7 @@ class FormAlchemistApp(MDApp):
         self.ext_high = make_input(DEFAULTS["Ext_High"], "0.60")
         self.c_fill = make_input(DEFAULTS["C_FillMin"], "0.45")
         self.c_eps = make_input(DEFAULTS["C_Eps"], "0.04")
-        self.use_extent_chk = (MDSwitch(active=bool(DEFAULTS["Use_Extent"])) if KIVYMD_AVAILABLE and MDSwitch is not None else CheckBox(active=bool(DEFAULTS["Use_Extent"])))
+        self.use_extent_chk = CheckBox(active=bool(DEFAULTS["Use_Extent"]))
 
         detection_fields = [
             labeled_field("Field Area", self.f_area, "Minimum contour area kept as a field"),
@@ -5411,7 +5411,7 @@ class FormAlchemistApp(MDApp):
         self.box_ids_input = make_input("", "0,1,2")
         self.column_spinner = make_spinner("Select Column")
         self.trigger_input = make_input("", "Trigger")
-        self.grid_flag_chk = (MDSwitch(active=False) if KIVYMD_AVAILABLE and MDSwitch is not None else CheckBox(active=False))
+        self.grid_flag_chk = CheckBox(active=False)
         self.grid_n_input = make_input("1", "1", input_filter="int")
         map_body.add_widget(labeled_field("Selected", self.box_ids_input, "Tap boxes in preview to add or remove them" if is_mobile else "Click boxes in preview to add or remove them"))
         map_body.add_widget(labeled_field("Column", self.column_spinner, "Data column written into the selected target"))
