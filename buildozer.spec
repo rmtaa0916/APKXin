@@ -13,7 +13,8 @@ orientation = portrait
 fullscreen = 0
 
 icon.filename = assets/icon.png
-presplash.filename = assets/presplash.png
+# Route B: disable Buildozer presplash; native startup will be provided by custom Android activity/theme
+# presplash.filename = assets/presplash.png
 
 android.archs = arm64-v8a
 android.api = 33

@@ -6066,10 +6066,8 @@ class FormAlchemistApp(MDApp):
         app_shell.add_widget(root)
         self.root_container = root
         self._app_shell = app_shell
-        self._startup_presplash = self._build_startup_presplash()
-        if self._startup_presplash is not None:
-            app_shell.add_widget(self._startup_presplash)
-            Clock.schedule_once(self._start_presplash_fade, 2.50)
+        # Route B startup: no Python/Kivy startup splash. Startup visuals are owned by the custom native Android activity/theme.
+        self._startup_presplash = None
 
         Clock.schedule_once(lambda dt: self.refresh_backend_capabilities_ui(), 0)
         Clock.schedule_once(lambda dt: self.refresh_learning_ui(), 0)
@@ -6078,155 +6076,17 @@ class FormAlchemistApp(MDApp):
         return app_shell
 
     def _build_startup_presplash(self):
-        overlay = FloatLayout(size_hint=(1, 1), opacity=1)
-        palette = getattr(self, "ui_palette", {}) or {}
-        bg = palette.get("bg", (0.006, 0.010, 0.030, 1))
-        text_color = palette.get("text", (0.970, 0.980, 1.000, 1))
-        muted = palette.get("muted", (0.710, 0.785, 0.930, 1))
-        accent = palette.get("accent", (0.960, 0.710, 0.300, 1))
-
-        presplash_candidates = [
-            os.path.join("assets", "presplash.png"),
-            os.path.join("assets", "presplash.jpg"),
-            os.path.join("assets", "presplash.webp"),
-        ]
-        splash_asset = next((p for p in presplash_candidates if os.path.exists(p)), None)
-        logo_asset = os.path.join("assets", "icon.png") if os.path.exists(os.path.join("assets", "icon.png")) else None
-        overlay._splash_asset = splash_asset
-        overlay._logo_asset = logo_asset
-
-        with overlay.canvas.before:
-            overlay._bg_color = Color(*bg)
-            overlay._bg_rect = Rectangle()
-            overlay._dim_color = Color(0.012, 0.020, 0.050, 0.08 if splash_asset else 0.82)
-            overlay._dim_rect = Rectangle()
-            overlay._glow_color = Color(accent[0], accent[1], accent[2], 0.05 if splash_asset else 0.08)
-            overlay._glow_1 = Ellipse()
-            overlay._glow_2 = Ellipse()
-
-        def _upd_overlay(*_):
-            x, y = overlay.pos
-            w, h = overlay.size
-            overlay._bg_rect.pos = (x, y)
-            overlay._bg_rect.size = (w, h)
-            if getattr(overlay, "_splash_widget", None) is not None:
-                overlay._splash_widget.size = (w, h)
-                overlay._splash_widget.pos = (x, y)
-            overlay._dim_rect.pos = (x, y)
-            overlay._dim_rect.size = (w, h)
-            glow = max(w, h) * (0.92 if splash_asset else 0.72)
-            overlay._glow_1.pos = (x + w * 0.5 - glow * 0.5, y + h * 0.54 - glow * 0.5)
-            overlay._glow_1.size = (glow, glow)
-            overlay._glow_2.pos = (x + w * 0.5 - glow * 0.34, y + h * 0.54 - glow * 0.34)
-            overlay._glow_2.size = (glow * 0.68, glow * 0.68)
-
-        overlay.bind(pos=_upd_overlay, size=_upd_overlay)
-        if splash_asset:
-            splash_widget = Image(
-                source=splash_asset,
-                size_hint=(None, None),
-                allow_stretch=True,
-                keep_ratio=True,
-                opacity=1,
-            )
-            overlay._splash_widget = splash_widget
-            overlay.add_widget(splash_widget)
-        else:
-            overlay._splash_widget = None
-
-
-        if not splash_asset and logo_asset:
-            logo = Image(source=logo_asset, allow_stretch=True, keep_ratio=True, size_hint=(None, None), opacity=0.94)
-            overlay._logo_widget = logo
-            overlay.add_widget(logo)
-            def _upd_logo(*_):
-                w, h = overlay.size
-                size = min(w, h) * 0.34
-                logo.size = (size, size)
-                logo.pos = (overlay.x + w * 0.5 - size * 0.5, overlay.y + h * 0.56 - size * 0.5)
-            overlay.bind(pos=_upd_logo, size=_upd_logo)
-            _upd_logo()
-
-        if splash_asset and os.path.basename(splash_asset).lower().startswith("presplash"):
-            pass
-        else:
-            center = BoxLayout(orientation="vertical", spacing=dp(12), padding=[dp(20), dp(20), dp(20), dp(24)], size_hint=(None, None))
-            center.width = min(max(dp(220), Window.width * 0.62), dp(360))
-            center.height = dp(240) if getattr(self, "ui_mobile", False) else dp(270)
-            center.pos_hint = {"center_x": 0.5, "center_y": 0.52}
-
-            with center.canvas.before:
-                center._shadow_color = Color(0, 0, 0, 0.24)
-                center._shadow = RoundedRectangle(radius=[dp(26)] * 4)
-                center._bg_color = Color(*palette.get("surface", (0.028, 0.052, 0.110, 0.992)))
-                center._bg = RoundedRectangle(radius=[dp(24)] * 4)
-                center._shine_color = Color(1, 1, 1, 0.03)
-                center._shine = RoundedRectangle(radius=[dp(20)] * 4)
-                center._border_color = Color(*palette.get("border", (0.205, 0.275, 0.455, 0.54)))
-                center._border = Line(rounded_rectangle=[0, 0, 0, 0, dp(24)], width=1.0)
-
-            def _upd_center(*_):
-                x, y = center.pos
-                w, h = center.size
-                center._shadow.pos = (x, y - dp(2))
-                center._shadow.size = (w, h + dp(3))
-                center._bg.pos = (x, y)
-                center._bg.size = (w, h)
-                center._shine.pos = (x + dp(2), y + h * 0.58)
-                center._shine.size = (max(dp(40), w - dp(4)), max(dp(18), h * 0.18))
-                center._border.rounded_rectangle = [x, y, w, h, dp(24)]
-
-            center.bind(pos=_upd_center, size=_upd_center)
-
-            if splash_asset:
-                logo = Image(source=splash_asset, size_hint=(None, None), size=(dp(84), dp(84)), allow_stretch=True, keep_ratio=True)
-                anchor = BoxLayout(size_hint_y=None, height=dp(96), padding=[0, dp(8), 0, 0])
-                anchor.add_widget(Widget())
-                anchor.add_widget(logo)
-                anchor.add_widget(Widget())
-                center.add_widget(anchor)
-            else:
-                mark = Label(text="✦", color=accent, font_size=dp(34), size_hint_y=None, height=dp(84), halign="center", valign="middle")
-                mark.bind(size=self._sync_label_text_size)
-                center.add_widget(mark)
-
-            title = Label(text=APP_TITLE, color=text_color, bold=True, size_hint_y=None, height=dp(34), halign="center", valign="middle", font_size=dp(22 if getattr(self, "ui_mobile", False) else 24))
-            title.bind(size=self._sync_label_text_size)
-            center.add_widget(title)
-
-            subtitle = Label(text="Preparing workspace…", color=muted, size_hint_y=None, height=dp(22), halign="center", valign="middle", font_size=dp(11.5 if getattr(self, "ui_mobile", False) else 12.5))
-            subtitle.bind(size=self._sync_label_text_size)
-            center.add_widget(subtitle)
-
-            overlay.add_widget(center)
-            _upd_center()
-
-        _upd_overlay()
-        return overlay
+        # Route B startup: disable the in-app splash completely so the app never falls back
+        # to assets/presplash.* or assets/icon.png during startup.
+        return None
 
     def _start_presplash_fade(self, *_):
-        overlay = getattr(self, "_startup_presplash", None)
-        if overlay is None:
-            return
-        try:
-            Animation.cancel_all(overlay)
-        except Exception:
-            pass
-        anim = Animation(opacity=0, duration=3.50, t="in_out_quad")
-        anim.bind(on_complete=lambda *_: self._finish_presplash_fade())
-        anim.start(overlay)
+        self._startup_presplash = None
+        return
 
     def _finish_presplash_fade(self, *_):
-        overlay = getattr(self, "_startup_presplash", None)
-        if overlay is None:
-            return
-        parent = getattr(overlay, "parent", None)
-        if parent is not None:
-            try:
-                parent.remove_widget(overlay)
-            except Exception:
-                pass
         self._startup_presplash = None
+        return
 
     # --------------------------------------------------------
     # UI helpers
