@@ -93,13 +93,10 @@ from kivy.animation import Animation
 from kivy.clock import Clock
 from kivy.core.text import Label as CoreLabel
 from kivy.core.window import Window
-try:
-    from kivy.core.image import Image as CoreImage
-except Exception:
-    CoreImage = None
 from kivy.graphics import Color, Line, Rectangle, RoundedRectangle, Ellipse
 from kivy.graphics.texture import Texture
 from kivy.metrics import dp
+from kivy.uix.anchorlayout import AnchorLayout
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
 from kivy.uix.checkbox import CheckBox
@@ -4888,8 +4885,7 @@ class FormAlchemistApp(MDApp):
             return box
 
         def labeled_checkbox(label_text, checkbox, helper=None):
-            right_w = dp(72 if is_mobile else 58)
-            row = BoxLayout(orientation="horizontal", size_hint_y=None, height=(dp(48) if is_mobile else dp(34)), spacing=dp(10), padding=[0, 0, dp(12 if is_mobile else 6), 0])
+            row = BoxLayout(orientation="horizontal", size_hint_y=None, height=(dp(40) if is_mobile else dp(34)), spacing=dp(10))
             lbl_cls = MDLabel if KIVYMD_AVAILABLE and MDLabel is not None else Label
             lbl_kwargs = dict(text=label_text, halign="left", valign="middle")
             if lbl_cls is Label:
@@ -4901,13 +4897,12 @@ class FormAlchemistApp(MDApp):
                 lbl.bind(size=self._sync_label_text_size)
                 self._bind_auto_height_label(lbl, min_height=(dp(22) if is_mobile else dp(18)), extra_pad=dp(4))
             row.add_widget(lbl)
-            toggle_slot = AnchorLayout(anchor_x="right", anchor_y="center", size_hint=(None, 1), width=right_w)
+            row.add_widget(Widget())
             checkbox.size_hint = (None, None)
-            checkbox.size = ((dp(26), dp(18)) if is_mobile else (dp(34), dp(22)))
-            toggle_slot.add_widget(checkbox)
-            row.add_widget(toggle_slot)
+            checkbox.size = ((dp(30), dp(20)) if is_mobile else (dp(36), dp(24)))
+            row.add_widget(checkbox)
             if helper:
-                wrap = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(3), padding=[0, 0, dp(12 if is_mobile else 6), 0])
+                wrap = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(3))
                 wrap.bind(minimum_height=wrap.setter("height"))
                 wrap.add_widget(row)
                 sub = Label(text=helper, color=palette["muted"], size_hint_y=None,
@@ -6095,38 +6090,19 @@ class FormAlchemistApp(MDApp):
             overlay._bg_rect = Rectangle()
             overlay._img_color = Color(1, 1, 1, 1)
             overlay._img_rect = Rectangle(source=splash_asset or "")
-            overlay._dim_color = Color(0.012, 0.020, 0.050, 0.0 if splash_asset else 0.82)
+            overlay._dim_color = Color(0.012, 0.020, 0.050, 0.08 if splash_asset else 0.82)
             overlay._dim_rect = Rectangle()
-            overlay._glow_color = Color(accent[0], accent[1], accent[2], 0.0 if splash_asset else 0.08)
+            overlay._glow_color = Color(accent[0], accent[1], accent[2], 0.05 if splash_asset else 0.08)
             overlay._glow_1 = Ellipse()
             overlay._glow_2 = Ellipse()
-
-        splash_native_size = None
-        if splash_asset and CoreImage is not None:
-            try:
-                splash_native_size = CoreImage(splash_asset).texture.size
-            except Exception:
-                splash_native_size = None
 
         def _upd_overlay(*_):
             x, y = overlay.pos
             w, h = overlay.size
             overlay._bg_rect.pos = (x, y)
             overlay._bg_rect.size = (w, h)
-            if splash_asset and splash_native_size:
-                sw, sh = splash_native_size
-                if sw > 0 and sh > 0 and w > 0 and h > 0:
-                    scale = max(float(w) / float(sw), float(h) / float(sh))
-                    rw = sw * scale
-                    rh = sh * scale
-                    overlay._img_rect.pos = (x + (w - rw) * 0.5, y + (h - rh) * 0.5)
-                    overlay._img_rect.size = (rw, rh)
-                else:
-                    overlay._img_rect.pos = (x, y)
-                    overlay._img_rect.size = (w, h)
-            else:
-                overlay._img_rect.pos = (x, y)
-                overlay._img_rect.size = (w, h)
+            overlay._img_rect.pos = (x, y)
+            overlay._img_rect.size = (w, h)
             overlay._dim_rect.pos = (x, y)
             overlay._dim_rect.size = (w, h)
             glow = max(w, h) * (0.92 if splash_asset else 0.72)
@@ -8474,16 +8450,15 @@ class FormAlchemistApp(MDApp):
             content.add_widget(card)
 
         extent_toggle = CheckBox(active=bool(getattr(self.use_extent_chk, "active", False)))
-        extent_row = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint_y=None, height=dp(46), padding=[0, 0, dp(12), 0])
+        extent_row = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint_y=None, height=dp(38))
         extent_lbl = Label(text="Use Extent", color=palette.get("text", (0.93, 0.96, 1.0, 1)), halign="left", valign="middle", font_size=dp(11))
         extent_lbl.bind(size=self._sync_label_text_size)
         extent_row.add_widget(extent_lbl)
-        extent_slot = AnchorLayout(anchor_x="right", anchor_y="center", size_hint=(None, 1), width=dp(72))
+        extent_row.add_widget(Widget())
         extent_toggle.size_hint = (None, None)
-        extent_toggle.size = (dp(26), dp(18))
-        extent_slot.add_widget(extent_toggle)
-        extent_row.add_widget(extent_slot)
-        extent_wrap = BoxLayout(orientation="vertical", spacing=dp(3), padding=[dp(10), dp(8), dp(16), dp(8)], size_hint_y=None)
+        extent_toggle.size = (dp(30), dp(20))
+        extent_row.add_widget(extent_toggle)
+        extent_wrap = BoxLayout(orientation="vertical", spacing=dp(3), padding=[dp(10), dp(8), dp(10), dp(8)], size_hint_y=None)
         extent_wrap.bind(minimum_height=extent_wrap.setter("height"))
         self._style_popup_card(extent_wrap, palette.get("surface_alt", (0.11, 0.135, 0.185, 1)), radius=dp(16))
         extent_wrap.add_widget(extent_row)
