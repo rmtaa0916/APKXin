@@ -4885,7 +4885,9 @@ class FormAlchemistApp(MDApp):
             return box
 
         def labeled_checkbox(label_text, checkbox, helper=None):
-            row = BoxLayout(orientation="horizontal", size_hint_y=None, height=(dp(40) if is_mobile else dp(34)), spacing=dp(10))
+            slot_w = dp(56 if is_mobile else 64)
+            row_h = dp(42 if is_mobile else 34)
+            row = BoxLayout(orientation="horizontal", size_hint_y=None, height=row_h, spacing=dp(8))
             lbl_cls = MDLabel if KIVYMD_AVAILABLE and MDLabel is not None else Label
             lbl_kwargs = dict(text=label_text, halign="left", valign="middle")
             if lbl_cls is Label:
@@ -4897,10 +4899,18 @@ class FormAlchemistApp(MDApp):
                 lbl.bind(size=self._sync_label_text_size)
                 self._bind_auto_height_label(lbl, min_height=(dp(22) if is_mobile else dp(18)), extra_pad=dp(4))
             row.add_widget(lbl)
-            row.add_widget(Widget())
+            toggle_slot = AnchorLayout(
+                anchor_x="right",
+                anchor_y="center",
+                size_hint=(None, None),
+                width=slot_w,
+                height=row_h,
+                padding=(0, 0, dp(8 if is_mobile else 4), 0),
+            )
             checkbox.size_hint = (None, None)
-            checkbox.size = ((dp(30), dp(20)) if is_mobile else (dp(36), dp(24)))
-            row.add_widget(checkbox)
+            checkbox.size = ((dp(24), dp(18)) if is_mobile else (dp(32), dp(22)))
+            toggle_slot.add_widget(checkbox)
+            row.add_widget(toggle_slot)
             if helper:
                 wrap = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(3))
                 wrap.bind(minimum_height=wrap.setter("height"))
@@ -8450,14 +8460,16 @@ class FormAlchemistApp(MDApp):
             content.add_widget(card)
 
         extent_toggle = CheckBox(active=bool(getattr(self.use_extent_chk, "active", False)))
-        extent_row = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint_y=None, height=dp(38))
+        extent_row_h = dp(42)
+        extent_row = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint_y=None, height=extent_row_h)
         extent_lbl = Label(text="Use Extent", color=palette.get("text", (0.93, 0.96, 1.0, 1)), halign="left", valign="middle", font_size=dp(11))
         extent_lbl.bind(size=self._sync_label_text_size)
         extent_row.add_widget(extent_lbl)
-        extent_row.add_widget(Widget())
+        extent_slot = AnchorLayout(anchor_x="right", anchor_y="center", size_hint=(None, None), width=dp(56), height=extent_row_h, padding=(0, 0, dp(10), 0))
         extent_toggle.size_hint = (None, None)
-        extent_toggle.size = (dp(30), dp(20))
-        extent_row.add_widget(extent_toggle)
+        extent_toggle.size = (dp(24), dp(18))
+        extent_slot.add_widget(extent_toggle)
+        extent_row.add_widget(extent_slot)
         extent_wrap = BoxLayout(orientation="vertical", spacing=dp(3), padding=[dp(10), dp(8), dp(10), dp(8)], size_hint_y=None)
         extent_wrap.bind(minimum_height=extent_wrap.setter("height"))
         self._style_popup_card(extent_wrap, palette.get("surface_alt", (0.11, 0.135, 0.185, 1)), radius=dp(16))
