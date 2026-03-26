@@ -13,7 +13,7 @@ orientation = portrait
 fullscreen = 0
 
 icon.filename = assets/icon.png
-# Route B: disable Buildozer presplash; native startup will be provided by custom Android activity/theme
+# Native Route B: disable Buildozer presplash completely.
 # presplash.filename = assets/presplash.png
 
 android.archs = arm64-v8a
@@ -25,7 +25,8 @@ android.allow_backup = True
 
 android.permissions = INTERNET
 android.add_src = android_src
-android.entrypoint = org.kivy.android.PythonActivity
+# IMPORTANT: set BOTH values to the custom activity so the bootstrap actually uses it.
+android.entrypoint = org.formalchemist.formalchemist.MainActivity
 android.activity_class_name = org.formalchemist.formalchemist.MainActivity
 
 [buildozer]

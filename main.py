@@ -709,6 +709,44 @@ DEFAULTS = {
     "Grid_N": 1,
 }
 
+DETECTION_UI_META = {
+    "f_area": {"label": "Minimum Box Area", "helper": "Ignore very tiny shapes. Raise this if the app finds too many tiny false boxes."},
+    "f_minw": {"label": "Minimum Box Width", "helper": "Ignore narrow boxes that are too small to be useful."},
+    "f_minh": {"label": "Minimum Box Height", "helper": "Ignore short boxes that are too small to be useful."},
+    "f_close": {"label": "Box Cleanup Strength", "helper": "Smooth and join nearby box edges before the app decides what is a fill area."},
+    "line_minw": {"label": "Minimum Line Length", "helper": "Ignore short marks and only keep longer answer lines."},
+    "line_maxw": {"label": "Maximum Line Length", "helper": "Ignore extra-long lines that are probably table borders or page decorations."},
+    "c_strict": {"label": "Checkbox Strictness", "helper": "Higher values make checkbox matching stricter. Lower values make it more forgiving."},
+    "c_size_min": {"label": "Minimum Checkbox Size", "helper": "Ignore checkbox shapes smaller than this."},
+    "c_size_max": {"label": "Maximum Checkbox Size", "helper": "Ignore checkbox shapes larger than this."},
+    "c_border": {"label": "Border Visibility", "helper": "How much of the checkbox border should be visible for a good match."},
+    "c_inner": {"label": "Inner Empty Space", "helper": "How empty the inside of the checkbox should look."},
+    "roi_max": {"label": "Maximum Search Window", "helper": "The biggest area to inspect around a possible checkbox."},
+    "c_open": {"label": "Noise Cleanup Before Check", "helper": "Removes tiny specks before checking if a shape is a checkbox."},
+    "c_close": {"label": "Gap Closing After Check", "helper": "Closes small gaps so broken checkbox borders are easier to catch."},
+    "c_band": {"label": "Edge Band Check", "helper": "Checks whether the top and bottom border bands look like a checkbox."},
+    "c_aspect": {"label": "Square Shape Tolerance", "helper": "How close to a square the checkbox should be allowed to look."},
+    "ext_low": {"label": "Minimum Shape Density", "helper": "Lower bound for how solid the checkbox-like shape should be."},
+    "ext_high": {"label": "Maximum Shape Density", "helper": "Upper bound for how solid the checkbox-like shape should be."},
+    "c_fill": {"label": "Minimum Filled Area", "helper": "Ignore shapes that do not fill enough of their own outline."},
+    "c_eps": {"label": "Shape Simplify Amount", "helper": "How much the shape outline is simplified before checking corners."},
+    "use_extent": {"label": "Use Extra Shape Filter", "helper": "Adds another shape test for checkbox matching. Helpful for noisy forms."},
+}
+
+DETECTION_GROUP_LABELS = {
+    "Field": "Fill Areas / Boxes",
+    "Lines": "Answer Lines",
+    "Checkbox": "Checkboxes",
+    "Extent": "Extra Shape Filters",
+}
+
+def detection_ui_label(key, fallback=None):
+    meta = DETECTION_UI_META.get(str(key), {})
+    return meta.get("label", fallback or str(key))
+
+def detection_ui_helper(key, fallback=""):
+    meta = DETECTION_UI_META.get(str(key), {})
+    return meta.get("helper", fallback or "")
 
 
 # ============================================================
@@ -5254,8 +5292,8 @@ class FormAlchemistApp(MDApp):
             display_map = {
                 "Files": "Files",
                 "Session": "Session",
-                "Detection": "Detect",
-                "Learning": "Learn",
+                "Detection": "Fields",
+                "Learning": "Memory",
                 "Mapping": "Map",
                 "Export": "Export",
             }
@@ -5278,11 +5316,11 @@ class FormAlchemistApp(MDApp):
         file_grid = GridLayout(cols=1 if is_mobile else 3, spacing=dp(8), size_hint_y=None)
         file_buttons = [
             ("Load PDF", self.on_load_pdf, "primary"),
-            ("Load CSV/XLSX", self.on_load_csv, "soft"),
-            ("Load GSheet", self.on_load_gsheet_url, "soft"),
-            ("Load Config", self.on_load_config, "plain"),
-            ("Merge Mappings", self.on_merge_config, "plain"),
-            ("Save Config", self.on_save_config, "accent"),
+            ("Load Data File", self.on_load_csv, "soft"),
+            ("Google Sheet", self.on_load_gsheet_url, "soft"),
+            ("Open Saved Setup", self.on_load_config, "plain"),
+            ("Merge Saved Setup", self.on_merge_config, "plain"),
+            ("Save Setup", self.on_save_config, "accent"),
         ]
         rows = (len(file_buttons) + file_grid.cols - 1) // file_grid.cols
         file_grid.height = rows * row_h + max(rows-1,0) * dp(8)
@@ -5296,10 +5334,10 @@ class FormAlchemistApp(MDApp):
         else:
             self._desktop_section_cards["Workspace"] = files_card
 
-        nav_card, nav_body = make_card("Session", "Pick patient, page, and actions" if is_mobile else "Choose a patient, move pages, detect, and refresh")
+        nav_card, nav_body = make_card("Session", "Choose a record, page, and next action" if is_mobile else "Choose a record, move through pages, find fillable areas, and refresh the preview")
         self.patient_spinner = make_spinner("Select Patient")
         self.patient_spinner.bind(text=self.on_patient_change)
-        nav_body.add_widget(labeled_field("Patient", self.patient_spinner, "Active data row for preview and export"))
+        nav_body.add_widget(labeled_field("Record", self.patient_spinner, "The selected row used for preview and export"))
         nav_grid = GridLayout(cols=3, spacing=dp(8), size_hint_y=None, height=row_h)
         self.page_input_main = make_input("0", "Page", input_filter="int")
         self.btn_prev = make_button("Prev", tone="plain")
@@ -5312,11 +5350,11 @@ class FormAlchemistApp(MDApp):
         nav_grid.add_widget(self.page_input_main)
         nav_grid.add_widget(self.btn_prev)
         nav_grid.add_widget(self.btn_next)
-        nav_body.add_widget(labeled_field("Page", nav_grid, "Preview uses zero-based page index"))
+        nav_body.add_widget(labeled_field("Page Number", nav_grid, "Page 0 is the first page"))
         action_grid = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=row_h)
-        self.btn_detect = make_button("Run Detect", tone="accent")
+        self.btn_detect = make_button("Find Fields", tone="accent")
         self.btn_detect.bind(on_release=self.on_run_detect)
-        self.btn_preview = make_button("Refresh Preview", tone="primary")
+        self.btn_preview = make_button("Refresh Form Preview", tone="primary")
         self.btn_preview.bind(on_release=self.on_preview)
         action_grid.add_widget(self.btn_detect)
         action_grid.add_widget(self.btn_preview)
@@ -5337,8 +5375,8 @@ class FormAlchemistApp(MDApp):
         else:
             self._desktop_section_cards["Session"] = nav_card
 
-        detect_card, detect_body = make_card("Detection", "Tune detection thresholds" if is_mobile else "Field, line, checkbox, and extent thresholds")
-        explain = Label(text="F = field sizing  •  Line = answer lines  •  C = checkbox tuning  •  Ext = contour extent limits",
+        detect_card, detect_body = make_card("Detection", "Adjust how the app finds boxes, lines, and checkboxes" if is_mobile else "Adjust how the app finds fill areas, answer lines, and checkboxes")
+        explain = Label(text="These controls decide how the app finds fill areas, answer lines, and checkboxes.",
                         color=palette["muted"], size_hint_y=None, height=dp(18), halign="left", valign="middle", font_size=dp(10.5 if is_mobile else 11))
         explain.bind(size=self._sync_label_text_size)
         self._bind_auto_height_label(explain, min_height=dp(18), extra_pad=dp(4))
@@ -5367,27 +5405,27 @@ class FormAlchemistApp(MDApp):
         self.use_extent_chk = CheckBox(active=bool(DEFAULTS["Use_Extent"]))
 
         detection_fields = [
-            labeled_field("Field Area", self.f_area, "Minimum contour area kept as a field"),
-            labeled_field("Field Min Width", self.f_minw),
-            labeled_field("Field Min Height", self.f_minh),
-            labeled_field("Field Close", self.f_close, "Morph close kernel for field cleanup"),
-            labeled_field("Line Min Width", self.line_minw),
-            labeled_field("Line Max Width", self.line_maxw),
-            labeled_field("Checkbox Strict", self.c_strict, "Higher values tighten checkbox rules"),
-            labeled_field("Checkbox Min Size", self.c_size_min),
-            labeled_field("Checkbox Max Size", self.c_size_max),
-            labeled_field("Border Fill", self.c_border),
-            labeled_field("Inner Fill", self.c_inner),
-            labeled_field("ROI Max", self.roi_max),
-            labeled_field("Checkbox Open", self.c_open),
-            labeled_field("Checkbox Close", self.c_close),
-            labeled_field("Band %", self.c_band),
-            labeled_field("Aspect Tolerance", self.c_aspect),
-            labeled_field("Extent Low", self.ext_low),
-            labeled_field("Extent High", self.ext_high),
-            labeled_field("Fill Min", self.c_fill),
-            labeled_field("Approx Eps", self.c_eps),
-            labeled_checkbox("Use Extent", self.use_extent_chk, "Use contour extent as an extra checkbox filter"),
+            labeled_field(detection_ui_label("f_area", "Field Area"), self.f_area, detection_ui_helper("f_area", "Minimum contour area kept as a field")),
+            labeled_field(detection_ui_label("f_minw", "Field Min Width"), self.f_minw, detection_ui_helper("f_minw")),
+            labeled_field(detection_ui_label("f_minh", "Field Min Height"), self.f_minh, detection_ui_helper("f_minh")),
+            labeled_field(detection_ui_label("f_close", "Field Close"), self.f_close, detection_ui_helper("f_close", "Morph close kernel for field cleanup")),
+            labeled_field(detection_ui_label("line_minw", "Line Min Width"), self.line_minw, detection_ui_helper("line_minw")),
+            labeled_field(detection_ui_label("line_maxw", "Line Max Width"), self.line_maxw, detection_ui_helper("line_maxw")),
+            labeled_field(detection_ui_label("c_strict", "Checkbox Strict"), self.c_strict, detection_ui_helper("c_strict", "Higher values tighten checkbox rules")),
+            labeled_field(detection_ui_label("c_size_min", "Checkbox Min Size"), self.c_size_min, detection_ui_helper("c_size_min")),
+            labeled_field(detection_ui_label("c_size_max", "Checkbox Max Size"), self.c_size_max, detection_ui_helper("c_size_max")),
+            labeled_field(detection_ui_label("c_border", "Border Fill"), self.c_border, detection_ui_helper("c_border")),
+            labeled_field(detection_ui_label("c_inner", "Inner Fill"), self.c_inner, detection_ui_helper("c_inner")),
+            labeled_field(detection_ui_label("roi_max", "ROI Max"), self.roi_max, detection_ui_helper("roi_max")),
+            labeled_field(detection_ui_label("c_open", "Checkbox Open"), self.c_open, detection_ui_helper("c_open")),
+            labeled_field(detection_ui_label("c_close", "Checkbox Close"), self.c_close, detection_ui_helper("c_close")),
+            labeled_field(detection_ui_label("c_band", "Band %"), self.c_band, detection_ui_helper("c_band")),
+            labeled_field(detection_ui_label("c_aspect", "Aspect Tolerance"), self.c_aspect, detection_ui_helper("c_aspect")),
+            labeled_field(detection_ui_label("ext_low", "Extent Low"), self.ext_low, detection_ui_helper("ext_low")),
+            labeled_field(detection_ui_label("ext_high", "Extent High"), self.ext_high, detection_ui_helper("ext_high")),
+            labeled_field(detection_ui_label("c_fill", "Fill Min"), self.c_fill, detection_ui_helper("c_fill")),
+            labeled_field(detection_ui_label("c_eps", "Approx Eps"), self.c_eps, detection_ui_helper("c_eps")),
+            labeled_checkbox(detection_ui_label("use_extent", "Use Extent"), self.use_extent_chk, detection_ui_helper("use_extent", "Use contour extent as an extra checkbox filter")),
         ]
         det_grid = GridLayout(cols=1 if is_mobile else 3, spacing=dp(8), size_hint_y=None)
         det_grid.bind(minimum_height=det_grid.setter("height"))
@@ -5395,9 +5433,9 @@ class FormAlchemistApp(MDApp):
             det_grid.add_widget(w)
         detect_body.add_widget(det_grid)
         det_action_row = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=row_h)
-        self.btn_detection_dialog = make_button("Popup Tuning", tone="soft")
+        self.btn_detection_dialog = make_button("Easy Tuning Sliders", tone="soft")
         self.btn_detection_dialog.bind(on_release=self.open_detection_settings_popup)
-        self.btn_detection_run = make_button("Detect Now", tone="accent")
+        self.btn_detection_run = make_button("Find Fields Now", tone="accent")
         self.btn_detection_run.bind(on_release=self.on_run_detect)
         det_action_row.add_widget(self.btn_detection_dialog)
         det_action_row.add_widget(self.btn_detection_run)
@@ -5407,21 +5445,21 @@ class FormAlchemistApp(MDApp):
         else:
             self._desktop_section_cards["Detection"] = detect_card
 
-        map_card, map_body = make_card("Mapping", "Assign values to selected boxes" if is_mobile else "Assign values to selected boxes directly from preview")
+        map_card, map_body = make_card("Mapping", "Link selected boxes to data columns" if is_mobile else "Link selected boxes to your data directly from the preview")
         self.box_ids_input = make_input("", "0,1,2")
         self.column_spinner = make_spinner("Select Column")
         self.trigger_input = make_input("", "Trigger")
         self.grid_flag_chk = CheckBox(active=False)
         self.grid_n_input = make_input("1", "1", input_filter="int")
-        map_body.add_widget(labeled_field("Selected", self.box_ids_input, "Tap boxes in preview to add or remove them" if is_mobile else "Click boxes in preview to add or remove them"))
-        map_body.add_widget(labeled_field("Column", self.column_spinner, "Data column written into the selected target"))
-        map_body.add_widget(labeled_field("Trigger", self.trigger_input, "Checkbox value (optional)" if is_mobile else "Leave blank for text fill, use value for checkbox X mark"))
+        map_body.add_widget(labeled_field("Selected Boxes", self.box_ids_input, "Tap boxes in the preview to add or remove them" if is_mobile else "Click boxes in the preview to add or remove them"))
+        map_body.add_widget(labeled_field("Data Column", self.column_spinner, "The data column that will be written into the selected box or boxes"))
+        map_body.add_widget(labeled_field("Checkbox Trigger Value", self.trigger_input, "Optional: only mark the checkbox when the selected value matches this text" if is_mobile else "Leave blank for normal text filling. Use a value only when this mapping should place an X in a checkbox."))
         map_opts = GridLayout(cols=1 if is_mobile else 2, spacing=dp(8), size_hint_y=None)
         map_opts.bind(minimum_height=map_opts.setter("height"))
-        map_opts.add_widget(labeled_checkbox("Grid Fill", self.grid_flag_chk, "Split characters across boxes or cells"))
-        map_opts.add_widget(labeled_field("Grid Count", self.grid_n_input, "Characters or cells to distribute"))
+        map_opts.add_widget(labeled_checkbox("Split Across Boxes", self.grid_flag_chk, "Spread characters across separate boxes or cells"))
+        map_opts.add_widget(labeled_field("Number of Boxes", self.grid_n_input, "How many boxes or cells should receive the split text"))
         map_body.add_widget(map_opts)
-        self.btn_assign = make_button("Assign", tone="primary")
+        self.btn_assign = make_button("Save Link", tone="primary")
         self.btn_assign.height = dp(42) if is_mobile else self.btn_assign.height
         self.btn_assign.bind(on_release=self.on_assign_mapping)
         map_body.add_widget(self.btn_assign)
@@ -5430,11 +5468,11 @@ class FormAlchemistApp(MDApp):
         else:
             self._desktop_section_cards["Mapping"] = map_card
 
-        export_card, export_body = make_card("Export", "Generate output PDFs" if is_mobile else "Generate patient output files")
+        export_card, export_body = make_card("Export", "Create finished PDF files" if is_mobile else "Create finished PDF files for one record or all records")
         out_grid = GridLayout(cols=1 if is_mobile else 2, spacing=dp(8), size_hint_y=None, height=(2*row_h+dp(8)) if is_mobile else row_h)
-        self.btn_generate_one = make_button("Generate Single PDF", tone="accent")
+        self.btn_generate_one = make_button("Export Current Record PDF", tone="accent")
         self.btn_generate_one.bind(on_release=self.on_generate_single)
-        self.btn_generate_batch = make_button("Generate Batch PDFs", tone="plain")
+        self.btn_generate_batch = make_button("Export All Record PDFs", tone="plain")
         self.btn_generate_batch.bind(on_release=self.on_generate_batch)
         out_grid.add_widget(self.btn_generate_one)
         out_grid.add_widget(self.btn_generate_batch)
@@ -5455,9 +5493,9 @@ class FormAlchemistApp(MDApp):
         else:
             self._desktop_section_cards["Export"] = export_card
 
-        learning_card, learning_body = make_card("Learning", "Review learned profiles, revisions, and auto-tuning state")
+        learning_card, learning_body = make_card("Smart Memory", "Review saved profiles, revisions, and auto-adjustment history")
         learning_note = Label(
-            text="Backend memory is active. Use this panel to review matches, save revisions, approve good runs, and apply the best learned profile.",
+            text="The app can remember good settings for similar forms. Use this panel to review matches, save a good version, and reuse the best learned setup.",
             color=palette["muted"],
             size_hint_y=None,
             height=dp(34),
@@ -5490,10 +5528,10 @@ class FormAlchemistApp(MDApp):
         self.learning_storage_lbl = _make_learning_info_label("Storage: —", color=palette["muted"], min_height=dp(40))
 
         learning_body.add_widget(labeled_field("Summary", self.learning_summary_lbl, "Counts and current page learning state"))
-        learning_body.add_widget(labeled_field("Profile Match", self.learning_match_lbl, "Latest matched learned profile for this page"))
-        learning_body.add_widget(labeled_field("Revisions", self.learning_revision_lbl, "Current saved/approved revision state"))
-        learning_body.add_widget(labeled_field("Recent", self.learning_recent_lbl, "Most recent saved revisions for quick inspection"))
-        learning_body.add_widget(labeled_field("Storage", self.learning_storage_lbl, "App-private learning storage location"))
+        learning_body.add_widget(labeled_field("Best Match", self.learning_match_lbl, "The closest saved setup the app found for this page"))
+        learning_body.add_widget(labeled_field("Saved Versions", self.learning_revision_lbl, "The current saved or approved setup version"))
+        learning_body.add_widget(labeled_field("Recent History", self.learning_recent_lbl, "Recently saved setup versions for quick review"))
+        learning_body.add_widget(labeled_field("Storage", self.learning_storage_lbl, "Where the app keeps its saved memory files"))
 
         learn_grid = GridLayout(cols=2 if is_mobile else 3, spacing=dp(8), size_hint_y=None)
         learning_buttons = [
@@ -5532,20 +5570,20 @@ class FormAlchemistApp(MDApp):
         else:
             self._desktop_section_cards["Learning"] = learning_card
 
-        selection_card, selection_body = make_card("Selection", "Inspect the currently selected box or mapping target")
+        selection_card, selection_body = make_card("Selection", "Review the currently selected box and its saved link")
 
         selection_summary = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=dp(112))
         self.inspector_selected_lbl = Label(text="None", color=palette["text"], size_hint_y=None, height=dp(20), halign="left", valign="middle", font_size=dp(12))
         self.inspector_selected_lbl.bind(size=self._sync_label_text_size)
         self.inspector_count_lbl = Label(text="0", color=palette["text"], size_hint_y=None, height=dp(20), halign="left", valign="middle", font_size=dp(12))
         self.inspector_count_lbl.bind(size=self._sync_label_text_size)
-        selection_summary.add_widget(labeled_field("Selected IDs", self.inspector_selected_lbl, "Click preview boxes to inspect them"))
-        selection_summary.add_widget(labeled_field("Selection Count", self.inspector_count_lbl))
+        selection_summary.add_widget(labeled_field("Selected Box Numbers", self.inspector_selected_lbl, "Click preview boxes to inspect them"))
+        selection_summary.add_widget(labeled_field("Boxes Selected", self.inspector_count_lbl))
 
         selection_box_body = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
         selection_box_body.bind(minimum_height=selection_box_body.setter("height"))
         selection_box_body.add_widget(selection_summary)
-        self.inspector_box_lbl = Label(text="No selection", color=palette["text"], size_hint_y=None, height=dp(40), halign="left", valign="middle", font_size=dp(12))
+        self.inspector_box_lbl = Label(text="No box selected", color=palette["text"], size_hint_y=None, height=dp(40), halign="left", valign="middle", font_size=dp(12))
         self.inspector_box_lbl.bind(size=self._sync_label_text_size)
         self._bind_auto_height_label(self.inspector_box_lbl, min_height=dp(36), extra_pad=dp(6))
         selection_box_body.add_widget(labeled_field("Selected Box", self.inspector_box_lbl))
@@ -5555,13 +5593,13 @@ class FormAlchemistApp(MDApp):
         self.inspector_mapping_lbl = Label(text="Choose a box in the preview to inspect or map it.", color=palette["muted"], size_hint_y=None, height=dp(40), halign="left", valign="middle", font_size=dp(11))
         self.inspector_mapping_lbl.bind(size=self._sync_label_text_size)
         self._bind_auto_height_label(self.inspector_mapping_lbl, min_height=dp(36), extra_pad=dp(6))
-        mapping_section_body.add_widget(labeled_field("Current Mapping", self.inspector_mapping_lbl))
+        mapping_section_body.add_widget(labeled_field("Current Link", self.inspector_mapping_lbl))
         self.inspector_resolution_lbl = Label(text="Resolved preview value: —", color=palette["text"], size_hint_y=None, height=dp(40), halign="left", valign="middle", font_size=dp(11))
         self.inspector_resolution_lbl.bind(size=self._sync_label_text_size)
         self._bind_auto_height_label(self.inspector_resolution_lbl, min_height=dp(36), extra_pad=dp(6))
-        mapping_section_body.add_widget(labeled_field("Resolved Output", self.inspector_resolution_lbl))
+        mapping_section_body.add_widget(labeled_field("Value That Will Be Written", self.inspector_resolution_lbl))
         clear_row = GridLayout(cols=1, spacing=dp(8), size_hint_y=None, height=row_h)
-        self.btn_clear_mapping = make_button("Clear Selected Mapping", tone="plain")
+        self.btn_clear_mapping = make_button("Remove Link from Selected Box", tone="plain")
         self.btn_clear_mapping.bind(on_release=self.on_clear_selected_mapping)
         clear_row.add_widget(self.btn_clear_mapping)
         mapping_section_body.add_widget(clear_row)
@@ -5671,7 +5709,7 @@ class FormAlchemistApp(MDApp):
             self.preview_shell.bind(size=self._on_preview_viewport_change, pos=self._on_preview_viewport_change)
             self.preview.bind(size=self._sync_preview_stack_size)
             self.preview_info = Label(
-                text=("Tap to inspect • Select ON to multi-select • Double-tap to map" if is_mobile else "Tap boxes to multi-select • Double-tap box to map • Pinch to pan and zoom"),
+                text=("No form loaded yet. Use Open PDF Form to begin." if is_mobile else "No form loaded yet. Use Open PDF Form to begin."),
                 color=palette["muted"],
                 size_hint_y=None,
                 height=(dp(18) if is_mobile else dp(18)),
@@ -5695,6 +5733,9 @@ class FormAlchemistApp(MDApp):
             self.preview_hud.opacity = 0
             self.preview_hud.disabled = True
             preview_stage.add_widget(self.preview_hud)
+
+            self.preview_empty_hint = self._make_preview_empty_hint(palette, is_mobile=True)
+            preview_stage.add_widget(self.preview_empty_hint)
 
             self.btn_show_hud = None
 
@@ -5789,7 +5830,7 @@ class FormAlchemistApp(MDApp):
             self.btn_mobile_map = None
             self.btn_mobile_refresh = self._make_compact_action_button("Refresh", tone="soft")
             self.btn_mobile_refresh.bind(on_release=self.on_preview)
-            self.btn_mobile_detect_bar = self._make_compact_action_button("Detect", tone="accent")
+            self.btn_mobile_detect_bar = self._make_compact_action_button("Find", tone="accent")
             self.btn_mobile_detect_bar.bind(on_release=self.on_run_detect)
             self.btn_mobile_select_mode = self._make_compact_action_button("Select Off", tone="plain")
             self.btn_mobile_select_mode.bind(on_release=self._toggle_mobile_selection_mode)
@@ -5810,7 +5851,7 @@ class FormAlchemistApp(MDApp):
             self.btn_mobile_zoom_in.text = "Zoom +"
             self.btn_mobile_zoom_out.text = "Zoom -"
             self.btn_mobile_zoom_reset.text = "100%"
-            self.btn_mobile_detect_bar.text = "Detect"
+            self.btn_mobile_detect_bar.text = "Find"
             self.btn_mobile_select_mode.text = "Select Off"
             self.btn_mobile_sidebar.text = "Menu"
             self.btn_mobile_more.text = "Inspect"
@@ -5953,11 +5994,11 @@ class FormAlchemistApp(MDApp):
             toolbar = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(44), spacing=dp(8))
             self.btn_open_pdf_toolbar = make_button("Open PDF", tone="primary")
             self.btn_open_pdf_toolbar.bind(on_release=self.on_load_pdf)
-            self.btn_open_data_toolbar = make_button("Open Data", tone="soft")
+            self.btn_open_data_toolbar = make_button("Open Data File", tone="soft")
             self.btn_open_data_toolbar.bind(on_release=self.on_load_csv)
-            self.btn_toolbar_detect = make_button("Detect", tone="accent")
+            self.btn_toolbar_detect = make_button("Find Fields", tone="accent")
             self.btn_toolbar_detect.bind(on_release=self.on_run_detect)
-            self.btn_toolbar_refresh = make_button("Refresh", tone="primary")
+            self.btn_toolbar_refresh = make_button("Refresh Preview", tone="primary")
             self.btn_toolbar_refresh.bind(on_release=self.on_preview)
             self.btn_toolbar_prev = make_button("Prev", tone="plain")
             self.btn_toolbar_prev.bind(on_release=self.on_prev_page)
@@ -5978,7 +6019,7 @@ class FormAlchemistApp(MDApp):
             self.btn_fit_width.bind(on_release=self._fit_preview_width)
             self.btn_fit_page = make_button("Fit Page", tone="plain")
             self.btn_fit_page.bind(on_release=self._fit_preview_page)
-            self.btn_toolbar_export = make_button("Export", tone="accent")
+            self.btn_toolbar_export = make_button("Export PDF", tone="accent")
             self.btn_toolbar_export.bind(on_release=self.on_generate_single)
             for w in [self.btn_open_pdf_toolbar, self.btn_open_data_toolbar, self.btn_toolbar_detect, self.btn_toolbar_refresh, self.btn_toolbar_prev, self.btn_toolbar_next, self.btn_zoom_out, zoom_chip, self.btn_zoom_in, self.btn_zoom_reset, self.btn_fit_width, self.btn_fit_page, self.btn_toolbar_export]:
                 toolbar.add_widget(w)
@@ -6006,7 +6047,7 @@ class FormAlchemistApp(MDApp):
             preview_wrap.bind(size=self._on_preview_viewport_change, pos=self._on_preview_viewport_change)
             self.preview_shell.bind(size=self._on_preview_viewport_change, pos=self._on_preview_viewport_change)
             self.preview.bind(size=self._sync_preview_stack_size)
-            self.preview_info = Label(text="Preview ready. Tap a box to inspect or select. Use Detect after changing settings.", color=palette["text"], size_hint_y=None, height=dp(32), halign="left", valign="middle", font_size=dp(11))
+            self.preview_info = Label(text="No form loaded yet. Use Open PDF Form to begin.", color=palette["text"], size_hint_y=None, height=dp(32), halign="left", valign="middle", font_size=dp(11))
             self.preview_info.bind(size=self._sync_label_text_size)
             style_card(self.preview_info, palette["chip"], radius=dp(16))
             preview_stack.add_widget(self.preview_info)
@@ -6015,6 +6056,8 @@ class FormAlchemistApp(MDApp):
             preview_stage.add_widget(preview_wrap)
             self.preview_hud = _make_preview_hud()
             preview_stage.add_widget(self.preview_hud)
+            self.preview_empty_hint = self._make_preview_empty_hint(palette, is_mobile=False)
+            preview_stage.add_widget(self.preview_empty_hint)
             Clock.schedule_once(lambda dt: setattr(self.preview_hud, "pos", (max(0, preview_stage.width - self.preview_hud.width - dp(10)), dp(12))), 0)
             self.preview_shell.add_widget(preview_stage)
             preview_body.add_widget(self.preview_shell)
@@ -6070,6 +6113,7 @@ class FormAlchemistApp(MDApp):
         self._startup_presplash = None
 
         Clock.schedule_once(lambda dt: self.refresh_backend_capabilities_ui(), 0)
+        Clock.schedule_once(lambda dt: self._refresh_preview_empty_hint(), 0)
         Clock.schedule_once(lambda dt: self.refresh_learning_ui(), 0)
         Clock.schedule_once(lambda dt: self._maybe_restore_learning_session(), 0.15)
         Clock.schedule_once(self._hide_android_loading_screen, 0)
@@ -6077,6 +6121,76 @@ class FormAlchemistApp(MDApp):
         Clock.schedule_once(self._hide_android_loading_screen, 0.45)
 
         return app_shell
+
+    def _make_preview_empty_hint(self, palette, is_mobile=False):
+        host = AnchorLayout(anchor_x="center", anchor_y="center", size_hint=(1, 1), pos_hint={"x": 0, "y": 0})
+        card = BoxLayout(orientation="vertical", spacing=dp(10 if is_mobile else 12), padding=[dp(16), dp(16), dp(16), dp(16)], size_hint=(None, None), width=dp(300 if is_mobile else 430))
+        card.bind(minimum_height=card.setter("height"))
+        self._style_popup_card(card, palette.get("surface_alt", (0.11, 0.135, 0.185, 1)), radius=dp(18 if is_mobile else 22))
+
+        title = Label(
+            text="Load a form to begin",
+            color=palette.get("text", (0.93, 0.96, 1.0, 1)),
+            size_hint_y=None,
+            height=dp(28),
+            halign="left",
+            valign="middle",
+            font_size=dp(17 if is_mobile else 19),
+            bold=True,
+        )
+        title.bind(size=self._sync_label_text_size)
+        self._bind_auto_height_label(title, min_height=dp(28), extra_pad=dp(4))
+
+        body = Label(
+            text=(
+                "This preview area will show your PDF form here.\n\n"
+                "Quick start:\n"
+                "1. Open PDF Form\n"
+                "2. Load Data File or Google Sheet\n"
+                "3. Choose a record and page\n"
+                "4. Tap Find Fields\n"
+                "5. Tap boxes and save links"
+            ),
+            color=palette.get("muted", (0.60, 0.68, 0.80, 1)),
+            size_hint_y=None,
+            height=dp(138 if is_mobile else 126),
+            halign="left",
+            valign="top",
+            font_size=dp(11.2 if is_mobile else 12),
+        )
+        body.bind(size=self._sync_label_text_size)
+        self._bind_auto_height_label(body, min_height=dp(120), extra_pad=dp(8))
+
+        tip = Label(
+            text="Tip: page 0 is the first page.",
+            color=palette.get("accent", (0.96, 0.71, 0.30, 1)),
+            size_hint_y=None,
+            height=dp(18),
+            halign="left",
+            valign="middle",
+            font_size=dp(10.5 if is_mobile else 11),
+        )
+        tip.bind(size=self._sync_label_text_size)
+        self._bind_auto_height_label(tip, min_height=dp(18), extra_pad=dp(4))
+
+        card.add_widget(title)
+        card.add_widget(body)
+        card.add_widget(tip)
+        host.add_widget(card)
+        host.opacity = 1
+        host.disabled = False
+        return host
+
+    def _refresh_preview_empty_hint(self, *_):
+        hint = getattr(self, "preview_empty_hint", None)
+        if hint is None:
+            return
+        has_pdf = bool(getattr(self.engine, "pdf_path", ""))
+        show = not has_pdf
+        hint.opacity = 1 if show else 0
+        hint.disabled = not show
+        if show and getattr(self, "preview_info", None) is not None:
+            self.preview_info.text = "No form loaded yet. Use Open PDF Form to begin."
 
     def _build_startup_presplash(self):
         # Route B startup: disable the in-app splash completely so the app never falls back
@@ -7000,24 +7114,24 @@ class FormAlchemistApp(MDApp):
             self._set_widget_enabled(getattr(self, attr, None), enabled)
 
         if hasattr(self, "backend_note_lbl") and self.backend_note_lbl is not None:
-            mode = "Android-safe mode" if android_mode else "Desktop mode"
-            next_step = "Load PDF" if not has_pdf else ("Load CSV/XLSX" if not has_data else ("Select boxes" if not getattr(self.engine, "selected_box_ids", []) else "Ready"))
+            mode = "Android mode" if android_mode else "Desktop mode"
+            next_step = "Open PDF Form" if not has_pdf else ("Load Data File" if not has_data else ("Select boxes" if not getattr(self.engine, "selected_box_ids", []) else "Ready"))
             self.backend_note_lbl.text = (
-                f"{mode} • Detect: {'ready' if detection_ok else 'unavailable'} • "
-                f"Export: {'ready' if export_ok else 'unavailable'} • Next: {next_step}"
+                f"{mode} • Find fields: {'ready' if detection_ok else 'not available'} • "
+                f"Create PDFs: {'ready' if export_ok else 'not available'} • Next step: {next_step}"
             )
 
         if hasattr(self, "export_note_lbl") and self.export_note_lbl is not None:
             if not export_ok:
-                self.export_note_lbl.text = "Export backend is unavailable in this build."
+                self.export_note_lbl.text = "PDF export is not available in this build."
             elif not has_pdf and not has_data:
-                self.export_note_lbl.text = "Load a PDF and CSV/XLSX data file to enable export."
+                self.export_note_lbl.text = "Open a PDF form and a data file to enable export."
             elif not has_pdf:
-                self.export_note_lbl.text = "Load a PDF to enable export."
+                self.export_note_lbl.text = "Open a PDF form to enable export."
             elif not has_data:
-                self.export_note_lbl.text = "Load CSV/XLSX data to enable export."
+                self.export_note_lbl.text = "Load a data file to enable export."
             else:
-                self.export_note_lbl.text = "Export is ready. Generate one PDF or the full batch."
+                self.export_note_lbl.text = "Export is ready. Create one PDF or the full batch."
 
         if getattr(self, "mobile_flow_lbl", None) is not None:
             if not has_pdf:
@@ -7035,6 +7149,7 @@ class FormAlchemistApp(MDApp):
             else:
                 self.mobile_flow_lbl.text = "Ready. Go to 5 Export and generate one PDF or a full batch."
 
+        self._refresh_preview_empty_hint()
         self._update_selection_inspector()
         self._update_bottom_statusbar()
 
@@ -7266,6 +7381,7 @@ class FormAlchemistApp(MDApp):
             texture.blit_buffer(buf, colorfmt="rgba", bufferfmt="ubyte")
             texture.flip_vertical()
             self.preview.texture = texture
+        self._refresh_preview_empty_hint()
         Clock.schedule_once(self._post_preview_refresh, 0)
         Clock.schedule_once(self._post_preview_refresh, 0.05)
 
@@ -7551,9 +7667,9 @@ class FormAlchemistApp(MDApp):
         if not ids:
             if getattr(self, "ui_mobile", False):
                 mode_txt = "Select ON" if bool(getattr(self, "mobile_select_mode", False)) else "Select OFF"
-                self.preview_info.text = f"Preview ready. {mode_txt} • Tap to inspect • Double-tap to map."
+                self.preview_info.text = f"Preview ready. {mode_txt} • Tap to inspect • Double-tap to link."
             else:
-                self.preview_info.text = "Preview ready. Tap to inspect • Double-tap a box to map."
+                self.preview_info.text = "Preview ready. Tap to inspect • Double-tap a box to link it."
             self._update_selection_inspector()
             self._update_bottom_statusbar()
             return
@@ -8208,7 +8324,7 @@ class FormAlchemistApp(MDApp):
         title_lbl = Label(text="Detection Tuning Console", color=palette.get("text", (0.93, 0.96, 1.0, 1)), size_hint_y=None, height=dp(28), halign="left", valign="middle", font_size=dp(18), bold=True)
         title_lbl.bind(size=self._sync_label_text_size)
         self._bind_auto_height_label(title_lbl, min_height=dp(28), extra_pad=dp(4))
-        sub_lbl = Label(text="Tune detection, then apply or detect.", color=palette.get("muted", (0.60, 0.68, 0.80, 1)), size_hint_y=None, height=dp(20), halign="left", valign="middle", font_size=dp(11))
+        sub_lbl = Label(text="Adjust how the app finds fill areas, then apply or run Find Fields.", color=palette.get("muted", (0.60, 0.68, 0.80, 1)), size_hint_y=None, height=dp(20), halign="left", valign="middle", font_size=dp(11))
         sub_lbl.bind(size=self._sync_label_text_size)
         self._bind_auto_height_label(sub_lbl, min_height=dp(20), extra_pad=dp(6))
         head.add_widget(title_lbl)
@@ -8236,32 +8352,32 @@ class FormAlchemistApp(MDApp):
 
         groups = [
             ("Field", [
-                _slider_spec("f_area", "Field Area", 100, 5000, 10, 0, "Minimum contour area kept as a field", "int"),
-                _slider_spec("f_minw", "Field Min Width", 5, 200, 1, 0, "", "int"),
-                _slider_spec("f_minh", "Field Min Height", 5, 120, 1, 0, "", "int"),
-                _slider_spec("f_close", "Field Close", 0, 10, 1, 0, "Morph close kernel for field cleanup", "int"),
+                _slider_spec("f_area", detection_ui_label("f_area", "Field Area"), 100, 5000, 10, 0, detection_ui_helper("f_area", "Minimum contour area kept as a field"), "int"),
+                _slider_spec("f_minw", detection_ui_label("f_minw", "Field Min Width"), 5, 200, 1, 0, detection_ui_helper("f_minw"), "int"),
+                _slider_spec("f_minh", detection_ui_label("f_minh", "Field Min Height"), 5, 120, 1, 0, detection_ui_helper("f_minh"), "int"),
+                _slider_spec("f_close", detection_ui_label("f_close", "Field Close"), 0, 10, 1, 0, detection_ui_helper("f_close", "Morph close kernel for field cleanup"), "int"),
             ]),
             ("Lines", [
-                _slider_spec("line_minw", "Line Min Width", 50, 800, 5, 0, "", "int"),
-                _slider_spec("line_maxw", "Line Max Width", 150, 2600, 10, 0, "", "int"),
+                _slider_spec("line_minw", detection_ui_label("line_minw", "Line Min Width"), 50, 800, 5, 0, detection_ui_helper("line_minw"), "int"),
+                _slider_spec("line_maxw", detection_ui_label("line_maxw", "Line Max Width"), 150, 2600, 10, 0, detection_ui_helper("line_maxw"), "int"),
             ]),
             ("Checkbox", [
-                _slider_spec("c_strict", "Checkbox Strict", 10, 100, 1, 0, "", "int"),
-                _slider_spec("c_size_min", "Checkbox Min Size", 5, 120, 1, 0, "", "int"),
-                _slider_spec("c_size_max", "Checkbox Max Size", 10, 160, 1, 0, "", "int"),
-                _slider_spec("c_border", "Border Fill", 0.0, 1.0, 0.01, 2, "", "float"),
-                _slider_spec("c_inner", "Inner Fill", 0.0, 1.0, 0.01, 2, "", "float"),
-                _slider_spec("roi_max", "ROI Max", 50, 1000, 5, 0, "", "int"),
-                _slider_spec("c_open", "Checkbox Open", 0, 5, 1, 0, "", "int"),
-                _slider_spec("c_close", "Checkbox Close", 0, 5, 1, 0, "", "int"),
-                _slider_spec("c_band", "Band %", 0.01, 0.4, 0.01, 2, "", "float"),
-                _slider_spec("c_aspect", "Aspect Tolerance", 0.05, 1.0, 0.01, 2, "", "float"),
+                _slider_spec("c_strict", detection_ui_label("c_strict", "Checkbox Strict"), 10, 100, 1, 0, detection_ui_helper("c_strict"), "int"),
+                _slider_spec("c_size_min", detection_ui_label("c_size_min", "Checkbox Min Size"), 5, 120, 1, 0, detection_ui_helper("c_size_min"), "int"),
+                _slider_spec("c_size_max", detection_ui_label("c_size_max", "Checkbox Max Size"), 10, 160, 1, 0, detection_ui_helper("c_size_max"), "int"),
+                _slider_spec("c_border", detection_ui_label("c_border", "Border Fill"), 0.0, 1.0, 0.01, 2, detection_ui_helper("c_border"), "float"),
+                _slider_spec("c_inner", detection_ui_label("c_inner", "Inner Fill"), 0.0, 1.0, 0.01, 2, detection_ui_helper("c_inner"), "float"),
+                _slider_spec("roi_max", detection_ui_label("roi_max", "ROI Max"), 50, 1000, 5, 0, detection_ui_helper("roi_max"), "int"),
+                _slider_spec("c_open", detection_ui_label("c_open", "Checkbox Open"), 0, 5, 1, 0, detection_ui_helper("c_open"), "int"),
+                _slider_spec("c_close", detection_ui_label("c_close", "Checkbox Close"), 0, 5, 1, 0, detection_ui_helper("c_close"), "int"),
+                _slider_spec("c_band", detection_ui_label("c_band", "Band %"), 0.01, 0.4, 0.01, 2, detection_ui_helper("c_band"), "float"),
+                _slider_spec("c_aspect", detection_ui_label("c_aspect", "Aspect Tolerance"), 0.05, 1.0, 0.01, 2, detection_ui_helper("c_aspect"), "float"),
             ]),
             ("Extent", [
-                _slider_spec("ext_low", "Extent Low", 0.01, 0.5, 0.01, 2, "", "float"),
-                _slider_spec("ext_high", "Extent High", 0.10, 1.0, 0.01, 2, "", "float"),
-                _slider_spec("c_fill", "Fill Min", 0.10, 1.0, 0.01, 2, "", "float"),
-                _slider_spec("c_eps", "Approx Eps", 0.01, 0.20, 0.01, 2, "", "float"),
+                _slider_spec("ext_low", detection_ui_label("ext_low", "Extent Low"), 0.01, 0.5, 0.01, 2, detection_ui_helper("ext_low"), "float"),
+                _slider_spec("ext_high", detection_ui_label("ext_high", "Extent High"), 0.10, 1.0, 0.01, 2, detection_ui_helper("ext_high"), "float"),
+                _slider_spec("c_fill", detection_ui_label("c_fill", "Fill Min"), 0.10, 1.0, 0.01, 2, detection_ui_helper("c_fill"), "float"),
+                _slider_spec("c_eps", detection_ui_label("c_eps", "Approx Eps"), 0.01, 0.20, 0.01, 2, detection_ui_helper("c_eps"), "float"),
             ]),
         ]
 
@@ -8339,7 +8455,7 @@ class FormAlchemistApp(MDApp):
         for group_name, specs in groups:
             card = BoxLayout(orientation="vertical", spacing=dp(6 if getattr(self, "ui_mobile", False) else 8), padding=[dp(8), dp(8), dp(8), dp(8)] if getattr(self, "ui_mobile", False) else [dp(10), dp(10), dp(10), dp(10)], size_hint_y=None)
             card.bind(minimum_height=card.setter("height"))
-            title = Label(text=group_name, color=palette.get("text", (0.93, 0.96, 1.0, 1)), size_hint_y=None, height=dp(18 if getattr(self, "ui_mobile", False) else 20), halign="left", valign="middle", font_size=dp(12 if getattr(self, "ui_mobile", False) else 13), bold=True)
+            title = Label(text=DETECTION_GROUP_LABELS.get(group_name, group_name), color=palette.get("text", (0.93, 0.96, 1.0, 1)), size_hint_y=None, height=dp(18 if getattr(self, "ui_mobile", False) else 20), halign="left", valign="middle", font_size=dp(12 if getattr(self, "ui_mobile", False) else 13), bold=True)
             title.bind(size=self._sync_label_text_size)
             grid = GridLayout(cols=1 if getattr(self, "ui_mobile", False) else 3, spacing=dp(10), size_hint_y=None)
             grid.bind(minimum_height=grid.setter("height"))
@@ -8353,7 +8469,7 @@ class FormAlchemistApp(MDApp):
         extent_toggle = CheckBox(active=bool(getattr(self.use_extent_chk, "active", False)))
         extent_row_h = dp(42)
         extent_row = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint_y=None, height=extent_row_h)
-        extent_lbl = Label(text="Use Extent", color=palette.get("text", (0.93, 0.96, 1.0, 1)), halign="left", valign="middle", font_size=dp(11))
+        extent_lbl = Label(text=detection_ui_label("use_extent", "Use Extent"), color=palette.get("text", (0.93, 0.96, 1.0, 1)), halign="left", valign="middle", font_size=dp(11))
         extent_lbl.bind(size=self._sync_label_text_size)
         extent_row.add_widget(extent_lbl)
         extent_slot = AnchorLayout(anchor_x="right", anchor_y="center", size_hint=(None, None), width=dp(56), height=extent_row_h, padding=(0, 0, dp(10), 0))
@@ -8365,7 +8481,7 @@ class FormAlchemistApp(MDApp):
         extent_wrap.bind(minimum_height=extent_wrap.setter("height"))
         self._style_popup_card(extent_wrap, palette.get("surface_alt", (0.11, 0.135, 0.185, 1)), radius=dp(16))
         extent_wrap.add_widget(extent_row)
-        extent_help = Label(text="Use contour extent as an extra checkbox filter", color=palette.get("muted", (0.60, 0.68, 0.80, 0.96)), halign="left", valign="middle", font_size=dp(9.5), size_hint_y=None)
+        extent_help = Label(text=detection_ui_helper("use_extent", "Use contour extent as an extra checkbox filter"), color=palette.get("muted", (0.60, 0.68, 0.80, 0.96)), halign="left", valign="middle", font_size=dp(9.5), size_hint_y=None)
         extent_help.bind(size=self._sync_label_text_size)
         self._bind_auto_height_label(extent_help, min_height=dp(18), extra_pad=dp(4))
         extent_wrap.add_widget(extent_help)
@@ -8526,7 +8642,7 @@ class FormAlchemistApp(MDApp):
         head = BoxLayout(orientation="vertical", spacing=dp(8), size_hint_y=None)
         head.bind(minimum_height=head.setter("height"))
         title_lbl = Label(
-            text=("Map Selection" if getattr(self, "ui_mobile", False) else "Preview Mapping Inspector"),
+            text=("Link Selected Boxes" if getattr(self, "ui_mobile", False) else "Preview Link Inspector"),
             color=palette.get("text", (0.93, 0.96, 1.0, 1)),
             size_hint_y=None,
             height=dp(28),
@@ -8564,7 +8680,7 @@ class FormAlchemistApp(MDApp):
         if existing:
             summary_text = f"Current: {existing.get('column', '') or '—'}"
         else:
-            summary_text = ("Choose a column to map this selection." if getattr(self, "ui_mobile", False) else "Choose a column and optional trigger for this selection.")
+            summary_text = ("Choose a data column for these selected boxes." if getattr(self, "ui_mobile", False) else "Choose a data column, then add an optional checkbox trigger if needed.")
         summary_lbl = Label(
             text=summary_text,
             color=palette.get("text", (0.93, 0.96, 1.0, 1)),
@@ -8583,7 +8699,7 @@ class FormAlchemistApp(MDApp):
         body.add_widget(summary_lbl)
 
         live_preview_lbl = Label(
-            text="Preview: —",
+            text="Sample Output: —",
             color=palette.get("text", (0.93, 0.96, 1.0, 1)),
             size_hint_y=None,
             height=dp(42),
@@ -8622,11 +8738,11 @@ class FormAlchemistApp(MDApp):
             background_normal="",
             background_color=palette.get("surface_soft", (0.135, 0.16, 0.215, 1)),
         )
-        form.add_widget(_popup_field_block("Column", column_spinner, "Choose the target column" if getattr(self, "ui_mobile", False) else "Target data column for the selected box or group"))
+        form.add_widget(_popup_field_block("Data Column", column_spinner, "Choose which data column should fill the selected box or boxes" if getattr(self, "ui_mobile", False) else "Choose which data column should fill the selected box or boxes"))
 
         trigger_input = TextInput(
             text=current_trigger,
-            hint_text="Checkbox value (optional)",
+            hint_text="Checkbox value to match (optional)",
             multiline=False,
             size_hint_y=None,
             height=dp(46),
@@ -8638,14 +8754,14 @@ class FormAlchemistApp(MDApp):
             hint_text_color=palette.get("muted", (0.60, 0.68, 0.80, 1)),
             padding=[dp(12), dp(12), dp(12), dp(12)],
         )
-        form.add_widget(_popup_field_block("Trigger", trigger_input, "Optional for checkbox mappings" if getattr(self, "ui_mobile", False) else "Optional for checkbox-style mappings"))
+        form.add_widget(_popup_field_block("Checkbox Trigger Value", trigger_input, "Only needed when this link should place an X in a checkbox" if getattr(self, "ui_mobile", False) else "Only needed when this link should place an X in a checkbox"))
 
         grid_row = GridLayout(cols=1 if getattr(self, "ui_mobile", False) else 2, size_hint_y=None, spacing=dp(8))
         grid_row.bind(minimum_height=grid_row.setter("height"))
         popup_grid_chk = CheckBox(active=(str(current_grid_flag).strip() == "1"))
         grid_flag_wrap = BoxLayout(orientation="horizontal", spacing=dp(8), padding=[dp(10), dp(6), dp(10), dp(6)], size_hint_y=None, height=dp(46))
         self._style_popup_card(grid_flag_wrap, palette.get("surface_alt", (0.11, 0.135, 0.185, 1)), radius=dp(16))
-        grid_flag_lbl = Label(text="Grid Fill", color=palette.get("text", (0.93, 0.96, 1.0, 1)), halign="left", valign="middle", font_size=dp(12))
+        grid_flag_lbl = Label(text="Split Across Boxes", color=palette.get("text", (0.93, 0.96, 1.0, 1)), halign="left", valign="middle", font_size=dp(12))
         grid_flag_lbl.bind(size=self._sync_label_text_size)
         grid_flag_wrap.add_widget(grid_flag_lbl)
         popup_grid_chk.size_hint_x = None
@@ -8653,7 +8769,7 @@ class FormAlchemistApp(MDApp):
         grid_flag_wrap.add_widget(popup_grid_chk)
         grid_n_input = TextInput(
             text=current_grid_n,
-            hint_text="Grid N",
+            hint_text="Number of boxes",
             multiline=False,
             input_filter="int",
             size_hint_y=None,
@@ -8666,15 +8782,15 @@ class FormAlchemistApp(MDApp):
             hint_text_color=palette.get("muted", (0.60, 0.68, 0.80, 1)),
             padding=[dp(12), dp(12), dp(12), dp(12)],
         )
-        grid_row.add_widget(_popup_field_block("Grid Fill", grid_flag_wrap, "Enable when this selection should fill as a grid"))
-        grid_row.add_widget(_popup_field_block("Grid Count", grid_n_input, "How many cells/characters to distribute" if not getattr(self, "ui_mobile", False) else "Number of grid cells/characters"))
+        grid_row.add_widget(_popup_field_block("Split Across Boxes", grid_flag_wrap, "Turn this on when one value should be spread across several small boxes"))
+        grid_row.add_widget(_popup_field_block("Number of Boxes", grid_n_input, "How many boxes or cells should receive the split text" if not getattr(self, "ui_mobile", False) else "How many boxes or cells should receive the split text"))
         form.add_widget(grid_row)
         body.add_widget(form)
         body_scroll.add_widget(body)
         outer.add_widget(body_scroll)
 
         def _refresh_live_preview(*_):
-            live_preview_lbl.text = "Preview: " + self._get_selected_column_preview(
+            live_preview_lbl.text = "Sample Output: " + self._get_selected_column_preview(
                 column_spinner.text,
                 trigger=trigger_input.text.strip(),
                 is_grid=bool(getattr(popup_grid_chk, "active", False)),
@@ -8692,8 +8808,8 @@ class FormAlchemistApp(MDApp):
             btn_row = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(8))
             btn_row.bind(minimum_height=btn_row.setter("height"))
             primary_row = GridLayout(cols=2, size_hint_y=None, spacing=dp(8), height=dp(46))
-            btn_assign = self._make_compact_action_button("Assign", tone="primary")
-            btn_clear = self._make_compact_action_button("Clear", tone="soft")
+            btn_assign = self._make_compact_action_button("Save Link", tone="primary")
+            btn_clear = self._make_compact_action_button("Clear Link", tone="soft")
             primary_row.add_widget(btn_assign)
             primary_row.add_widget(btn_clear)
             btn_close = self._make_compact_action_button("Close", tone="plain")
@@ -8703,8 +8819,8 @@ class FormAlchemistApp(MDApp):
             btn_row.add_widget(btn_close)
         else:
             btn_row = GridLayout(cols=3, size_hint_y=None, spacing=dp(8), height=dp(48))
-            btn_assign = self._make_compact_action_button("Assign Mapping", tone="primary")
-            btn_clear = self._make_compact_action_button("Clear Mapping", tone="soft")
+            btn_assign = self._make_compact_action_button("Save Link", tone="primary")
+            btn_clear = self._make_compact_action_button("Clear Link", tone="soft")
             btn_close = self._make_compact_action_button("Close", tone="plain")
             for btn in (btn_assign, btn_clear, btn_close):
                 btn.size_hint_y = None
