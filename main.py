@@ -5709,7 +5709,7 @@ class FormAlchemistApp(MDApp):
             self.preview_shell.bind(size=self._on_preview_viewport_change, pos=self._on_preview_viewport_change)
             self.preview.bind(size=self._sync_preview_stack_size)
             self.preview_info = Label(
-                text=("No form loaded yet. Use Open PDF Form to begin." if is_mobile else "No form loaded yet. Use Open PDF Form to begin."),
+                text=("No form loaded yet. Quick start: Open PDF Form → Load Data File → Choose record and page → Find Fields → Save links." if is_mobile else "No form loaded yet. Quick start: Open PDF Form → Load Data File or Google Sheet → Choose a record and page → Find Fields → Save links."),
                 color=palette["muted"],
                 size_hint_y=None,
                 height=(dp(18) if is_mobile else dp(18)),
@@ -5734,8 +5734,7 @@ class FormAlchemistApp(MDApp):
             self.preview_hud.disabled = True
             preview_stage.add_widget(self.preview_hud)
 
-            self.preview_empty_hint = self._make_preview_empty_hint(palette, is_mobile=True)
-            preview_stage.add_widget(self.preview_empty_hint)
+            self.preview_empty_hint = None
 
             self.btn_show_hud = None
 
@@ -6047,7 +6046,7 @@ class FormAlchemistApp(MDApp):
             preview_wrap.bind(size=self._on_preview_viewport_change, pos=self._on_preview_viewport_change)
             self.preview_shell.bind(size=self._on_preview_viewport_change, pos=self._on_preview_viewport_change)
             self.preview.bind(size=self._sync_preview_stack_size)
-            self.preview_info = Label(text="No form loaded yet. Use Open PDF Form to begin.", color=palette["text"], size_hint_y=None, height=dp(32), halign="left", valign="middle", font_size=dp(11))
+            self.preview_info = Label(text="No form loaded yet. Quick start: Open PDF Form → Load Data File or Google Sheet → Choose a record and page → Find Fields → Save links.", color=palette["text"], size_hint_y=None, height=dp(32), halign="left", valign="middle", font_size=dp(11))
             self.preview_info.bind(size=self._sync_label_text_size)
             style_card(self.preview_info, palette["chip"], radius=dp(16))
             preview_stack.add_widget(self.preview_info)
@@ -6056,8 +6055,7 @@ class FormAlchemistApp(MDApp):
             preview_stage.add_widget(preview_wrap)
             self.preview_hud = _make_preview_hud()
             preview_stage.add_widget(self.preview_hud)
-            self.preview_empty_hint = self._make_preview_empty_hint(palette, is_mobile=False)
-            preview_stage.add_widget(self.preview_empty_hint)
+            self.preview_empty_hint = None
             Clock.schedule_once(lambda dt: setattr(self.preview_hud, "pos", (max(0, preview_stage.width - self.preview_hud.width - dp(10)), dp(12))), 0)
             self.preview_shell.add_widget(preview_stage)
             preview_body.add_widget(self.preview_shell)
@@ -6190,7 +6188,7 @@ class FormAlchemistApp(MDApp):
         hint.opacity = 1 if show else 0
         hint.disabled = not show
         if show and getattr(self, "preview_info", None) is not None:
-            self.preview_info.text = "No form loaded yet. Use Open PDF Form to begin."
+            self.preview_info.text = "No form loaded yet. Quick start: Open PDF Form → Load Data File or Google Sheet → Choose a record and page → Find Fields → Save links."
 
     def _build_startup_presplash(self):
         # Route B startup: disable the in-app splash completely so the app never falls back
