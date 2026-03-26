@@ -1577,31 +1577,66 @@ class FormAlchemistEngine:
     def android_preview_only_mode(self):
         return platform == "android" and not self.supports_detection_backend()
 
+    def _coerce_int_setting(self, key, default=None):
+        default = DEFAULTS.get(key) if default is None else default
+        value = self.settings.get(key, default)
+        try:
+            if isinstance(value, bool):
+                return int(value)
+            return int(float(value))
+        except Exception:
+            return int(float(default))
+
+    def _coerce_float_setting(self, key, default=None):
+        default = DEFAULTS.get(key) if default is None else default
+        value = self.settings.get(key, default)
+        try:
+            if isinstance(value, (list, tuple)):
+                value = value[0]
+            return float(value)
+        except Exception:
+            return float(default)
+
+    def _coerce_pair_setting(self, key, default=None):
+        default = DEFAULTS.get(key) if default is None else default
+        value = self.settings.get(key, default)
+        if not isinstance(value, (list, tuple)) or len(value) < 2:
+            value = default
+        try:
+            return (int(float(value[0])), int(float(value[1])))
+        except Exception:
+            return (int(float(default[0])), int(float(default[1])))
+
+    def _coerce_bool_setting(self, key, default=None):
+        default = DEFAULTS.get(key) if default is None else default
+        value = self.settings.get(key, default)
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
     def _settings_signature(self):
+        size_pair = self._coerce_pair_setting("C_Size")
         payload = {
-            "F_Area": int(self.settings.get("F_Area", DEFAULTS["F_Area"])),
-            "F_MinW": int(self.settings.get("F_MinW", DEFAULTS["F_MinW"])),
-            "F_MinH": int(self.settings.get("F_MinH", DEFAULTS["F_MinH"])),
-            "F_Close": int(self.settings.get("F_Close", DEFAULTS["F_Close"])),
-            "Line_MinW": int(self.settings.get("Line_MinW", DEFAULTS["Line_MinW"])),
-            "Line_MaxW": int(self.settings.get("Line_MaxW", DEFAULTS["Line_MaxW"])),
-            "C_Strict": int(self.settings.get("C_Strict", DEFAULTS["C_Strict"])),
-            "C_Size": [
-                int((self.settings.get("C_Size") or DEFAULTS["C_Size"])[0]),
-                int((self.settings.get("C_Size") or DEFAULTS["C_Size"])[1]),
-            ],
-            "C_Border": round(float(self.settings.get("C_Border", DEFAULTS["C_Border"])), 6),
-            "C_Inner": round(float(self.settings.get("C_Inner", DEFAULTS["C_Inner"])), 6),
-            "ROI_Max": int(self.settings.get("ROI_Max", DEFAULTS["ROI_Max"])),
-            "C_Open": int(self.settings.get("C_Open", DEFAULTS["C_Open"])),
-            "C_Close": int(self.settings.get("C_Close", DEFAULTS["C_Close"])),
-            "C_BandPct": round(float(self.settings.get("C_BandPct", DEFAULTS["C_BandPct"])), 6),
-            "C_AspectTol": round(float(self.settings.get("C_AspectTol", DEFAULTS["C_AspectTol"])), 6),
-            "Ext_Low": round(float(self.settings.get("Ext_Low", DEFAULTS["Ext_Low"])), 6),
-            "Ext_High": round(float(self.settings.get("Ext_High", DEFAULTS["Ext_High"])), 6),
-            "C_FillMin": round(float(self.settings.get("C_FillMin", DEFAULTS["C_FillMin"])), 6),
-            "C_Eps": round(float(self.settings.get("C_Eps", DEFAULTS["C_Eps"])), 6),
-            "Use_Extent": bool(self.settings.get("Use_Extent", DEFAULTS["Use_Extent"])),
+            "F_Area": self._coerce_int_setting("F_Area"),
+            "F_MinW": self._coerce_int_setting("F_MinW"),
+            "F_MinH": self._coerce_int_setting("F_MinH"),
+            "F_Close": self._coerce_int_setting("F_Close"),
+            "Line_MinW": self._coerce_int_setting("Line_MinW"),
+            "Line_MaxW": self._coerce_int_setting("Line_MaxW"),
+            "C_Strict": self._coerce_int_setting("C_Strict"),
+            "C_Size": [size_pair[0], size_pair[1]],
+            "C_Border": round(self._coerce_float_setting("C_Border"), 6),
+            "C_Inner": round(self._coerce_float_setting("C_Inner"), 6),
+            "ROI_Max": self._coerce_int_setting("ROI_Max"),
+            "C_Open": self._coerce_int_setting("C_Open"),
+            "C_Close": self._coerce_int_setting("C_Close"),
+            "C_BandPct": round(self._coerce_float_setting("C_BandPct"), 6),
+            "C_AspectTol": round(self._coerce_float_setting("C_AspectTol"), 6),
+            "Ext_Low": round(self._coerce_float_setting("Ext_Low"), 6),
+            "Ext_High": round(self._coerce_float_setting("Ext_High"), 6),
+            "C_FillMin": round(self._coerce_float_setting("C_FillMin"), 6),
+            "C_Eps": round(self._coerce_float_setting("C_Eps"), 6),
+            "Use_Extent": self._coerce_bool_setting("Use_Extent"),
         }
         return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
@@ -2966,16 +3001,26 @@ class FormAlchemistEngine:
             if key not in settings_dict:
                 continue
             value = settings_dict.get(key)
-            if key == "C_Size" and isinstance(value, (list, tuple)) and len(value) == 2:
-                self.settings[key] = (int(value[0]), int(value[1]))
-            elif key in {"F_Area", "F_MinW", "F_MinH", "F_Close", "Line_MinW", "Line_MaxW", "C_Strict", "ROI_Max", "C_Open", "C_Close", "Grid_N"}:
-                self.settings[key] = int(value)
-            elif key in {"C_Border", "C_Inner", "C_BandPct", "C_AspectTol", "Ext_Low", "Ext_High", "C_FillMin", "C_Eps"}:
-                self.settings[key] = float(value)
-            elif key in {"Use_Extent", "Is_Grid"}:
-                self.settings[key] = bool(value)
-            else:
-                self.settings[key] = value
+            if value in {None, ""}:
+                continue
+            try:
+                if key == "C_Size":
+                    if isinstance(value, (list, tuple)) and len(value) == 2:
+                        self.settings[key] = (int(float(value[0])), int(float(value[1])))
+                    continue
+                if key in {"F_Area", "F_MinW", "F_MinH", "F_Close", "Line_MinW", "Line_MaxW", "C_Strict", "ROI_Max", "C_Open", "C_Close", "Grid_N"}:
+                    self.settings[key] = int(float(value))
+                elif key in {"C_Border", "C_Inner", "C_BandPct", "C_AspectTol", "Ext_Low", "Ext_High", "C_FillMin", "C_Eps"}:
+                    self.settings[key] = float(value)
+                elif key in {"Use_Extent", "Is_Grid"}:
+                    if isinstance(value, str):
+                        self.settings[key] = value.strip().lower() in {"1", "true", "yes", "on"}
+                    else:
+                        self.settings[key] = bool(value)
+                else:
+                    self.settings[key] = value
+            except Exception:
+                continue
 
     def _serialize_rect(self, rect):
         rect = rect if isinstance(rect, fitz.Rect) else fitz.Rect(*rect)
@@ -3105,9 +3150,13 @@ class FormAlchemistEngine:
             best["match_kind"] = "fuzzy"
         return best
 
-    def prepare_learning_for_detection(self, page_idx=0):
+    def prepare_learning_for_detection(self, page_idx=0, allow_profile_apply=True):
         if not self.learning_enabled or not self.pdf_path:
-            self.current_detection_context = {"page_idx": int(page_idx)}
+            self.current_detection_context = {
+                "page_idx": int(page_idx),
+                "profile_applied": False,
+                "profile_apply_allowed": bool(allow_profile_apply),
+            }
             return self.current_detection_context
 
         img = self._render_pdf_page_bgr(self.pdf_path, page_idx=page_idx, preview_zoom=ZOOM)
@@ -3118,7 +3167,7 @@ class FormAlchemistEngine:
             match_kind = str(profile.get("match_kind", ""))
             match_score = float(profile.get("match_score", 0.0) or 0.0)
             approved = bool(profile.get("approved", False))
-            if match_kind == "exact" or (approved and match_score >= 0.92):
+            if allow_profile_apply and (match_kind == "exact" or (approved and match_score >= 0.92)):
                 self._apply_learning_profile_settings(profile.get("settings", {}))
                 applied = True
                 self.last_applied_profile_meta = {
@@ -3134,6 +3183,7 @@ class FormAlchemistEngine:
             "fingerprint": fingerprint,
             "matched_profile": profile,
             "profile_applied": bool(applied),
+            "profile_apply_allowed": bool(allow_profile_apply),
         }
         return self.current_detection_context
 
@@ -9474,17 +9524,21 @@ class FormAlchemistApp(MDApp):
             self.apply_ui_settings_to_engine()
             page_idx = self.current_page_idx()
             prev_count = len(getattr(self.engine, "all_boxes", []) or []) if getattr(self.engine, "detected_page_idx", None) == page_idx else 0
-            ctx = self.engine.prepare_learning_for_detection(page_idx=page_idx)
+            ctx = self.engine.prepare_learning_for_detection(page_idx=page_idx, allow_profile_apply=False)
             profile_applied = bool((ctx or {}).get("profile_applied", False))
-            if profile_applied:
-                self.push_engine_settings_to_ui()
+            profile_matched = bool((ctx or {}).get("matched_profile"))
             self.engine.invalidate_detection_cache(page_idx=page_idx, clear_current=True)
             self.engine.run_detection(page_idx=page_idx)
             self.engine.finalize_learning_after_detection(page_idx=page_idx)
             self.engine.selected_box_ids = []
             self._stash_page_selection(page_idx)
             counts = self._box_type_counts()
-            profile_msg = "\nLearned profile: applied" if profile_applied else "\nLearned profile: manual tuning"
+            if profile_applied:
+                profile_msg = "\nLearned profile: applied"
+            elif profile_matched:
+                profile_msg = "\nLearned profile: matched but skipped (manual tuning kept)"
+            else:
+                profile_msg = "\nLearned profile: no match"
             summary = (
                 f"Detection done.\n"
                 f"Page: {page_idx}\n"
