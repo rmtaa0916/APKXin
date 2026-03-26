@@ -5720,6 +5720,8 @@ class FormAlchemistApp(MDApp):
             )
             self.preview_info.bind(size=self._sync_label_text_size)
             preview_stack.add_widget(self.preview_info)
+            self.preview_empty_hint = self._make_preview_empty_hint(palette, is_mobile=True)
+            preview_stack.add_widget(self.preview_empty_hint)
             preview_stack.add_widget(self.preview)
             preview_wrap.add_widget(preview_stack)
             preview_stage.add_widget(preview_wrap)
@@ -5733,8 +5735,6 @@ class FormAlchemistApp(MDApp):
             self.preview_hud.opacity = 0
             self.preview_hud.disabled = True
             preview_stage.add_widget(self.preview_hud)
-
-            self.preview_empty_hint = None
 
             self.btn_show_hud = None
 
@@ -6050,12 +6050,13 @@ class FormAlchemistApp(MDApp):
             self.preview_info.bind(size=self._sync_label_text_size)
             style_card(self.preview_info, palette["chip"], radius=dp(16))
             preview_stack.add_widget(self.preview_info)
+            self.preview_empty_hint = self._make_preview_empty_hint(palette, is_mobile=False)
+            preview_stack.add_widget(self.preview_empty_hint)
             preview_stack.add_widget(self.preview)
             preview_wrap.add_widget(preview_stack)
             preview_stage.add_widget(preview_wrap)
             self.preview_hud = _make_preview_hud()
             preview_stage.add_widget(self.preview_hud)
-            self.preview_empty_hint = None
             Clock.schedule_once(lambda dt: setattr(self.preview_hud, "pos", (max(0, preview_stage.width - self.preview_hud.width - dp(10)), dp(12))), 0)
             self.preview_shell.add_widget(preview_stage)
             preview_body.add_widget(self.preview_shell)
@@ -6121,52 +6122,59 @@ class FormAlchemistApp(MDApp):
         return app_shell
 
     def _make_preview_empty_hint(self, palette, is_mobile=False):
-        host = AnchorLayout(anchor_x="center", anchor_y="center", size_hint=(1, 1), pos_hint={"x": 0, "y": 0})
-        card = BoxLayout(orientation="vertical", spacing=dp(10 if is_mobile else 12), padding=[dp(16), dp(16), dp(16), dp(16)], size_hint=(None, None), width=dp(300 if is_mobile else 430))
+        card = BoxLayout(
+            orientation="vertical",
+            spacing=dp(8 if is_mobile else 10),
+            padding=[dp(14 if is_mobile else 16), dp(14 if is_mobile else 16), dp(14 if is_mobile else 16), dp(14 if is_mobile else 16)],
+            size_hint_y=None,
+        )
         card.bind(minimum_height=card.setter("height"))
-        self._style_popup_card(card, palette.get("surface_alt", (0.11, 0.135, 0.185, 1)), radius=dp(18 if is_mobile else 22))
+        self._style_popup_card(card, palette.get("surface_alt", (0.11, 0.135, 0.185, 1)), radius=dp(18 if is_mobile else 20))
 
         title = Label(
-            text="Load a form to begin",
+            text="Welcome to the preview area",
             color=palette.get("text", (0.93, 0.96, 1.0, 1)),
             size_hint_y=None,
-            height=dp(28),
+            height=dp(24),
             halign="left",
             valign="middle",
-            font_size=dp(17 if is_mobile else 19),
+            font_size=dp(15 if is_mobile else 17),
             bold=True,
         )
         title.bind(size=self._sync_label_text_size)
-        self._bind_auto_height_label(title, min_height=dp(28), extra_pad=dp(4))
+        self._bind_auto_height_label(title, min_height=dp(24), extra_pad=dp(4))
 
         body = Label(
             text=(
-                "This preview area will show your PDF form here.\n\n"
+                "Your loaded PDF form will appear below this guide.\n\n"
                 "Quick start:\n"
                 "1. Open PDF Form\n"
                 "2. Load Data File or Google Sheet\n"
                 "3. Choose a record and page\n"
                 "4. Tap Find Fields\n"
-                "5. Tap boxes and save links"
+                "5. Tap a box, then save the link"
             ),
             color=palette.get("muted", (0.60, 0.68, 0.80, 1)),
             size_hint_y=None,
-            height=dp(138 if is_mobile else 126),
+            height=dp(112 if is_mobile else 106),
             halign="left",
             valign="top",
-            font_size=dp(11.2 if is_mobile else 12),
+            font_size=dp(10.8 if is_mobile else 11.5),
         )
         body.bind(size=self._sync_label_text_size)
-        self._bind_auto_height_label(body, min_height=dp(120), extra_pad=dp(8))
+        self._bind_auto_height_label(body, min_height=dp(102 if is_mobile else 96), extra_pad=dp(8))
 
         tip = Label(
-            text="Tip: page 0 is the first page.",
+            text=(
+                "Tip: page 0 means the first page." if is_mobile else
+                "Tip: page 0 means the first page, and double-tap a box to jump into linking."
+            ),
             color=palette.get("accent", (0.96, 0.71, 0.30, 1)),
             size_hint_y=None,
             height=dp(18),
             halign="left",
             valign="middle",
-            font_size=dp(10.5 if is_mobile else 11),
+            font_size=dp(10.2 if is_mobile else 10.8),
         )
         tip.bind(size=self._sync_label_text_size)
         self._bind_auto_height_label(tip, min_height=dp(18), extra_pad=dp(4))
@@ -6174,10 +6182,8 @@ class FormAlchemistApp(MDApp):
         card.add_widget(title)
         card.add_widget(body)
         card.add_widget(tip)
-        host.add_widget(card)
-        host.opacity = 1
-        host.disabled = False
-        return host
+        card._expanded_height = max(card.height, dp(170 if is_mobile else 162))
+        return card
 
     def _refresh_preview_empty_hint(self, *_):
         hint = getattr(self, "preview_empty_hint", None)
@@ -6185,8 +6191,15 @@ class FormAlchemistApp(MDApp):
             return
         has_pdf = bool(getattr(self.engine, "pdf_path", ""))
         show = not has_pdf
-        hint.opacity = 1 if show else 0
-        hint.disabled = not show
+        if show:
+            hint.disabled = False
+            hint.opacity = 1
+            expanded = getattr(hint, "_expanded_height", 0) or hint.minimum_height or hint.height or dp(170)
+            hint.height = expanded
+        else:
+            hint.opacity = 0
+            hint.disabled = True
+            hint.height = 0
         if show and getattr(self, "preview_info", None) is not None:
             self.preview_info.text = "No form loaded yet. Quick start: Open PDF Form → Load Data File or Google Sheet → Choose a record and page → Find Fields → Save links."
 
