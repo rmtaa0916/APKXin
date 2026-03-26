@@ -26,6 +26,19 @@ jobs:
           distribution: "temurin"
           java-version: "17"
 
+      - name: Check native presplash filenames
+        run: |
+          echo "Repo presplash-related files:"
+          find . -type f | grep -i "presplash" || true
+          BAD_FILES=$(find android_res -type f \( -iname 'presplash.png' -o -iname 'presplash.jpg' -o -iname 'presplash.jpeg' \) 2>/dev/null || true)
+          if [ -n "$BAD_FILES" ]; then
+            echo ""
+            echo "These native resource files are not allowed because they collide with Android drawable names:"
+            echo "$BAD_FILES"
+            echo "Use android_res/drawable/presplash_native.png instead."
+            exit 1
+          fi
+
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -93,5 +106,5 @@ jobs:
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MediMapPro-APK
+          name: FormAlchemist-APK
           path: bin/*.apk
