@@ -10,20 +10,6 @@ import android.widget.ImageView;
 
 import org.kivy.android.PythonActivity;
 
-/**
- * Custom startup activity for Route B.
- *
- * Uses python-for-android's normal tracked ImageView loading-screen path so the
- * screen can still be removed by PythonActivity.removeLoadingScreen() and by the
- * android.loadingscreen.hide_loading_screen() helper from Python.
- *
- * IMPORTANT:
- * - This native loader cannot read your project-side assets/presplash.png.
- * - For the Java-side startup image, add the same image under:
- *     android_res/drawable/presplash_native.png
- *   or
- *     android_res/drawable/presplash.png
- */
 public class MainActivity extends PythonActivity {
     private static final String TAG = "FormAlchemistMainActivity";
 
@@ -54,12 +40,9 @@ public class MainActivity extends PythonActivity {
         view.setBackgroundColor(Color.BLACK);
 
         int resId = getResources().getIdentifier("presplash_native", "drawable", getPackageName());
-        if (resId == 0) {
-            resId = getResources().getIdentifier("presplash", "drawable", getPackageName());
-        }
 
         if (resId != 0) {
-            Log.v(TAG, "Using native startup drawable");
+            Log.v(TAG, "Using native startup drawable: presplash_native");
             view.setImageResource(resId);
         } else {
             Log.w(TAG, "No native startup drawable found; falling back to black");
