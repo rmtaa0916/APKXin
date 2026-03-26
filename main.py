@@ -7021,6 +7021,15 @@ class FormAlchemistApp(MDApp):
             if not pdf_path or not os.path.exists(pdf_path):
                 self.refresh_learning_ui()
                 return
+            if platform == "android":
+                self._set_page_inputs_text(max(0, page_idx))
+                self.engine.detected_page_idx = int(session.get("detected_page_idx", page_idx) or page_idx)
+                self.set_status(
+                    "Last session was restored safely.\n"
+                    "Reopen your PDF form manually to continue."
+                )
+                Clock.schedule_once(lambda dt: self.refresh_learning_ui(), 0.05)
+                return
             total = self.engine.load_pdf(pdf_path)
             max_idx = max(int(total) - 1, 0)
             page_idx = max(0, min(page_idx, max_idx))
