@@ -13,7 +13,7 @@ orientation = portrait
 fullscreen = 0
 
 icon.filename = assets/icon.png
-# Native Route B: disable Buildozer presplash completely.
+# Route B uses the custom native activity for startup instead of Buildozer's presplash.
 # presplash.filename = assets/presplash.png
 
 android.archs = arm64-v8a
@@ -25,7 +25,8 @@ android.allow_backup = True
 
 android.permissions = INTERNET
 android.add_src = android_src
-# IMPORTANT: set BOTH values to the custom activity so the bootstrap actually uses it.
+# Package native Android resources (e.g. android_res/drawable/presplash_native.png).
+android.add_resources = android_res
 android.entrypoint = org.formalchemist.formalchemist.MainActivity
 android.activity_class_name = org.formalchemist.formalchemist.MainActivity
 
