@@ -1437,9 +1437,11 @@ class FormAlchemistEngine:
         self.settings["C_Size"] = list(DEFAULTS["C_Size"])
         self.pdf_source = PdfPageSource()
         self.detected_page_idx = None
+        self.detected_settings_signature = None
         self.boxes_by_page = {}
         self.box_types_by_page = {}
         self.geom_by_page = {}
+        self.boxes_settings_signature_by_page = {}
 
         self.learning_storage = LearningStorage(app_name="form_alchemist")
         self.learning_enabled = True
@@ -1530,9 +1532,11 @@ class FormAlchemistEngine:
         self.box_types = []
         self.geom = {"names": [], "dob": [], "phil": []}
         self.detected_page_idx = None
+        self.detected_settings_signature = None
         self.boxes_by_page = {}
         self.box_types_by_page = {}
         self.geom_by_page = {}
+        self.boxes_settings_signature_by_page = {}
         return total
 
     def total_pages(self):
@@ -1573,6 +1577,34 @@ class FormAlchemistEngine:
     def android_preview_only_mode(self):
         return platform == "android" and not self.supports_detection_backend()
 
+    def _settings_signature(self):
+        payload = {
+            "F_Area": int(self.settings.get("F_Area", DEFAULTS["F_Area"])),
+            "F_MinW": int(self.settings.get("F_MinW", DEFAULTS["F_MinW"])),
+            "F_MinH": int(self.settings.get("F_MinH", DEFAULTS["F_MinH"])),
+            "F_Close": int(self.settings.get("F_Close", DEFAULTS["F_Close"])),
+            "Line_MinW": int(self.settings.get("Line_MinW", DEFAULTS["Line_MinW"])),
+            "Line_MaxW": int(self.settings.get("Line_MaxW", DEFAULTS["Line_MaxW"])),
+            "C_Strict": int(self.settings.get("C_Strict", DEFAULTS["C_Strict"])),
+            "C_Size": [
+                int((self.settings.get("C_Size") or DEFAULTS["C_Size"])[0]),
+                int((self.settings.get("C_Size") or DEFAULTS["C_Size"])[1]),
+            ],
+            "C_Border": round(float(self.settings.get("C_Border", DEFAULTS["C_Border"])), 6),
+            "C_Inner": round(float(self.settings.get("C_Inner", DEFAULTS["C_Inner"])), 6),
+            "ROI_Max": int(self.settings.get("ROI_Max", DEFAULTS["ROI_Max"])),
+            "C_Open": int(self.settings.get("C_Open", DEFAULTS["C_Open"])),
+            "C_Close": int(self.settings.get("C_Close", DEFAULTS["C_Close"])),
+            "C_BandPct": round(float(self.settings.get("C_BandPct", DEFAULTS["C_BandPct"])), 6),
+            "C_AspectTol": round(float(self.settings.get("C_AspectTol", DEFAULTS["C_AspectTol"])), 6),
+            "Ext_Low": round(float(self.settings.get("Ext_Low", DEFAULTS["Ext_Low"])), 6),
+            "Ext_High": round(float(self.settings.get("Ext_High", DEFAULTS["Ext_High"])), 6),
+            "C_FillMin": round(float(self.settings.get("C_FillMin", DEFAULTS["C_FillMin"])), 6),
+            "C_Eps": round(float(self.settings.get("C_Eps", DEFAULTS["C_Eps"])), 6),
+            "Use_Extent": bool(self.settings.get("Use_Extent", DEFAULTS["Use_Extent"])),
+        }
+        return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
     def _cache_detection_for_page(self, page_idx):
         page_idx = int(page_idx)
         self.boxes_by_page[page_idx] = [fitz.Rect(r) for r in self.all_boxes]
@@ -1581,23 +1613,63 @@ class FormAlchemistEngine:
         for key, rects in (self.geom or {}).items():
             geom_copy[key] = [fitz.Rect(r) for r in rects]
         self.geom_by_page[page_idx] = geom_copy
+        sig = self._settings_signature()
+        self.boxes_settings_signature_by_page[page_idx] = sig
+        self.detected_settings_signature = sig
 
-    def _restore_detection_for_page(self, page_idx):
+    def invalidate_detection_cache(self, page_idx=None, clear_current=True):
+        if page_idx is None:
+            self.boxes_by_page = {}
+            self.box_types_by_page = {}
+            self.geom_by_page = {}
+            self.boxes_settings_signature_by_page = {}
+            if clear_current:
+                self.all_boxes = []
+                self.box_types = []
+                self.geom = {"names": [], "dob": [], "phil": []}
+                self.detected_page_idx = None
+                self.detected_settings_signature = None
+            return
+
+        page_idx = int(page_idx)
+        self.boxes_by_page.pop(page_idx, None)
+        self.box_types_by_page.pop(page_idx, None)
+        self.geom_by_page.pop(page_idx, None)
+        self.boxes_settings_signature_by_page.pop(page_idx, None)
+        if clear_current and self.detected_page_idx == page_idx:
+            self.all_boxes = []
+            self.box_types = []
+            self.geom = {"names": [], "dob": [], "phil": []}
+            self.detected_page_idx = None
+            self.detected_settings_signature = None
+
+    def current_detection_matches_settings(self, page_idx=0):
+        page_idx = int(page_idx)
+        if self.detected_page_idx != page_idx or not self.all_boxes:
+            return False
+        return str(self.detected_settings_signature or "") == self._settings_signature()
+
+    def _restore_detection_for_page(self, page_idx, required_signature=None):
         page_idx = int(page_idx)
         if page_idx not in self.boxes_by_page:
+            return False
+        cached_sig = str(self.boxes_settings_signature_by_page.get(page_idx, "") or "")
+        if required_signature is not None and cached_sig != str(required_signature or ""):
             return False
         self.all_boxes = [fitz.Rect(r) for r in self.boxes_by_page.get(page_idx, [])]
         self.box_types = list(self.box_types_by_page.get(page_idx, []))
         geom_src = self.geom_by_page.get(page_idx, {}) or {}
         self.geom = {k: [fitz.Rect(r) for r in rects] for k, rects in geom_src.items()}
         self.detected_page_idx = page_idx
+        self.detected_settings_signature = cached_sig or self._settings_signature()
         return True
 
     def _ensure_detection_for_page(self, page_idx=0):
         page_idx = int(page_idx)
-        if self.detected_page_idx == page_idx and self.all_boxes:
+        required_signature = self._settings_signature()
+        if self.current_detection_matches_settings(page_idx):
             return
-        if self._restore_detection_for_page(page_idx):
+        if self._restore_detection_for_page(page_idx, required_signature=required_signature):
             return
         self.run_detection(page_idx=page_idx)
 
@@ -2242,6 +2314,7 @@ class FormAlchemistEngine:
         self._cleanup_field_fragments()
         self._cleanup_line_field_conflicts()
         self.detected_page_idx = int(page_idx)
+        self.detected_settings_signature = self._settings_signature()
         self._cache_detection_for_page(page_idx)
 
     # --------------------------------------------------------
@@ -2926,6 +2999,7 @@ class FormAlchemistEngine:
             "box_types": list(self.box_types or []),
             "geom": self._serialize_geom_payload(self.geom),
             "selected_box_ids": list(self.selected_box_ids or []),
+            "settings_signature": str(self.detected_settings_signature or ""),
         }
 
     def _page_family_hint(self):
@@ -7236,6 +7310,20 @@ class FormAlchemistApp(MDApp):
             return 0
         return min(idx, total - 1)
 
+    def _box_type_counts(self):
+        counts = {"check": 0, "line": 0, "field": 0}
+        for kind in list(getattr(self.engine, "box_types", []) or []):
+            counts[str(kind)] = counts.get(str(kind), 0) + 1
+        return counts
+
+    def _preview_boxes_payload_if_current(self, page_idx, preview_zoom):
+        page_idx = int(page_idx)
+        if self.engine.current_detection_matches_settings(page_idx):
+            return self._build_preview_boxes_payload(page_idx=page_idx, preview_zoom=preview_zoom)
+        if self.engine._restore_detection_for_page(page_idx, required_signature=self.engine._settings_signature()):
+            return self._build_preview_boxes_payload(page_idx=page_idx, preview_zoom=preview_zoom)
+        return []
+
     def apply_ui_settings_to_engine(self):
         try:
             self.engine.settings["F_Area"] = int(self.f_area.text)
@@ -7581,7 +7669,7 @@ class FormAlchemistApp(MDApp):
         page_idx = int(getattr(self, "_last_preview_page_idx", self.current_page_idx()) or 0)
         render_zoom = float(getattr(self, "_last_preview_render_zoom", PREVIEW_SCALE) or PREVIEW_SCALE)
         self._prepare_page_context(page_idx, clear_selection_if_missing=False)
-        boxes_payload = self._build_preview_boxes_payload(page_idx=page_idx, preview_zoom=render_zoom) if getattr(self.engine, "all_boxes", None) else []
+        boxes_payload = self._preview_boxes_payload_if_current(page_idx=page_idx, preview_zoom=render_zoom)
         preview.set_boxes_payload(
             boxes_payload,
             selected_ids=getattr(self.engine, "selected_box_ids", []),
@@ -7629,13 +7717,13 @@ class FormAlchemistApp(MDApp):
         try:
             if platform == "android" and not self.engine.supports_export_backend():
                 img = self.engine.get_raw_preview_pixmap(page_idx=page_idx, preview_zoom=desired_zoom)
-                boxes_payload = self._build_preview_boxes_payload(page_idx=page_idx, preview_zoom=desired_zoom) if has_boxes else []
+                boxes_payload = self._preview_boxes_payload_if_current(page_idx=page_idx, preview_zoom=desired_zoom)
             elif not patient or not has_data:
                 img = self.engine.get_raw_preview_pixmap(page_idx=page_idx, preview_zoom=desired_zoom)
-                boxes_payload = self._build_preview_boxes_payload(page_idx=page_idx, preview_zoom=desired_zoom) if has_boxes else []
+                boxes_payload = self._preview_boxes_payload_if_current(page_idx=page_idx, preview_zoom=desired_zoom)
             else:
                 img = self.engine.get_processed_preview_pixmap(patient_name=patient, page_idx=page_idx, preview_zoom=desired_zoom)
-                boxes_payload = self._build_preview_boxes_payload(page_idx=page_idx, preview_zoom=desired_zoom) if has_boxes else []
+                boxes_payload = self._build_preview_boxes_payload(page_idx=page_idx, preview_zoom=desired_zoom)
             self.render_preview_image(
                 img,
                 boxes_payload=boxes_payload,
@@ -8567,10 +8655,14 @@ class FormAlchemistApp(MDApp):
                     new_text = _format_slider_value(slider.value, spec["decimals"], as_int)
                     getattr(self, key).text = new_text
                 self.use_extent_chk.active = bool(extent_toggle.active)
-                self.set_status("Detection popup settings applied.")
-                popup.dismiss()
+                self.apply_ui_settings_to_engine()
                 if run_detect:
+                    self.set_status("Detection popup settings applied. Rerunning detection...")
+                    popup.dismiss()
                     self.on_run_detect(None)
+                else:
+                    self.set_status("Detection popup settings applied to the engine. Run Detect to refresh the boxes.")
+                    popup.dismiss()
             except Exception as e:
                 self.set_status(f"Detection tuning error:\n{e}")
 
@@ -9218,9 +9310,11 @@ class FormAlchemistApp(MDApp):
         self.engine.geom = {"names": [], "dob": [], "phil": []}
         self.engine.selected_box_ids = []
         self.engine.detected_page_idx = None
+        self.engine.detected_settings_signature = None
         self.engine.boxes_by_page = {}
         self.engine.box_types_by_page = {}
         self.engine.geom_by_page = {}
+        self.engine.boxes_settings_signature_by_page = {}
 
         self._page_selected_box_ids = {}
         self._active_selection_page_idx = 0
@@ -9379,17 +9473,29 @@ class FormAlchemistApp(MDApp):
 
             self.apply_ui_settings_to_engine()
             page_idx = self.current_page_idx()
-            self.engine.prepare_learning_for_detection(page_idx=page_idx)
+            prev_count = len(getattr(self.engine, "all_boxes", []) or []) if getattr(self.engine, "detected_page_idx", None) == page_idx else 0
+            ctx = self.engine.prepare_learning_for_detection(page_idx=page_idx)
+            profile_applied = bool((ctx or {}).get("profile_applied", False))
+            if profile_applied:
+                self.push_engine_settings_to_ui()
+            self.engine.invalidate_detection_cache(page_idx=page_idx, clear_current=True)
             self.engine.run_detection(page_idx=page_idx)
             self.engine.finalize_learning_after_detection(page_idx=page_idx)
             self.engine.selected_box_ids = []
             self._stash_page_selection(page_idx)
-            self.set_status(
+            counts = self._box_type_counts()
+            profile_msg = "\nLearned profile: applied" if profile_applied else "\nLearned profile: manual tuning"
+            summary = (
                 f"Detection done.\n"
                 f"Page: {page_idx}\n"
-                f"Boxes: {len(self.engine.all_boxes)}"
+                f"Boxes: {prev_count} -> {len(self.engine.all_boxes)}"
+                f"\nChecks: {counts.get('check', 0)}"
+                f"\nLines: {counts.get('line', 0)}"
+                f"\nFields: {counts.get('field', 0)}"
+                f"\nCache: refreshed{profile_msg}"
             )
             self.on_preview(None)
+            self.set_status(summary)
         except Exception as e:
             traceback.print_exc()
             self.set_status(f"Detect error:\n{e}")
@@ -9404,16 +9510,17 @@ class FormAlchemistApp(MDApp):
             page_idx = self.current_page_idx()
             patient = self.selected_patient()
             self._prepare_page_context(page_idx)
+            self.apply_ui_settings_to_engine()
 
             if platform == "android" and not self.engine.supports_export_backend():
                 raw_img = self.engine.get_raw_preview_pixmap(
                     page_idx=page_idx,
                     preview_zoom=PREVIEW_SCALE
                 )
-                boxes_payload = self._build_preview_boxes_payload(
+                boxes_payload = self._preview_boxes_payload_if_current(
                     page_idx=page_idx,
                     preview_zoom=PREVIEW_SCALE,
-                ) if self.engine.all_boxes else []
+                )
                 self.render_preview_image(
                     raw_img,
                     boxes_payload=boxes_payload,
@@ -9425,14 +9532,14 @@ class FormAlchemistApp(MDApp):
                     self.set_status(
                         f"Android detection preview rendered.\n"
                         f"Page: {page_idx}\n"
-                        f"Boxes: {len(self.engine.all_boxes)}\n"
+                        f"Boxes: {len(boxes_payload)}\n"
                         f"PDF export backend is unavailable in this build."
                     )
                 else:
                     self.set_status(
                         f"Android raw preview rendered.\n"
                         f"Page: {page_idx}\n"
-                        f"Boxes shown: {len(self.engine.all_boxes)}\n"
+                        f"Boxes shown: {len(boxes_payload)}\n"
                         f"PDF export backend is unavailable in this build."
                     )
                 return
@@ -9442,10 +9549,10 @@ class FormAlchemistApp(MDApp):
                     page_idx=page_idx,
                     preview_zoom=PREVIEW_SCALE
                 )
-                boxes_payload = self._build_preview_boxes_payload(
+                boxes_payload = self._preview_boxes_payload_if_current(
                     page_idx=page_idx,
                     preview_zoom=PREVIEW_SCALE,
-                ) if self.engine.all_boxes else []
+                )
                 self.render_preview_image(
                     raw_img,
                     boxes_payload=boxes_payload,
@@ -9456,11 +9563,10 @@ class FormAlchemistApp(MDApp):
                 self.set_status(
                     f"Raw PDF preview.\n"
                     f"Page: {page_idx}\n"
+                    f"Boxes shown: {len(boxes_payload)}\n"
                     f"No patient selected yet."
                 )
                 return
-
-            self.apply_ui_settings_to_engine()
 
             img = self.engine.get_processed_preview_pixmap(
                 patient_name=patient,
