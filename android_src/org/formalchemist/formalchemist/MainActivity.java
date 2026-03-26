@@ -1,34 +1,45 @@
 package org.formalchemist.formalchemist;
 
 import android.graphics.Color;
+import android.os.Bundle;
+import android.util.Log;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.ImageView;
+import android.widget.FrameLayout;
 
 import org.kivy.android.PythonActivity;
 
 /**
- * Custom activity for Route B startup.
- *
- * Replaces python-for-android's default SDL2 loading layout/icon/text with a
- * plain full-screen black view. The Python side still calls
- * android.loadingscreen.hide_loading_screen() as soon as Kivy is alive.
+ * Custom activity that replaces the default python-for-android SDL loading UI
+ * with a plain black full-screen view.
  */
 public class MainActivity extends PythonActivity {
+    private static final String TAG = "FormAlchemistMainActivity";
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        Log.v(TAG, "Custom MainActivity onCreate");
+        super.onCreate(savedInstanceState);
+        try {
+            // Re-apply our loading screen immediately in case bootstrap code
+            // added its default view before our Python-side hide call runs.
+            showLoadingScreen(getLoadingScreen());
+        } catch (Exception e) {
+            Log.w(TAG, "Unable to re-apply custom loading screen", e);
+        }
+    }
+
     @Override
     protected View getLoadingScreen() {
-        if (mLottieView != null || mImageView != null) {
-            return mLottieView != null ? mLottieView : mImageView;
-        }
+        Log.v(TAG, "Custom getLoadingScreen");
 
-        ImageView view = new ImageView(this);
+        FrameLayout view = new FrameLayout(this);
         view.setLayoutParams(new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT));
         view.setBackgroundColor(Color.BLACK);
-        view.setScaleType(ImageView.ScaleType.CENTER_CROP);
-
-        mImageView = view;
-        return mImageView;
+        view.setClickable(true);
+        view.setFocusable(true);
+        return view;
     }
 }
