@@ -60,7 +60,7 @@ public class MainActivity extends PythonActivity {
     }
 
     @Override
-    protected void removeLoadingScreen() {
+    public void removeLoadingScreen() {
         if (mImageView == null) {
             super.removeLoadingScreen();
             return;
