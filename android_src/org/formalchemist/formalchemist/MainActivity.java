@@ -13,7 +13,8 @@ import org.kivy.android.PythonActivity;
 
 public class MainActivity extends PythonActivity {
     private static final String TAG = "FormAlchemistMainActivity";
-    private static final long LOADING_FADE_MS = 260L;
+    private static final long LOADING_FADE_MS = 1800L;
+    private static final long APP_FADE_IN_MS = 1800L;
 
     private boolean loadingFadeStarted = false;
 
@@ -89,6 +90,10 @@ public class MainActivity extends PythonActivity {
                     return;
                 }
 
+                beginAppContentFadeIn(target);
+
+                target.animate()
+                        .cancel();
                 target.animate()
                         .alpha(0f)
                         .setDuration(LOADING_FADE_MS)
@@ -102,6 +107,39 @@ public class MainActivity extends PythonActivity {
                         .start();
             }
         });
+    }
+
+    private void beginAppContentFadeIn(ImageView overlay) {
+        if (overlay == null) {
+            return;
+        }
+
+        ViewParent parent = overlay.getParent();
+        if (!(parent instanceof ViewGroup)) {
+            return;
+        }
+
+        ViewGroup container = (ViewGroup) parent;
+        boolean foundContent = false;
+
+        for (int i = 0; i < container.getChildCount(); i++) {
+            View child = container.getChildAt(i);
+            if (child == null || child == overlay) {
+                continue;
+            }
+
+            foundContent = true;
+            child.animate().cancel();
+            child.setAlpha(0f);
+            child.animate()
+                    .alpha(1f)
+                    .setDuration(APP_FADE_IN_MS)
+                    .start();
+        }
+
+        if (!foundContent) {
+            Log.v(TAG, "No sibling app content found for fade-in");
+        }
     }
 
     private void removeTrackedImageView(ImageView target) {
