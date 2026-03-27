@@ -4831,44 +4831,16 @@ class InteractivePreview(Image):
         y = self.y + (widget_h - draw_h) / 2.0
         return x, y, draw_w, draw_h
 
-    def _box_color(self, box_type, selected=False, hovered=False, mapped=False):
+    def _box_color(self, box_type, selected=False, hovered=False):
         if selected:
-            return (0.16, 0.84, 1.0, 0.98)
+            return (0.15, 0.85, 1.0, 1.0)
         if hovered:
-            return (1.0, 0.68, 0.18, 0.95)
-
+            return (1.0, 0.6, 0.0, 1.0)
         if box_type == "check":
-            base = (1.0, 0.22, 0.22, 0.56)
-        elif box_type == "line":
-            base = (1.0, 0.84, 0.12, 0.54)
-        else:
-            base = (0.16, 0.95, 0.38, 0.52)
-
-        if mapped:
-            return (
-                min(base[0] + 0.08, 1.0),
-                min(base[1] + 0.04, 1.0),
-                min(base[2] + 0.08, 1.0),
-                0.72,
-            )
-        return base
-
-    def _box_fill_color(self, box_type, selected=False, hovered=False, mapped=False):
-        if selected:
-            return (0.16, 0.84, 1.0, 0.10)
-        if hovered:
-            return (1.0, 0.68, 0.18, 0.08)
-
-        if box_type == "check":
-            base = (1.0, 0.22, 0.22, 0.03)
-        elif box_type == "line":
-            base = (1.0, 0.84, 0.12, 0.025)
-        else:
-            base = (0.16, 0.95, 0.38, 0.025)
-
-        if mapped:
-            return (base[0], base[1], base[2], 0.05)
-        return base
+            return (1.0, 0.15, 0.15, 1.0)
+        if box_type == "line":
+            return (1.0, 0.85, 0.1, 1.0)
+        return (0.1, 1.0, 0.3, 1.0)
 
     def _draw_label(self, x, y, text, anchor="top_left"):
         core = CoreLabel(text=str(text), font_size=11)
@@ -5028,35 +5000,10 @@ class InteractivePreview(Image):
                 h = max(1.0, bh * sy)
                 selected = box["id"] in self.selected_ids
                 hovered = (box["id"] == self.hovered_box_id)
-                mapping_text = str(box.get("mapping", "") or "").strip()
-                mapped = bool(mapping_text and mapping_text != "EMPTY" and mapping_text != "Unmapped")
-
-                fill = self._box_fill_color(box.get("t", "field"), selected=selected, hovered=hovered, mapped=mapped)
-                if fill and fill[3] > 0:
-                    Color(*fill)
-                    Rectangle(pos=(x, y), size=(w, h))
-
-                line_color = self._box_color(box.get("t", "field"), selected=selected, hovered=hovered, mapped=mapped)
-                line_w = 3.0 if selected else (2.2 if hovered else (1.7 if mapped else 1.15))
-                Color(*line_color)
-                Line(rectangle=(x, y, w, h), width=line_w)
-
-                if selected:
-                    cx = x + (w / 2.0)
-                    cy = y + (h / 2.0)
-                    Color(0.16, 0.84, 1.0, 0.14)
-                    Line(points=[dx, cy, dx + dw, cy], width=1.0)
-                    Line(points=[cx, dy, cx, dy + dh], width=1.0)
-                elif hovered:
-                    cx = x + (w / 2.0)
-                    cy = y + (h / 2.0)
-                    Color(1.0, 0.68, 0.18, 0.08)
-                    Line(points=[x, cy, x + w, cy], width=1.0)
-                    Line(points=[cx, y, cx, y + h], width=1.0)
-
-                if selected or hovered:
-                    Color(0, 0, 0, 0.82)
-                    self._draw_label(x, y + h, box["id"], anchor=self._label_anchor_for_box(box, x, y, w, h, disp))
+                Color(*self._box_color(box.get("t", "field"), selected=selected, hovered=hovered))
+                Line(rectangle=(x, y, w, h), width=3.2 if selected else (2.4 if hovered else 1.35))
+                Color(0, 0, 0, 0.88)
+                self._draw_label(x, y + h, box["id"], anchor=self._label_anchor_for_box(box, x, y, w, h, disp))
 
     def _touch_to_image_point(self, touch):
         disp = self._get_display_rect()
@@ -5637,7 +5584,6 @@ class FormAlchemistApp(MDApp):
         Window.clearcolor = palette["bg"]
         self.ui_palette = palette
         self._page_selected_box_ids = {}
-        self._page_selection_focus_box_ids = {}
         self._active_selection_page_idx = 0
         self.preview_zoom_mode = "fit_width" if is_mobile else "manual"
         self.preview_zoom_factor = 1.0
@@ -6078,6 +6024,7 @@ class FormAlchemistApp(MDApp):
             if phone_view_btn is not None:
                 appbar.add_widget(phone_view_btn)
             status_chip.width = dp(420)
+            appbar.add_widget(status_chip)
             root.add_widget(appbar)
 
         self.mobile_flow_lbl = None
@@ -7020,7 +6967,7 @@ class FormAlchemistApp(MDApp):
             self.statusbar_ready_lbl = _status_piece(0.20)
             for lbl in [self.statusbar_file_lbl, self.statusbar_page_lbl, self.statusbar_patient_lbl, self.statusbar_boxes_lbl, self.statusbar_ready_lbl]:
                 bottom_status.add_widget(lbl)
-            self.desktop_status_detail_lbl = None
+            self.desktop_status_detail_lbl = self.status_lbl
             self.status_lbl.size_hint = (None, None)
             self.status_lbl.width = dp(420)
             root.add_widget(main)
@@ -8474,18 +8421,9 @@ class FormAlchemistApp(MDApp):
         self.set_status(f"{reason}.\nPage: {target_idx}\nOpen a PDF form to render this page.")
         return False
 
-    def _sanitize_box_id_list(self, ids, max_boxes=None):
+    def _sanitize_box_id_list(self, ids):
         out = []
-        if max_boxes is None:
-            try:
-                max_boxes = int(len(getattr(self.engine, "all_boxes", []) or [])) if hasattr(self, "engine") else 0
-            except Exception:
-                max_boxes = 0
-        else:
-            try:
-                max_boxes = int(max_boxes)
-            except Exception:
-                max_boxes = 0
+        max_boxes = int(len(getattr(self.engine, "all_boxes", []) or [])) if hasattr(self, "engine") else 0
         for x in (ids or []):
             try:
                 v = int(x)
@@ -8498,74 +8436,37 @@ class FormAlchemistApp(MDApp):
             out.append(v)
         return sorted(set(out))
 
-    def _sanitize_box_id_list_loose(self, ids):
-        return self._sanitize_box_id_list(ids, max_boxes=0)
-
-    def _set_active_selected_box_id(self, box_id, page_idx=None):
-        if not hasattr(self, "_page_selection_focus_box_ids"):
-            self._page_selection_focus_box_ids = {}
-        page_idx = self.current_page_idx() if page_idx is None else int(page_idx)
-        try:
-            focus = None if box_id is None else int(box_id)
-        except Exception:
-            focus = None
-        self._selection_focus_box_id = focus
-        if focus is None:
-            self._page_selection_focus_box_ids.pop(page_idx, None)
-        else:
-            self._page_selection_focus_box_ids[page_idx] = focus
-        return focus
-
     def _get_active_selected_box_id(self, ids=None):
         ids = self._sanitize_box_id_list(
             getattr(self.engine, "selected_box_ids", []) if ids is None else ids
         )
-        page_idx = self.current_page_idx()
         if not ids:
-            self._set_active_selected_box_id(None, page_idx=page_idx)
+            self._selection_focus_box_id = None
             return None
-        if not hasattr(self, "_page_selection_focus_box_ids"):
-            self._page_selection_focus_box_ids = {}
-        focus = self._page_selection_focus_box_ids.get(page_idx, getattr(self, "_selection_focus_box_id", None))
+        focus = getattr(self, "_selection_focus_box_id", None)
         try:
             focus = int(focus)
         except Exception:
             focus = None
         if focus in ids:
-            self._selection_focus_box_id = focus
             return focus
         fallback = ids[0]
-        self._set_active_selected_box_id(fallback, page_idx=page_idx)
+        self._selection_focus_box_id = fallback
         return fallback
 
     def _stash_page_selection(self, page_idx=None):
         if not hasattr(self, "_page_selected_box_ids"):
             self._page_selected_box_ids = {}
-        if not hasattr(self, "_page_selection_focus_box_ids"):
-            self._page_selection_focus_box_ids = {}
         page_idx = self.current_page_idx() if page_idx is None else int(page_idx)
-        ids = self._sanitize_box_id_list(getattr(self.engine, "selected_box_ids", []))
-        self._page_selected_box_ids[page_idx] = ids
-        focus = self._get_active_selected_box_id(ids)
-        if focus in ids:
-            self._page_selection_focus_box_ids[page_idx] = focus
-        else:
-            self._page_selection_focus_box_ids.pop(page_idx, None)
+        self._page_selected_box_ids[page_idx] = self._sanitize_box_id_list(getattr(self.engine, "selected_box_ids", []))
         self._active_selection_page_idx = page_idx
 
     def _restore_page_selection(self, page_idx=None, clear_if_missing=True):
         if not hasattr(self, "_page_selected_box_ids"):
             self._page_selected_box_ids = {}
-        if not hasattr(self, "_page_selection_focus_box_ids"):
-            self._page_selection_focus_box_ids = {}
         page_idx = self.current_page_idx() if page_idx is None else int(page_idx)
         ids = list(self._page_selected_box_ids.get(page_idx, []))
-        restored_ids = self._sanitize_box_id_list(ids if ids else ([] if clear_if_missing else getattr(self.engine, "selected_box_ids", [])))
-        self.engine.selected_box_ids = restored_ids
-        restored_focus = self._page_selection_focus_box_ids.get(page_idx)
-        if restored_focus not in restored_ids:
-            restored_focus = restored_ids[0] if restored_ids else None
-        self._set_active_selected_box_id(restored_focus, page_idx=page_idx)
+        self.engine.selected_box_ids = self._sanitize_box_id_list(ids if ids else ([] if clear_if_missing else getattr(self.engine, "selected_box_ids", [])))
         self._active_selection_page_idx = page_idx
         return list(self.engine.selected_box_ids)
 
@@ -8886,7 +8787,6 @@ class FormAlchemistApp(MDApp):
             self._page_selected_box_ids[int(self.current_page_idx())] = list(ids)
             self._active_selection_page_idx = int(self.current_page_idx())
         active_id = self._get_active_selected_box_id(ids)
-        self._set_active_selected_box_id(active_id, page_idx=self.current_page_idx())
         self.box_ids_input.text = ",".join(str(i) for i in ids)
         if hasattr(self.preview, "set_selected_ids"):
             self.preview.set_selected_ids(ids)
@@ -8895,9 +8795,9 @@ class FormAlchemistApp(MDApp):
             self._reset_mapping_editor_state(keep_box_ids=False)
             if getattr(self, "ui_mobile", False):
                 mode_txt = "Select ON" if bool(getattr(self, "mobile_select_mode", False)) else "Select OFF"
-                self.preview_info.text = f"Preview ready • {mode_txt} • Tap to inspect • Double-tap to link."
+                self.preview_info.text = f"Preview ready. {mode_txt} • Tap to inspect • Double-tap to link."
             else:
-                self.preview_info.text = "Preview ready • Tap a box to inspect • Double-tap to link."
+                self.preview_info.text = "Preview ready. Tap to inspect • Double-tap a box to link it."
             self._update_selection_inspector()
             self._update_bottom_statusbar()
             return
@@ -9179,7 +9079,7 @@ class FormAlchemistApp(MDApp):
 
     def on_preview_box_tap(self, hit):
         box_id = int(hit["id"])
-        self._set_active_selected_box_id(box_id)
+        self._selection_focus_box_id = box_id
         existing = []
         for x in getattr(self.engine, "selected_box_ids", []) or []:
             if isinstance(x, int) or str(x).isdigit():
@@ -9209,7 +9109,7 @@ class FormAlchemistApp(MDApp):
 
     def on_preview_box_double_tap(self, hit):
         box_id = int(hit["id"])
-        self._set_active_selected_box_id(box_id)
+        self._selection_focus_box_id = box_id
         existing = []
         for x in getattr(self.engine, "selected_box_ids", []) or []:
             if isinstance(x, int) or str(x).isdigit():
@@ -9580,16 +9480,15 @@ class FormAlchemistApp(MDApp):
             detail = f"Type: {hit.get('t', 'field')} • Rect: {rect_txt}"
             mapping = f"Mapping: {map_txt}"
         elif sel_ids:
-            active_id = self._get_active_selected_box_id(sel_ids)
-            focus_id = sel_ids[0] if active_id is None else int(active_id)
-            box_type = self.engine.box_types[focus_id] if focus_id < len(self.engine.box_types) else "field"
-            rect = self.engine.all_boxes[focus_id] if focus_id < len(self.engine.all_boxes) else None
+            first = sel_ids[0]
+            box_type = self.engine.box_types[first] if first < len(self.engine.box_types) else "field"
+            rect = self.engine.all_boxes[first] if first < len(self.engine.all_boxes) else None
             rect_txt = "—"
             if rect is not None:
                 rect_txt = f"{int(rect.x0)},{int(rect.y0)} → {int(rect.x1)},{int(rect.y1)}"
-            map_txt = self.engine.describe_box_mapping(focus_id, self.current_page_idx())
+            map_txt = self.engine.describe_box_mapping(first, self.current_page_idx())
             title = f"Selected • {len(sel_ids)} box{'es' if len(sel_ids) != 1 else ''}"
-            detail = f"Focus: {focus_id} • {box_type} • {rect_txt}"
+            detail = f"Focus: {first} • {box_type} • {rect_txt}"
             mapping = f"Mapping: {map_txt if map_txt and map_txt != 'EMPTY' else 'Unmapped'}"
         else:
             title = "Preview HUD"
@@ -9857,20 +9756,6 @@ class FormAlchemistApp(MDApp):
 
         self._bind_popup_background_softening(popup)
 
-        _rerun_after_dismiss = {"armed": False}
-
-        def _after_tuning_popup_dismiss(*_):
-            if not _rerun_after_dismiss.get("armed"):
-                return
-            _rerun_after_dismiss["armed"] = False
-            if not self.engine.pdf_path:
-                self.set_status("Detection tuning applied. Load a PDF to see the updated field finding.", kind="action", hold_seconds=2.0, force=True)
-                return
-            self.set_status("Detection tuning applied. Refreshing field finding on the current page...", kind="action", hold_seconds=2.5, force=True)
-            Clock.schedule_once(lambda dt: self.on_run_detect(None), 0)
-
-        popup.bind(on_dismiss=_after_tuning_popup_dismiss)
-
         def _apply_settings(*_):
             try:
                 for key, payload in controls.items():
@@ -9881,8 +9766,14 @@ class FormAlchemistApp(MDApp):
                     getattr(self, key).text = new_text
                 self.use_extent_chk.active = bool(extent_toggle.active)
                 self.apply_ui_settings_to_engine()
-                _rerun_after_dismiss["armed"] = True
                 popup.dismiss()
+                if not self.engine.pdf_path:
+                    self.set_status("Detection tuning applied. Load a PDF to see the updated field finding.", kind="action", hold_seconds=2.0, force=True)
+                    return
+                page_idx = self.current_page_idx()
+                self.engine.invalidate_detection_cache(page_idx=page_idx, clear_current=True)
+                self.set_status("Detection tuning applied. Refreshing field finding on the current page...", kind="action", hold_seconds=2.5, force=True)
+                Clock.schedule_once(lambda dt: self.on_run_detect(None), 0)
             except Exception as e:
                 self.set_status(f"Detection tuning error:\n{e}", kind="error", force=True)
 
@@ -9955,7 +9846,7 @@ class FormAlchemistApp(MDApp):
         focus_id = self._get_active_selected_box_id(ids) if primary_box_id is None else int(primary_box_id)
         if focus_id not in ids:
             focus_id = ids[0]
-            self._set_active_selected_box_id(focus_id, page_idx=page_idx)
+            self._selection_focus_box_id = focus_id
         existing = self._find_mapping_for_box(focus_id, page_idx)
         palette = getattr(self, "ui_palette", {}) or {}
 
@@ -10240,7 +10131,7 @@ class FormAlchemistApp(MDApp):
                 self.grid_n_input.text = str(grid_n)
                 self.box_ids_input.text = ",".join(str(i) for i in ids)
                 self.engine.selected_box_ids = ids
-                self._set_active_selected_box_id(focus_id if focus_id in ids else (ids[0] if ids else None), page_idx=page_idx)
+                self._selection_focus_box_id = focus_id if focus_id in ids else (ids[0] if ids else None)
                 self._sync_box_selection_ui()
                 saved_parts = []
                 if did_target:
@@ -10260,7 +10151,7 @@ class FormAlchemistApp(MDApp):
                 self.clear_mapping_for_box_ids(ids, page_idx)
                 self.engine.clear_semantic_target_for_box_ids(ids, page_idx)
                 self.engine.selected_box_ids = ids
-                self._set_active_selected_box_id(focus_id if focus_id in ids else (ids[0] if ids else None), page_idx=page_idx)
+                self._selection_focus_box_id = focus_id if focus_id in ids else (ids[0] if ids else None)
                 self._sync_box_selection_ui()
                 self.set_status(f"Cleared mapping for boxes: {ids} on page {page_idx}")
                 popup.dismiss()
@@ -10313,7 +10204,7 @@ class FormAlchemistApp(MDApp):
         self.clear_mapping_for_box_ids(ids, page_idx)
         self.engine.clear_semantic_target_for_box_ids(ids, page_idx)
         self.engine.selected_box_ids = ids
-        self._set_active_selected_box_id(active_id if active_id in ids else (ids[0] if ids else None), page_idx=page_idx)
+        self._selection_focus_box_id = active_id if active_id in ids else (ids[0] if ids else None)
         self._sync_box_selection_ui()
         self.set_status(f"Cleared links for box(es): {', '.join(str(i) for i in ids)}")
         self.on_preview(None, preserve_anchor=True)
@@ -10588,15 +10479,6 @@ class FormAlchemistApp(MDApp):
                 }
             except Exception:
                 ui_state["page_selected_box_ids"] = {}
-        if hasattr(self, "_page_selection_focus_box_ids"):
-            try:
-                ui_state["page_selection_focus_box_ids"] = {
-                    str(int(k)): int(v)
-                    for k, v in dict(self._page_selection_focus_box_ids).items()
-                    if v is not None
-                }
-            except Exception:
-                ui_state["page_selection_focus_box_ids"] = {}
         return ui_state
 
     def _persist_runtime_session_state(self, current_page_idx=None):
@@ -10622,7 +10504,6 @@ class FormAlchemistApp(MDApp):
         self.engine.boxes_settings_signature_by_page = {}
 
         self._page_selected_box_ids = {}
-        self._page_selection_focus_box_ids = {}
         self._active_selection_page_idx = 0
 
         if hasattr(self, "preview"):
@@ -10657,6 +10538,22 @@ class FormAlchemistApp(MDApp):
         self._restored_session_preview_mode = str(ui_state.get("session_preview_mode", "") or "")
         self._status_kind = str(ui_state.get("status_kind", getattr(self, "_status_kind", "info")) or "info")
 
+        page_selected = ui_state.get("page_selected_box_ids", {}) or {}
+        if isinstance(page_selected, dict):
+            self._page_selected_box_ids = {}
+            for k, v in page_selected.items():
+                try:
+                    self._page_selected_box_ids[int(k)] = list(self._sanitize_box_id_list(v))
+                except Exception:
+                    continue
+
+        selected_ids = list(self._sanitize_box_id_list(ui_state.get("selected_box_ids", [])))
+        if selected_ids:
+            self._page_selected_box_ids[target_page] = list(selected_ids)
+
+        self._active_selection_page_idx = target_page
+        self.engine.selected_box_ids = list(selected_ids)
+
         total = 0
         try:
             total = int(self.engine.total_pages())
@@ -10666,47 +10563,6 @@ class FormAlchemistApp(MDApp):
             target_page = max(0, min(target_page, total - 1))
         else:
             target_page = 0
-
-        page_selected = ui_state.get("page_selected_box_ids", {}) or {}
-        if isinstance(page_selected, dict):
-            self._page_selected_box_ids = {}
-            for k, v in page_selected.items():
-                try:
-                    page_key = int(k)
-                except Exception:
-                    continue
-                if total > 0:
-                    page_key = max(0, min(page_key, total - 1))
-                else:
-                    page_key = 0
-                self._page_selected_box_ids[page_key] = list(self._sanitize_box_id_list_loose(v))
-
-        page_focus = ui_state.get("page_selection_focus_box_ids", {}) or {}
-        self._page_selection_focus_box_ids = {}
-        if isinstance(page_focus, dict):
-            for k, v in page_focus.items():
-                try:
-                    page_key = int(k)
-                    focus_id = int(v)
-                except Exception:
-                    continue
-                if total > 0:
-                    page_key = max(0, min(page_key, total - 1))
-                else:
-                    page_key = 0
-                self._page_selection_focus_box_ids[page_key] = focus_id
-
-        selected_ids = list(self._sanitize_box_id_list_loose(ui_state.get("selected_box_ids", [])))
-        if selected_ids:
-            self._page_selected_box_ids[target_page] = list(selected_ids)
-
-        restored_focus = self._page_selection_focus_box_ids.get(target_page)
-        if restored_focus not in selected_ids:
-            restored_focus = selected_ids[0] if selected_ids else None
-
-        self._active_selection_page_idx = target_page
-        self.engine.selected_box_ids = list(selected_ids)
-        self._set_active_selected_box_id(restored_focus, page_idx=target_page)
 
         if hasattr(self, "page_input"):
             self._set_page_inputs_text(target_page)
@@ -10825,6 +10681,7 @@ class FormAlchemistApp(MDApp):
             )
             self._persist_runtime_session_state(current_page_idx=page_idx)
             Clock.schedule_once(lambda dt: self.on_preview(None, preserve_anchor=True), 0)
+            Clock.schedule_once(lambda dt: self.on_preview(None, preserve_anchor=True), 0.05)
             self.set_status(summary, kind="detect", hold_seconds=3.5, force=True)
         except Exception as e:
             traceback.print_exc()
@@ -10867,7 +10724,7 @@ class FormAlchemistApp(MDApp):
 
             self.engine.assign_mapping(box_ids, column, trigger, is_grid, grid_n, page_idx)
             self.engine.selected_box_ids = sorted(set(box_ids))
-            self._set_active_selected_box_id(active_id if active_id in self.engine.selected_box_ids else (self.engine.selected_box_ids[0] if self.engine.selected_box_ids else None), page_idx=page_idx)
+            self._selection_focus_box_id = active_id if active_id in self.engine.selected_box_ids else (self.engine.selected_box_ids[0] if self.engine.selected_box_ids else None)
             self._sync_box_selection_ui()
 
             self.set_status(
