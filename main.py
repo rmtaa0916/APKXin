@@ -7162,6 +7162,7 @@ class FormAlchemistApp(MDApp):
             canvas_hint.disabled = not show
         if show and getattr(self, "preview_info", None) is not None:
             self.preview_info.text = self._preview_idle_status_text()
+        self._sync_preview_stack_size()
 
     def _build_startup_presplash(self):
         # Route B startup: disable the in-app splash completely so the app never falls back
@@ -7226,18 +7227,36 @@ class FormAlchemistApp(MDApp):
         wrap = getattr(self, "preview_wrap", None)
         if stack is None or preview is None or wrap is None:
             return
-        info = getattr(self, "preview_info", None)
-        info_h = 0.0
-        info_spacing = float(getattr(stack, "spacing", 0) or 0)
-        if info is not None and float(getattr(info, "opacity", 1) or 0) > 0 and float(getattr(info, "height", 0) or 0) > 0:
-            info_h = float(getattr(info, "height", 0) or 0)
+
+        spacing = float(getattr(stack, "spacing", 0) or 0)
         wrap_w = max(float(getattr(wrap, "width", 0) or 0), 1.0)
-        preview_w = float(getattr(preview, "width", 0) or 0)
-        preview_h = float(getattr(preview, "height", 0) or 0)
+
+        visible_heights = []
+        candidate_widths = [wrap_w]
+        for child_name in ("preview_info", "preview_empty_hint", "preview"):
+            child = getattr(self, child_name, None)
+            if child is None:
+                continue
+            child_h = float(getattr(child, "height", 0) or 0)
+            child_w = float(getattr(child, "width", 0) or 0)
+            child_opacity = float(getattr(child, "opacity", 1) or 0)
+            child_disabled = bool(getattr(child, "disabled", False))
+            is_preview = (child is preview)
+            candidate_widths.append(child_w)
+            if child_h <= 0:
+                continue
+            if is_preview:
+                visible_heights.append(child_h)
+            elif child_opacity > 0 and not child_disabled:
+                visible_heights.append(child_h)
+
+        visible_count = len(visible_heights)
+        total_height = sum(visible_heights) + (spacing * max(0, visible_count - 1))
+
         stack.size_hint_x = None
         stack.size_hint_y = None
-        stack.width = max(dp(1), wrap_w, preview_w)
-        stack.height = max(dp(1), preview_h + info_h + (info_spacing if info_h > 0 else 0.0))
+        stack.width = max(dp(1), *candidate_widths)
+        stack.height = max(dp(1), total_height)
 
     def _on_preview_viewport_change(self, *_):
         Clock.unschedule(self._refresh_preview_for_viewport)
@@ -9777,14 +9796,23 @@ class FormAlchemistApp(MDApp):
                     getattr(self, key).text = new_text
                 self.use_extent_chk.active = bool(extent_toggle.active)
                 self.apply_ui_settings_to_engine()
-                popup.dismiss()
                 if not self.engine.pdf_path:
+                    popup.dismiss()
                     self.set_status("Detection tuning applied. Load a PDF to see the updated field finding.", kind="action", hold_seconds=2.0, force=True)
                     return
                 page_idx = self.current_page_idx()
                 self.engine.invalidate_detection_cache(page_idx=page_idx, clear_current=True)
                 self.set_status("Detection tuning applied. Refreshing field finding on the current page...", kind="action", hold_seconds=2.5, force=True)
-                self.on_run_detect(None, immediate_preview=True)
+
+                def _after_dismiss(*__):
+                    try:
+                        popup.unbind(on_dismiss=_after_dismiss)
+                    except Exception:
+                        pass
+                    self.on_run_detect(None, immediate_preview=True)
+
+                popup.bind(on_dismiss=_after_dismiss)
+                popup.dismiss()
             except Exception as e:
                 self.set_status(f"Detection tuning error:\n{e}", kind="error", force=True)
 
