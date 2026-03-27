@@ -61,6 +61,22 @@ class RectCompat:
     __slots__ = ("x0", "y0", "x1", "y1")
 
     def __init__(self, x0=0.0, y0=0.0, x1=0.0, y1=0.0):
+        if y0 == 0.0 and x1 == 0.0 and y1 == 0.0:
+            if hasattr(x0, "x0") and hasattr(x0, "y0") and hasattr(x0, "x1") and hasattr(x0, "y1"):
+                y0 = getattr(x0, "y0")
+                x1 = getattr(x0, "x1")
+                y1 = getattr(x0, "y1")
+                x0 = getattr(x0, "x0")
+            elif isinstance(x0, (list, tuple)) and len(x0) >= 4:
+                x0, y0, x1, y1 = x0[:4]
+            else:
+                try:
+                    vals = list(x0)
+                    if len(vals) >= 4:
+                        x0, y0, x1, y1 = vals[:4]
+                except Exception:
+                    pass
+
         self.x0 = float(x0)
         self.y0 = float(y0)
         self.x1 = float(x1)
@@ -4769,6 +4785,9 @@ class InteractivePreview(Image):
         self._tap_slop = float(dp(18))
         self._pinch_active = False
         self._pinch_last_midpoint = None
+        self.minimal_guides = True
+        self.show_all_box_labels = False
+        self.show_hover_guides = True
         self.bind(texture=self._redraw_overlay, size=self._redraw_overlay, pos=self._redraw_overlay)
         if platform != "android":
             Window.bind(mouse_pos=self._on_mouse_pos)
@@ -4831,16 +4850,59 @@ class InteractivePreview(Image):
         y = self.y + (widget_h - draw_h) / 2.0
         return x, y, draw_w, draw_h
 
-    def _box_color(self, box_type, selected=False, hovered=False):
+    def _box_color(self, box_type, selected=False, hovered=False, mapped=False, alpha_override=None):
         if selected:
-            return (0.15, 0.85, 1.0, 1.0)
+            color = (0.18, 0.84, 1.0, 0.98)
+        elif hovered:
+            color = (1.0, 0.68, 0.12, 0.96)
+        elif mapped:
+            if box_type == "check":
+                color = (1.0, 0.42, 0.42, 0.58)
+            elif box_type == "line":
+                color = (1.0, 0.88, 0.36, 0.56)
+            else:
+                color = (0.32, 1.0, 0.56, 0.54)
+        else:
+            if box_type == "check":
+                color = (1.0, 0.34, 0.34, 0.38)
+            elif box_type == "line":
+                color = (1.0, 0.88, 0.34, 0.36)
+            else:
+                color = (0.36, 1.0, 0.54, 0.34)
+        if alpha_override is not None:
+            color = (color[0], color[1], color[2], float(alpha_override))
+        return color
+
+    def _box_fill_color(self, box_type, selected=False, hovered=False, mapped=False):
+        if selected:
+            return (0.16, 0.84, 1.0, 0.12)
         if hovered:
-            return (1.0, 0.6, 0.0, 1.0)
-        if box_type == "check":
-            return (1.0, 0.15, 0.15, 1.0)
-        if box_type == "line":
-            return (1.0, 0.85, 0.1, 1.0)
-        return (0.1, 1.0, 0.3, 1.0)
+            return (1.0, 0.68, 0.12, 0.09)
+        if mapped:
+            if box_type == "check":
+                return (1.0, 0.42, 0.42, 0.045)
+            if box_type == "line":
+                return (1.0, 0.88, 0.36, 0.042)
+            return (0.32, 1.0, 0.56, 0.04)
+        return (1.0, 1.0, 1.0, 0.0)
+
+    def _box_stroke_width(self, selected=False, hovered=False, mapped=False):
+        if selected:
+            return 2.9
+        if hovered:
+            return 2.0
+        if mapped:
+            return 1.2
+        return 0.9
+
+    def _box_should_show_label(self, selected=False, hovered=False):
+        if bool(getattr(self, "show_all_box_labels", False)):
+            return True
+        if selected:
+            return True
+        if hovered and bool(getattr(self, "show_hover_guides", True)):
+            return True
+        return False
 
     def _draw_label(self, x, y, text, anchor="top_left"):
         core = CoreLabel(text=str(text), font_size=11)
@@ -4991,19 +5053,56 @@ class InteractivePreview(Image):
         tex = self.texture
         sx = dw / float(max(tex.width, 1))
         sy = dh / float(max(tex.height, 1))
+        minimal = bool(getattr(self, "minimal_guides", True))
         with self.canvas.after:
+            ordered = []
+            selected_items = []
+            hovered_items = []
             for box in self.boxes_payload:
+                box_id = box.get("id")
+                is_selected = box_id in self.selected_ids
+                is_hovered = (box_id == self.hovered_box_id)
+                if is_selected:
+                    selected_items.append(box)
+                elif is_hovered:
+                    hovered_items.append(box)
+                else:
+                    ordered.append(box)
+            ordered.extend(hovered_items)
+            ordered.extend(selected_items)
+
+            for box in ordered:
                 bx, by, bw, bh = self._resolve_box_image_rect(box)
                 x = dx + bx * sx
                 y = dy + (tex.height - (by + bh)) * sy
                 w = max(1.0, bw * sx)
                 h = max(1.0, bh * sy)
-                selected = box["id"] in self.selected_ids
-                hovered = (box["id"] == self.hovered_box_id)
-                Color(*self._box_color(box.get("t", "field"), selected=selected, hovered=hovered))
-                Line(rectangle=(x, y, w, h), width=3.2 if selected else (2.4 if hovered else 1.35))
-                Color(0, 0, 0, 0.88)
-                self._draw_label(x, y + h, box["id"], anchor=self._label_anchor_for_box(box, x, y, w, h, disp))
+                box_id = box.get("id")
+                selected = box_id in self.selected_ids
+                hovered = (box_id == self.hovered_box_id)
+                mapping_text = str(box.get("mapping", "") or "").strip()
+                mapped = bool(mapping_text and mapping_text.lower() != "unmapped")
+                box_type = box.get("t", "field")
+
+                fill = self._box_fill_color(box_type, selected=selected, hovered=hovered, mapped=mapped)
+                if fill[3] > 0:
+                    Color(*fill)
+                    Rectangle(pos=(x, y), size=(w, h))
+
+                Color(*self._box_color(box_type, selected=selected, hovered=hovered, mapped=mapped))
+                Line(rectangle=(x, y, w, h), width=self._box_stroke_width(selected=selected, hovered=hovered, mapped=mapped))
+
+                if selected:
+                    Color(0.18, 0.84, 1.0, 0.22)
+                    Line(rectangle=(x - 1.0, y - 1.0, w + 2.0, h + 2.0), width=1.0)
+                elif hovered and minimal:
+                    Color(1.0, 0.68, 0.12, 0.18)
+                    Line(rectangle=(x - 0.8, y - 0.8, w + 1.6, h + 1.6), width=0.9)
+
+                if self._box_should_show_label(selected=selected, hovered=hovered):
+                    bg_alpha = 0.92 if selected else 0.84
+                    Color(0.02, 0.03, 0.05, bg_alpha)
+                    self._draw_label(x, y + h, box_id, anchor=self._label_anchor_for_box(box, x, y, w, h, disp))
 
     def _touch_to_image_point(self, touch):
         disp = self._get_display_rect()
@@ -6595,6 +6694,8 @@ class FormAlchemistApp(MDApp):
             )
             self.preview_info.bind(size=self._sync_label_text_size)
             preview_stack.add_widget(self.preview_info)
+            self.preview_info_hidden = True
+            Clock.schedule_once(self._collapse_preview_info_banner, 0)
             self.preview_empty_hint = self._make_preview_empty_hint(palette, is_mobile=True)
             preview_stack.add_widget(self.preview_empty_hint)
             preview_stack.add_widget(self.preview)
@@ -6925,6 +7026,8 @@ class FormAlchemistApp(MDApp):
             self.preview_info.bind(size=self._sync_label_text_size)
             style_card(self.preview_info, palette["chip"], radius=dp(16))
             preview_stack.add_widget(self.preview_info)
+            self.preview_info_hidden = True
+            Clock.schedule_once(self._collapse_preview_info_banner, 0)
             self.preview_empty_hint = self._make_preview_empty_hint(palette, is_mobile=False)
             preview_stack.add_widget(self.preview_empty_hint)
             preview_stack.add_widget(self.preview)
@@ -7076,7 +7179,48 @@ class FormAlchemistApp(MDApp):
             hint.disabled = True
             hint.height = 0
         if show and getattr(self, "preview_info", None) is not None:
-            self.preview_info.text = "No form loaded yet. Quick start: Open PDF Form → Load Data File or Google Sheet → Choose a record and page → Find Fields → Save links."
+            self._set_preview_info_message("No form loaded yet. Quick start: Open PDF Form → Load Data File or Google Sheet → Choose a record and page → Find Fields → Save links.")
+
+    def _collapse_preview_info_banner(self, *_):
+        info = getattr(self, "preview_info", None)
+        if info is None:
+            return
+        try:
+            info.text = ""
+        except Exception:
+            pass
+        try:
+            info.opacity = 0
+        except Exception:
+            pass
+        try:
+            info.disabled = True
+        except Exception:
+            pass
+        try:
+            info.height = 0
+        except Exception:
+            pass
+        try:
+            info.size_hint_y = None
+        except Exception:
+            pass
+
+    def _set_preview_info_message(self, text=""):
+        info = getattr(self, "preview_info", None)
+        if info is None:
+            return
+        if bool(getattr(self, "preview_info_hidden", True)):
+            self._collapse_preview_info_banner()
+            return
+        try:
+            info.disabled = False
+            info.opacity = 1
+            info.text = str(text or "")
+            if float(getattr(info, "height", 0) or 0) <= 0:
+                info.height = dp(18 if getattr(self, "ui_mobile", False) else 32)
+        except Exception:
+            pass
 
     def _build_startup_presplash(self):
         # Route B startup: disable the in-app splash completely so the app never falls back
@@ -8755,9 +8899,9 @@ class FormAlchemistApp(MDApp):
         if not ids:
             if getattr(self, "ui_mobile", False):
                 mode_txt = "Select ON" if bool(getattr(self, "mobile_select_mode", False)) else "Select OFF"
-                self.preview_info.text = f"Preview ready. {mode_txt} • Tap to inspect • Double-tap to link."
+                self._set_preview_info_message(f"Preview ready. {mode_txt} • Tap to inspect • Double-tap to link.")
             else:
-                self.preview_info.text = "Preview ready. Tap to inspect • Double-tap a box to link it."
+                self._set_preview_info_message("Preview ready. Tap to inspect • Double-tap a box to link it.")
             self._update_selection_inspector()
             self._update_bottom_statusbar()
             return
@@ -8765,7 +8909,7 @@ class FormAlchemistApp(MDApp):
         first = ids[0]
         box_type = self.engine.box_types[first] if first < len(self.engine.box_types) else "field"
         mapping = self.engine.describe_box_mapping(first, self.current_page_idx())
-        self.preview_info.text = f"Selected: {ids} • {mapping}"
+        self._set_preview_info_message(f"Selected: {ids} • {mapping}")
         self._update_selection_inspector()
         self._update_bottom_statusbar()
         try:
@@ -8997,9 +9141,9 @@ class FormAlchemistApp(MDApp):
         if sel_ids:
             first = sel_ids[0]
             sel_mapping = self.engine.describe_box_mapping(first, self.current_page_idx())
-            self.preview_info.text = f"Selected: {sel_ids} • {sel_mapping}"
+            self._set_preview_info_message(f"Selected: {sel_ids} • {sel_mapping}")
         else:
-            self.preview_info.text = hover_text
+            self._set_preview_info_message(hover_text)
         if hasattr(self, "desktop_status_detail_lbl") and self.desktop_status_detail_lbl is not None:
             self.desktop_status_detail_lbl.text = f"{verb} • Box {hit['id']} • {mapping}"
         if hasattr(self, "inspector_hover_lbl") and self.inspector_hover_lbl is not None:
@@ -9682,23 +9826,6 @@ class FormAlchemistApp(MDApp):
 
         self._bind_popup_background_softening(popup)
 
-        run_after_dismiss = {"armed": False}
-
-        def _after_popup_dismiss(*_):
-            if not run_after_dismiss["armed"]:
-                return
-            run_after_dismiss["armed"] = False
-            Clock.schedule_once(
-                lambda dt: self._rerun_detection_and_refresh_current_page(
-                    reason="Detection tuning applied",
-                    preserve_anchor=True,
-                    clear_selection=True,
-                ),
-                0,
-            )
-
-        popup.bind(on_dismiss=_after_popup_dismiss)
-
         def _apply_settings(*_):
             try:
                 for key, payload in controls.items():
@@ -9709,12 +9836,14 @@ class FormAlchemistApp(MDApp):
                     getattr(self, key).text = new_text
                 self.use_extent_chk.active = bool(extent_toggle.active)
                 self.apply_ui_settings_to_engine()
+                popup.dismiss()
                 if not self.engine.pdf_path:
-                    popup.dismiss()
                     self.set_status("Detection tuning applied. Load a PDF to see the updated field finding.", kind="action", hold_seconds=2.0, force=True)
                     return
-                run_after_dismiss["armed"] = True
-                popup.dismiss()
+                page_idx = self.current_page_idx()
+                self.engine.invalidate_detection_cache(page_idx=page_idx, clear_current=True)
+                self.set_status("Detection tuning applied. Refreshing field finding on the current page...", kind="action", hold_seconds=2.5, force=True)
+                Clock.schedule_once(lambda dt: self.on_run_detect(None), 0)
             except Exception as e:
                 self.set_status(f"Detection tuning error:\n{e}", kind="error", force=True)
 
@@ -10512,9 +10641,9 @@ class FormAlchemistApp(MDApp):
             Clock.schedule_once(lambda dt, open_state=sidebar_open: self._set_mobile_sidebar_state(open_state), 0)
         try:
             if getattr(self.engine, "pdf_path", ""):
-                self.preview_info.text = "Config loaded. Preview restored for the active page."
+                self._set_preview_info_message("Config loaded. Preview restored for the active page.")
             else:
-                self.preview_info.text = "Config loaded. Preview state restored. Load the saved PDF to resume preview on the active page."
+                self._set_preview_info_message("Config loaded. Preview state restored. Load the saved PDF to resume preview on the active page.")
         except Exception:
             pass
 
@@ -10577,88 +10706,43 @@ class FormAlchemistApp(MDApp):
     # Detection / preview    # --------------------------------------------------------
     # Detection / preview
     # --------------------------------------------------------
-    def _rerun_detection_and_refresh_current_page(
-        self,
-        reason="Detection refreshed",
-        preserve_anchor=True,
-        clear_selection=True,
-    ):
-        if not self.engine.pdf_path:
-            self.set_status("Load PDF first.")
-            return False
-
-        self.apply_ui_settings_to_engine()
-        page_idx = self.current_page_idx()
-        prev_count = (
-            len(getattr(self.engine, "all_boxes", []) or [])
-            if getattr(self.engine, "detected_page_idx", None) == page_idx
-            else 0
-        )
-        anchor = self._capture_preview_anchor() if preserve_anchor else None
-
-        ctx = self.engine.prepare_learning_for_detection(
-            page_idx=page_idx,
-            allow_profile_apply=False,
-        )
-        profile_applied = bool((ctx or {}).get("profile_applied", False))
-        profile_matched = bool((ctx or {}).get("matched_profile"))
-
-        self.engine.invalidate_detection_cache(page_idx=page_idx, clear_current=True)
-        self.engine.run_detection(page_idx=page_idx)
-        self.engine.finalize_learning_after_detection(page_idx=page_idx)
-
-        if clear_selection:
-            self.engine.selected_box_ids = []
-        else:
-            kept_ids = []
-            max_len = len(getattr(self.engine, "all_boxes", []) or [])
-            for raw_id in getattr(self.engine, "selected_box_ids", []) or []:
-                try:
-                    bid = int(raw_id)
-                except Exception:
-                    continue
-                if 0 <= bid < max_len:
-                    kept_ids.append(bid)
-            self.engine.selected_box_ids = sorted(set(kept_ids))
-
-        self._stash_page_selection(page_idx)
-        counts = self._box_type_counts()
-        rendered = self._render_session_page(page_idx=page_idx, reason=reason)
-
-        if preserve_anchor and anchor is not None and rendered:
-            Clock.schedule_once(lambda dt, a=anchor: self._restore_preview_anchor(a), 0)
-            Clock.schedule_once(lambda dt, a=anchor: self._restore_preview_anchor(a), 0.06)
-
-        self._persist_runtime_session_state(current_page_idx=page_idx)
-
-        if profile_applied:
-            profile_msg = "\nLearned profile: applied"
-        elif profile_matched:
-            profile_msg = "\nLearned profile: matched but skipped (manual tuning kept)"
-        else:
-            profile_msg = "\nLearned profile: no match"
-
-        self.set_status(
-            f"{reason}.\n"
-            f"Page: {page_idx}\n"
-            f"Boxes: {prev_count} -> {len(self.engine.all_boxes)}"
-            f"\nChecks: {counts.get('check', 0)}"
-            f"\nLines: {counts.get('line', 0)}"
-            f"\nFields: {counts.get('field', 0)}"
-            f"\nCache: refreshed{profile_msg}",
-            kind="detect",
-            hold_seconds=3.0,
-            force=True,
-        )
-        return True
-
     def on_run_detect(self, instance):
         try:
-            self._rerun_detection_and_refresh_current_page(
-                reason="Detection done",
-                preserve_anchor=True,
-                clear_selection=True,
+            if not self.engine.pdf_path:
+                self.set_status("Load PDF first.")
+                return
+
+            self.apply_ui_settings_to_engine()
+            page_idx = self.current_page_idx()
+            prev_count = len(getattr(self.engine, "all_boxes", []) or []) if getattr(self.engine, "detected_page_idx", None) == page_idx else 0
+            ctx = self.engine.prepare_learning_for_detection(page_idx=page_idx, allow_profile_apply=False)
+            profile_applied = bool((ctx or {}).get("profile_applied", False))
+            profile_matched = bool((ctx or {}).get("matched_profile"))
+            self.engine.invalidate_detection_cache(page_idx=page_idx, clear_current=True)
+            self.engine.run_detection(page_idx=page_idx)
+            self.engine.finalize_learning_after_detection(page_idx=page_idx)
+            self.engine.selected_box_ids = []
+            self._stash_page_selection(page_idx)
+            counts = self._box_type_counts()
+            if profile_applied:
+                profile_msg = "\nLearned profile: applied"
+            elif profile_matched:
+                profile_msg = "\nLearned profile: matched but skipped (manual tuning kept)"
+            else:
+                profile_msg = "\nLearned profile: no match"
+            summary = (
+                f"Detection done.\n"
+                f"Page: {page_idx}\n"
+                f"Boxes: {prev_count} -> {len(self.engine.all_boxes)}"
+                f"\nChecks: {counts.get('check', 0)}"
+                f"\nLines: {counts.get('line', 0)}"
+                f"\nFields: {counts.get('field', 0)}"
+                f"\nCache: refreshed{profile_msg}"
             )
+            self._persist_runtime_session_state(current_page_idx=page_idx)
+            Clock.schedule_once(lambda dt: self.on_preview(None), 0)
+            Clock.schedule_once(lambda dt: self.on_preview(None), 0.05)
+            self.set_status(summary, kind="detect", hold_seconds=3.5, force=True)
         except Exception as e:
             traceback.print_exc()
             self.set_status(f"Detect error:\n{e}", kind="error", force=True)
