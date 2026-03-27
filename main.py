@@ -8474,9 +8474,18 @@ class FormAlchemistApp(MDApp):
         self.set_status(f"{reason}.\nPage: {target_idx}\nOpen a PDF form to render this page.")
         return False
 
-    def _sanitize_box_id_list(self, ids):
+    def _sanitize_box_id_list(self, ids, max_boxes=None):
         out = []
-        max_boxes = int(len(getattr(self.engine, "all_boxes", []) or [])) if hasattr(self, "engine") else 0
+        if max_boxes is None:
+            try:
+                max_boxes = int(len(getattr(self.engine, "all_boxes", []) or [])) if hasattr(self, "engine") else 0
+            except Exception:
+                max_boxes = 0
+        else:
+            try:
+                max_boxes = int(max_boxes)
+            except Exception:
+                max_boxes = 0
         for x in (ids or []):
             try:
                 v = int(x)
@@ -8488,6 +8497,9 @@ class FormAlchemistApp(MDApp):
                 continue
             out.append(v)
         return sorted(set(out))
+
+    def _sanitize_box_id_list_loose(self, ids):
+        return self._sanitize_box_id_list(ids, max_boxes=0)
 
     def _set_active_selected_box_id(self, box_id, page_idx=None):
         if not hasattr(self, "_page_selection_focus_box_ids"):
@@ -9845,6 +9857,20 @@ class FormAlchemistApp(MDApp):
 
         self._bind_popup_background_softening(popup)
 
+        _rerun_after_dismiss = {"armed": False}
+
+        def _after_tuning_popup_dismiss(*_):
+            if not _rerun_after_dismiss.get("armed"):
+                return
+            _rerun_after_dismiss["armed"] = False
+            if not self.engine.pdf_path:
+                self.set_status("Detection tuning applied. Load a PDF to see the updated field finding.", kind="action", hold_seconds=2.0, force=True)
+                return
+            self.set_status("Detection tuning applied. Refreshing field finding on the current page...", kind="action", hold_seconds=2.5, force=True)
+            Clock.schedule_once(lambda dt: self.on_run_detect(None), 0)
+
+        popup.bind(on_dismiss=_after_tuning_popup_dismiss)
+
         def _apply_settings(*_):
             try:
                 for key, payload in controls.items():
@@ -9855,14 +9881,8 @@ class FormAlchemistApp(MDApp):
                     getattr(self, key).text = new_text
                 self.use_extent_chk.active = bool(extent_toggle.active)
                 self.apply_ui_settings_to_engine()
+                _rerun_after_dismiss["armed"] = True
                 popup.dismiss()
-                if not self.engine.pdf_path:
-                    self.set_status("Detection tuning applied. Load a PDF to see the updated field finding.", kind="action", hold_seconds=2.0, force=True)
-                    return
-                page_idx = self.current_page_idx()
-                self.engine.invalidate_detection_cache(page_idx=page_idx, clear_current=True)
-                self.set_status("Detection tuning applied. Refreshing field finding on the current page...", kind="action", hold_seconds=2.5, force=True)
-                Clock.schedule_once(lambda dt: self.on_run_detect(None), 0)
             except Exception as e:
                 self.set_status(f"Detection tuning error:\n{e}", kind="error", force=True)
 
@@ -10637,25 +10657,46 @@ class FormAlchemistApp(MDApp):
         self._restored_session_preview_mode = str(ui_state.get("session_preview_mode", "") or "")
         self._status_kind = str(ui_state.get("status_kind", getattr(self, "_status_kind", "info")) or "info")
 
+        total = 0
+        try:
+            total = int(self.engine.total_pages())
+        except Exception:
+            total = 0
+        if total > 0:
+            target_page = max(0, min(target_page, total - 1))
+        else:
+            target_page = 0
+
         page_selected = ui_state.get("page_selected_box_ids", {}) or {}
         if isinstance(page_selected, dict):
             self._page_selected_box_ids = {}
             for k, v in page_selected.items():
                 try:
-                    self._page_selected_box_ids[int(k)] = list(self._sanitize_box_id_list(v))
+                    page_key = int(k)
                 except Exception:
                     continue
+                if total > 0:
+                    page_key = max(0, min(page_key, total - 1))
+                else:
+                    page_key = 0
+                self._page_selected_box_ids[page_key] = list(self._sanitize_box_id_list_loose(v))
 
         page_focus = ui_state.get("page_selection_focus_box_ids", {}) or {}
         self._page_selection_focus_box_ids = {}
         if isinstance(page_focus, dict):
             for k, v in page_focus.items():
                 try:
-                    self._page_selection_focus_box_ids[int(k)] = int(v)
+                    page_key = int(k)
+                    focus_id = int(v)
                 except Exception:
                     continue
+                if total > 0:
+                    page_key = max(0, min(page_key, total - 1))
+                else:
+                    page_key = 0
+                self._page_selection_focus_box_ids[page_key] = focus_id
 
-        selected_ids = list(self._sanitize_box_id_list(ui_state.get("selected_box_ids", [])))
+        selected_ids = list(self._sanitize_box_id_list_loose(ui_state.get("selected_box_ids", [])))
         if selected_ids:
             self._page_selected_box_ids[target_page] = list(selected_ids)
 
@@ -10666,16 +10707,6 @@ class FormAlchemistApp(MDApp):
         self._active_selection_page_idx = target_page
         self.engine.selected_box_ids = list(selected_ids)
         self._set_active_selected_box_id(restored_focus, page_idx=target_page)
-
-        total = 0
-        try:
-            total = int(self.engine.total_pages())
-        except Exception:
-            total = 0
-        if total > 0:
-            target_page = max(0, min(target_page, total - 1))
-        else:
-            target_page = 0
 
         if hasattr(self, "page_input"):
             self._set_page_inputs_text(target_page)
