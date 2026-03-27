@@ -61,33 +61,6 @@ class RectCompat:
     __slots__ = ("x0", "y0", "x1", "y1")
 
     def __init__(self, x0=0.0, y0=0.0, x1=0.0, y1=0.0):
-        rect_like = None
-
-        if hasattr(x0, "x0") and hasattr(x0, "y0") and hasattr(x0, "x1") and hasattr(x0, "y1"):
-            rect_like = x0
-        elif isinstance(x0, (list, tuple)) and len(x0) >= 4:
-            rect_like = x0[:4]
-        elif not isinstance(x0, (str, bytes)):
-            try:
-                vals = list(x0)
-                if len(vals) >= 4:
-                    rect_like = vals[:4]
-            except Exception:
-                rect_like = None
-
-        if rect_like is not None:
-            if hasattr(rect_like, "x0"):
-                self.x0 = float(getattr(rect_like, "x0"))
-                self.y0 = float(getattr(rect_like, "y0"))
-                self.x1 = float(getattr(rect_like, "x1"))
-                self.y1 = float(getattr(rect_like, "y1"))
-            else:
-                self.x0 = float(rect_like[0])
-                self.y0 = float(rect_like[1])
-                self.x1 = float(rect_like[2])
-                self.y1 = float(rect_like[3])
-            return
-
         self.x0 = float(x0)
         self.y0 = float(y0)
         self.x1 = float(x1)
@@ -2339,9 +2312,7 @@ class FormAlchemistEngine:
         self.box_types.append(box_type)
 
     def _append_geom_fields(self):
-        for key in ["names", "dob", "phil"]:
-            for r in self.geom.get(key, []):
-                self._append_box_unique(r, "field", iou_thresh=0.60)
+        return
 
     # --------------------------------------------------------
     # Cleanup helpers
