@@ -5951,10 +5951,17 @@ class FormAlchemistApp(MDApp):
             orientation="horizontal",
             spacing=dp(6) if is_mobile else dp(14),
             size_hint_y=None,
-            height=dp(44) if is_mobile else dp(88),
-            padding=[dp(8), dp(4), dp(8), dp(4)],
+            height=dp(40) if is_mobile else dp(88),
+            padding=[dp(8), dp(3), dp(8), dp(3)],
         )
         style_card(appbar, palette["surface"], radius=dp(18) if is_mobile else dp(26))
+        if is_mobile:
+            try:
+                appbar._card_shadow_color.a = 0.10
+                appbar._card_shine_color.a = 0.012
+                appbar._card_border_color.a = 0.20
+            except Exception:
+                pass
 
         brand_wrap = BoxLayout(orientation="vertical", spacing=dp(4), size_hint_y=None, size_hint_x=1)
         brand_wrap.bind(minimum_height=brand_wrap.setter("height"))
@@ -6538,7 +6545,7 @@ class FormAlchemistApp(MDApp):
 
             self.btn_sidebar_toggle = self._make_compact_action_button("Menu", tone="ghost")
             self.btn_sidebar_toggle.size_hint = (None, None)
-            self.btn_sidebar_toggle.size = (dp(84), dp(34))
+            self.btn_sidebar_toggle.size = (dp(76), dp(32))
             appbar.add_widget(self.btn_sidebar_toggle)
 
             stage_column = BoxLayout(
@@ -6584,22 +6591,51 @@ class FormAlchemistApp(MDApp):
             self.preview_shell.bind(size=self._on_preview_viewport_change, pos=self._on_preview_viewport_change)
             self.preview.bind(size=self._sync_preview_stack_size)
             self.preview_info = Label(
-                text=("No form loaded yet. Quick start: Open PDF Form → Load Data File → Choose record and page → Find Fields → Save links." if is_mobile else "No form loaded yet. Quick start: Open PDF Form → Load Data File or Google Sheet → Choose a record and page → Find Fields → Save links."),
-                color=palette["muted"],
+                text=self._preview_idle_status_text(),
+                color=palette["text"],
                 size_hint_y=None,
-                height=(dp(18) if is_mobile else dp(18)),
+                height=dp(24),
                 halign="left",
                 valign="middle",
-                font_size=(dp(8.8) if is_mobile else dp(10)),
-                opacity=(0.92 if is_mobile else 1),
+                font_size=dp(9.3),
+                opacity=0.96,
+                padding=(dp(10), 0),
             )
             self.preview_info.bind(size=self._sync_label_text_size)
+            style_card(self.preview_info, palette["chip"], radius=dp(13))
+            try:
+                self.preview_info._card_shadow_color.a = 0.06
+                self.preview_info._card_shine_color.a = 0.010
+                self.preview_info._card_border_color.a = 0.16
+            except Exception:
+                pass
             preview_stack.add_widget(self.preview_info)
             self.preview_empty_hint = self._make_preview_empty_hint(palette, is_mobile=True)
+            try:
+                self.preview_empty_hint._popup_shadow_color.a = 0.12
+                self.preview_empty_hint._popup_glow_color.a = 0.015
+                self.preview_empty_hint._popup_nebula_color.a = 0.050
+                self.preview_empty_hint._popup_shine_color.a = 0.024
+                self.preview_empty_hint._popup_border_color.a = 0.20
+            except Exception:
+                pass
             preview_stack.add_widget(self.preview_empty_hint)
             preview_stack.add_widget(self.preview)
             preview_wrap.add_widget(preview_stack)
             preview_stage.add_widget(preview_wrap)
+            self.preview_canvas_hint = Label(
+                text="PDF preview appears here\nOpen a form to begin",
+                color=palette["muted"],
+                size_hint=(1, None),
+                height=dp(44),
+                halign="center",
+                valign="middle",
+                font_size=dp(10.2),
+                opacity=0.20,
+                pos_hint={"center_x": 0.5, "center_y": 0.38},
+            )
+            self.preview_canvas_hint.bind(size=self._sync_label_text_size)
+            preview_stage.add_widget(self.preview_canvas_hint)
 
             self.preview_hud = _make_preview_hud()
             self.preview_hud.size_hint = (None, None)
@@ -6714,8 +6750,8 @@ class FormAlchemistApp(MDApp):
             self.btn_mobile_more.bind(on_release=self._toggle_mobile_inspect_panel)
             self.btn_mobile_tools_fab = self._make_compact_action_button("Tools", tone="primary")
             self.btn_mobile_tools_fab.size_hint = (None, None)
-            self.btn_mobile_tools_fab.size = (dp(88), dp(48))
-            self.btn_mobile_tools_fab.pos = (Window.width - dp(86), dp(12))
+            self.btn_mobile_tools_fab.size = (dp(82), dp(44))
+            self.btn_mobile_tools_fab.pos = (Window.width - dp(94), dp(16))
             self.btn_mobile_tools_fab.bind(on_release=self._toggle_mobile_tools_tray)
             self.page_input = self.page_input_mobile
             self.btn_mobile_prev.text = "Prev"
@@ -6921,9 +6957,15 @@ class FormAlchemistApp(MDApp):
             preview_wrap.bind(size=self._on_preview_viewport_change, pos=self._on_preview_viewport_change)
             self.preview_shell.bind(size=self._on_preview_viewport_change, pos=self._on_preview_viewport_change)
             self.preview.bind(size=self._sync_preview_stack_size)
-            self.preview_info = Label(text="No form loaded yet. Quick start: Open PDF Form → Load Data File or Google Sheet → Choose a record and page → Find Fields → Save links.", color=palette["text"], size_hint_y=None, height=dp(32), halign="left", valign="middle", font_size=dp(11))
+            self.preview_info = Label(text=self._preview_idle_status_text(), color=palette["text"], size_hint_y=None, height=dp(32), halign="left", valign="middle", font_size=dp(11), padding=(dp(12), 0))
             self.preview_info.bind(size=self._sync_label_text_size)
             style_card(self.preview_info, palette["chip"], radius=dp(16))
+            try:
+                self.preview_info._card_shadow_color.a = 0.09
+                self.preview_info._card_shine_color.a = 0.014
+                self.preview_info._card_border_color.a = 0.22
+            except Exception:
+                pass
             preview_stack.add_widget(self.preview_info)
             self.preview_empty_hint = self._make_preview_empty_hint(palette, is_mobile=False)
             preview_stack.add_widget(self.preview_empty_hint)
@@ -7007,7 +7049,7 @@ class FormAlchemistApp(MDApp):
         self._style_popup_card(card, palette.get("surface_alt", (0.11, 0.135, 0.185, 1)), radius=dp(18 if is_mobile else 20))
 
         title = Label(
-            text="Welcome to the preview area",
+            text=("Welcome" if is_mobile else "Welcome to the preview area"),
             color=palette.get("text", (0.93, 0.96, 1.0, 1)),
             size_hint_y=None,
             height=dp(24),
@@ -7019,46 +7061,85 @@ class FormAlchemistApp(MDApp):
         title.bind(size=self._sync_label_text_size)
         self._bind_auto_height_label(title, min_height=dp(24), extra_pad=dp(4))
 
-        body = Label(
+        subtitle = Label(
             text=(
-                "Your loaded PDF form will appear below this guide.\n\n"
+                "Open a PDF form to begin preview, field detection, and mapping."
+                if is_mobile else
+                "Open a PDF form to begin preview, field detection, mapping, and export."
+            ),
+            color=palette.get("muted", (0.60, 0.68, 0.80, 1)),
+            size_hint_y=None,
+            height=dp(34 if is_mobile else 28),
+            halign="left",
+            valign="middle",
+            font_size=dp(10.4 if is_mobile else 11.2),
+        )
+        subtitle.bind(size=self._sync_label_text_size)
+        self._bind_auto_height_label(subtitle, min_height=dp(28 if is_mobile else 24), extra_pad=dp(4))
+
+        steps = Label(
+            text=(
                 "Quick start:\n"
                 "1. Open PDF Form\n"
                 "2. Load Data File or Google Sheet\n"
                 "3. Choose a record and page\n"
                 "4. Tap Find Fields\n"
-                "5. Tap a box, then save the link"
+                "5. Tap a box to link it"
             ),
-            color=palette.get("muted", (0.60, 0.68, 0.80, 1)),
+            color=palette.get("text", (0.93, 0.96, 1.0, 1)),
             size_hint_y=None,
-            height=dp(112 if is_mobile else 106),
+            height=dp(102 if is_mobile else 98),
             halign="left",
             valign="top",
-            font_size=dp(10.8 if is_mobile else 11.5),
+            font_size=dp(10.4 if is_mobile else 11.2),
         )
-        body.bind(size=self._sync_label_text_size)
-        self._bind_auto_height_label(body, min_height=dp(102 if is_mobile else 96), extra_pad=dp(8))
+        steps.bind(size=self._sync_label_text_size)
+        self._bind_auto_height_label(steps, min_height=dp(92 if is_mobile else 88), extra_pad=dp(8))
 
+        border = palette.get("border", (0.205, 0.275, 0.455, 0.54))
+        tip_chip = BoxLayout(
+            orientation="horizontal",
+            padding=[dp(10), dp(6), dp(10), dp(6)],
+            size_hint_y=None,
+            height=dp(34 if is_mobile else 32),
+        )
+        self._style_popup_card(
+            tip_chip,
+            palette.get("chip", (0.055, 0.080, 0.152, 0.992)),
+            radius=dp(14),
+            border_color=(border[0], border[1], border[2], 0.18),
+        )
+        try:
+            tip_chip._popup_shadow_color.a = 0.08
+            tip_chip._popup_glow_color.a = 0.010
+            tip_chip._popup_nebula_color.a = 0.030
+            tip_chip._popup_shine_color.a = 0.018
+        except Exception:
+            pass
         tip = Label(
             text=(
-                "Tip: page 0 means the first page." if is_mobile else
-                "Tip: page 0 means the first page, and double-tap a box to jump into linking."
+                "Tip: page 0 is the first page." if is_mobile else
+                "Tip: page 0 is the first page, and double-tap a box to jump into linking."
             ),
             color=palette.get("accent", (0.96, 0.71, 0.30, 1)),
-            size_hint_y=None,
-            height=dp(18),
             halign="left",
             valign="middle",
-            font_size=dp(10.2 if is_mobile else 10.8),
+            font_size=dp(10.0 if is_mobile else 10.6),
         )
         tip.bind(size=self._sync_label_text_size)
-        self._bind_auto_height_label(tip, min_height=dp(18), extra_pad=dp(4))
+        tip_chip.add_widget(tip)
 
         card.add_widget(title)
-        card.add_widget(body)
-        card.add_widget(tip)
-        card._expanded_height = max(card.height, dp(170 if is_mobile else 162))
+        card.add_widget(subtitle)
+        card.add_widget(steps)
+        card.add_widget(tip_chip)
+        card._expanded_height = max(card.height, dp(182 if is_mobile else 174))
         return card
+
+    def _preview_idle_status_text(self):
+        if bool(getattr(self, "ui_mobile", False)):
+            return "No form loaded • Open PDF Form to begin"
+        return "No form loaded • Open PDF Form, then load data and run Find Fields"
 
     def _refresh_preview_empty_hint(self, *_):
         hint = getattr(self, "preview_empty_hint", None)
@@ -7075,8 +7156,12 @@ class FormAlchemistApp(MDApp):
             hint.opacity = 0
             hint.disabled = True
             hint.height = 0
+        canvas_hint = getattr(self, "preview_canvas_hint", None)
+        if canvas_hint is not None:
+            canvas_hint.opacity = 0.20 if show else 0
+            canvas_hint.disabled = not show
         if show and getattr(self, "preview_info", None) is not None:
-            self.preview_info.text = "No form loaded yet. Quick start: Open PDF Form → Load Data File or Google Sheet → Choose a record and page → Find Fields → Save links."
+            self.preview_info.text = self._preview_idle_status_text()
 
     def _build_startup_presplash(self):
         # Route B startup: disable the in-app splash completely so the app never falls back
@@ -8798,7 +8883,7 @@ class FormAlchemistApp(MDApp):
         tray_open = bool(getattr(self, "mobile_tools_tray_open", False))
         if fab is not None:
             try:
-                fab.pos = (max(dp(8), Window.width - fab.width - dp(12)), dp(12))
+                fab.pos = (max(dp(8), Window.width - fab.width - dp(12)), dp(16))
             except Exception:
                 pass
         if panel is not None:
