@@ -61,22 +61,6 @@ class RectCompat:
     __slots__ = ("x0", "y0", "x1", "y1")
 
     def __init__(self, x0=0.0, y0=0.0, x1=0.0, y1=0.0):
-        if y0 == 0.0 and x1 == 0.0 and y1 == 0.0:
-            if hasattr(x0, "x0") and hasattr(x0, "y0") and hasattr(x0, "x1") and hasattr(x0, "y1"):
-                y0 = getattr(x0, "y0")
-                x1 = getattr(x0, "x1")
-                y1 = getattr(x0, "y1")
-                x0 = getattr(x0, "x0")
-            elif isinstance(x0, (list, tuple)) and len(x0) >= 4:
-                x0, y0, x1, y1 = x0[:4]
-            else:
-                try:
-                    vals = list(x0)
-                    if len(vals) >= 4:
-                        x0, y0, x1, y1 = vals[:4]
-                except Exception:
-                    pass
-
         self.x0 = float(x0)
         self.y0 = float(y0)
         self.x1 = float(x1)
@@ -4785,9 +4769,6 @@ class InteractivePreview(Image):
         self._tap_slop = float(dp(18))
         self._pinch_active = False
         self._pinch_last_midpoint = None
-        self.minimal_guides = True
-        self.show_all_box_labels = False
-        self.show_hover_guides = True
         self.bind(texture=self._redraw_overlay, size=self._redraw_overlay, pos=self._redraw_overlay)
         if platform != "android":
             Window.bind(mouse_pos=self._on_mouse_pos)
@@ -4850,59 +4831,41 @@ class InteractivePreview(Image):
         y = self.y + (widget_h - draw_h) / 2.0
         return x, y, draw_w, draw_h
 
-    def _box_color(self, box_type, selected=False, hovered=False, mapped=False, alpha_override=None):
+    def _base_box_color(self, box_type):
+        if box_type == "check":
+            return (1.0, 0.15, 0.15, 1.0)
+        if box_type == "line":
+            return (1.0, 0.85, 0.1, 1.0)
+        return (0.1, 1.0, 0.3, 1.0)
+
+    def _mapped_box_color(self, box_type):
+        r, g, b, _ = self._base_box_color(box_type)
+        mix = 0.22
+        return (
+            r + (1.0 - r) * mix,
+            g + (1.0 - g) * mix,
+            b + (1.0 - b) * mix,
+            0.96,
+        )
+
+    def _box_color(self, box_type, selected=False, hovered=False, mapped=False):
         if selected:
-            color = (0.18, 0.84, 1.0, 0.98)
-        elif hovered:
-            color = (1.0, 0.68, 0.12, 0.96)
-        elif mapped:
-            if box_type == "check":
-                color = (1.0, 0.42, 0.42, 0.58)
-            elif box_type == "line":
-                color = (1.0, 0.88, 0.36, 0.56)
-            else:
-                color = (0.32, 1.0, 0.56, 0.54)
-        else:
-            if box_type == "check":
-                color = (1.0, 0.34, 0.34, 0.38)
-            elif box_type == "line":
-                color = (1.0, 0.88, 0.34, 0.36)
-            else:
-                color = (0.36, 1.0, 0.54, 0.34)
-        if alpha_override is not None:
-            color = (color[0], color[1], color[2], float(alpha_override))
-        return color
+            return (0.15, 0.85, 1.0, 1.0)
+        if hovered:
+            return (1.0, 0.6, 0.0, 1.0)
+        if mapped:
+            return self._mapped_box_color(box_type)
+        return self._base_box_color(box_type)
 
     def _box_fill_color(self, box_type, selected=False, hovered=False, mapped=False):
         if selected:
-            return (0.16, 0.84, 1.0, 0.12)
+            return (0.15, 0.85, 1.0, 0.12)
         if hovered:
-            return (1.0, 0.68, 0.12, 0.09)
-        if mapped:
-            if box_type == "check":
-                return (1.0, 0.42, 0.42, 0.045)
-            if box_type == "line":
-                return (1.0, 0.88, 0.36, 0.042)
-            return (0.32, 1.0, 0.56, 0.04)
-        return (1.0, 1.0, 1.0, 0.0)
-
-    def _box_stroke_width(self, selected=False, hovered=False, mapped=False):
-        if selected:
-            return 2.9
-        if hovered:
-            return 2.0
-        if mapped:
-            return 1.2
-        return 0.9
-
-    def _box_should_show_label(self, selected=False, hovered=False):
-        if bool(getattr(self, "show_all_box_labels", False)):
-            return True
-        if selected:
-            return True
-        if hovered and bool(getattr(self, "show_hover_guides", True)):
-            return True
-        return False
+            return (1.0, 0.6, 0.0, 0.08)
+        if not mapped:
+            return (0.0, 0.0, 0.0, 0.0)
+        r, g, b, _ = self._mapped_box_color(box_type)
+        return (r, g, b, 0.05)
 
     def _draw_label(self, x, y, text, anchor="top_left"):
         core = CoreLabel(text=str(text), font_size=11)
@@ -5053,56 +5016,25 @@ class InteractivePreview(Image):
         tex = self.texture
         sx = dw / float(max(tex.width, 1))
         sy = dh / float(max(tex.height, 1))
-        minimal = bool(getattr(self, "minimal_guides", True))
         with self.canvas.after:
-            ordered = []
-            selected_items = []
-            hovered_items = []
             for box in self.boxes_payload:
-                box_id = box.get("id")
-                is_selected = box_id in self.selected_ids
-                is_hovered = (box_id == self.hovered_box_id)
-                if is_selected:
-                    selected_items.append(box)
-                elif is_hovered:
-                    hovered_items.append(box)
-                else:
-                    ordered.append(box)
-            ordered.extend(hovered_items)
-            ordered.extend(selected_items)
-
-            for box in ordered:
                 bx, by, bw, bh = self._resolve_box_image_rect(box)
                 x = dx + bx * sx
                 y = dy + (tex.height - (by + bh)) * sy
                 w = max(1.0, bw * sx)
                 h = max(1.0, bh * sy)
-                box_id = box.get("id")
-                selected = box_id in self.selected_ids
-                hovered = (box_id == self.hovered_box_id)
-                mapping_text = str(box.get("mapping", "") or "").strip()
-                mapped = bool(mapping_text and mapping_text.lower() != "unmapped")
-                box_type = box.get("t", "field")
-
-                fill = self._box_fill_color(box_type, selected=selected, hovered=hovered, mapped=mapped)
+                selected = box["id"] in self.selected_ids
+                hovered = (box["id"] == self.hovered_box_id)
+                mapping_text = str(box.get("mapping") or "").strip()
+                mapped = bool(mapping_text and mapping_text not in {"EMPTY", "Unmapped"})
+                fill = self._box_fill_color(box.get("t", "field"), selected=selected, hovered=hovered, mapped=mapped)
                 if fill[3] > 0:
                     Color(*fill)
                     Rectangle(pos=(x, y), size=(w, h))
-
-                Color(*self._box_color(box_type, selected=selected, hovered=hovered, mapped=mapped))
-                Line(rectangle=(x, y, w, h), width=self._box_stroke_width(selected=selected, hovered=hovered, mapped=mapped))
-
-                if selected:
-                    Color(0.18, 0.84, 1.0, 0.22)
-                    Line(rectangle=(x - 1.0, y - 1.0, w + 2.0, h + 2.0), width=1.0)
-                elif hovered and minimal:
-                    Color(1.0, 0.68, 0.12, 0.18)
-                    Line(rectangle=(x - 0.8, y - 0.8, w + 1.6, h + 1.6), width=0.9)
-
-                if self._box_should_show_label(selected=selected, hovered=hovered):
-                    bg_alpha = 0.92 if selected else 0.84
-                    Color(0.02, 0.03, 0.05, bg_alpha)
-                    self._draw_label(x, y + h, box_id, anchor=self._label_anchor_for_box(box, x, y, w, h, disp))
+                Color(*self._box_color(box.get("t", "field"), selected=selected, hovered=hovered, mapped=mapped))
+                Line(rectangle=(x, y, w, h), width=3.2 if selected else (2.4 if hovered else (1.6 if mapped else 1.35)))
+                Color(0, 0, 0, 0.88)
+                self._draw_label(x, y + h, box["id"], anchor=self._label_anchor_for_box(box, x, y, w, h, disp))
 
     def _touch_to_image_point(self, touch):
         disp = self._get_display_rect()
@@ -6694,8 +6626,6 @@ class FormAlchemistApp(MDApp):
             )
             self.preview_info.bind(size=self._sync_label_text_size)
             preview_stack.add_widget(self.preview_info)
-            self.preview_info_hidden = True
-            Clock.schedule_once(self._collapse_preview_info_banner, 0)
             self.preview_empty_hint = self._make_preview_empty_hint(palette, is_mobile=True)
             preview_stack.add_widget(self.preview_empty_hint)
             preview_stack.add_widget(self.preview)
@@ -7026,8 +6956,6 @@ class FormAlchemistApp(MDApp):
             self.preview_info.bind(size=self._sync_label_text_size)
             style_card(self.preview_info, palette["chip"], radius=dp(16))
             preview_stack.add_widget(self.preview_info)
-            self.preview_info_hidden = True
-            Clock.schedule_once(self._collapse_preview_info_banner, 0)
             self.preview_empty_hint = self._make_preview_empty_hint(palette, is_mobile=False)
             preview_stack.add_widget(self.preview_empty_hint)
             preview_stack.add_widget(self.preview)
@@ -7179,48 +7107,7 @@ class FormAlchemistApp(MDApp):
             hint.disabled = True
             hint.height = 0
         if show and getattr(self, "preview_info", None) is not None:
-            self._set_preview_info_message("No form loaded yet. Quick start: Open PDF Form → Load Data File or Google Sheet → Choose a record and page → Find Fields → Save links.")
-
-    def _collapse_preview_info_banner(self, *_):
-        info = getattr(self, "preview_info", None)
-        if info is None:
-            return
-        try:
-            info.text = ""
-        except Exception:
-            pass
-        try:
-            info.opacity = 0
-        except Exception:
-            pass
-        try:
-            info.disabled = True
-        except Exception:
-            pass
-        try:
-            info.height = 0
-        except Exception:
-            pass
-        try:
-            info.size_hint_y = None
-        except Exception:
-            pass
-
-    def _set_preview_info_message(self, text=""):
-        info = getattr(self, "preview_info", None)
-        if info is None:
-            return
-        if bool(getattr(self, "preview_info_hidden", True)):
-            self._collapse_preview_info_banner()
-            return
-        try:
-            info.disabled = False
-            info.opacity = 1
-            info.text = str(text or "")
-            if float(getattr(info, "height", 0) or 0) <= 0:
-                info.height = dp(18 if getattr(self, "ui_mobile", False) else 32)
-        except Exception:
-            pass
+            self.preview_info.text = "No form loaded yet. Quick start: Open PDF Form → Load Data File or Google Sheet → Choose a record and page → Find Fields → Save links."
 
     def _build_startup_presplash(self):
         # Route B startup: disable the in-app splash completely so the app never falls back
@@ -8899,9 +8786,9 @@ class FormAlchemistApp(MDApp):
         if not ids:
             if getattr(self, "ui_mobile", False):
                 mode_txt = "Select ON" if bool(getattr(self, "mobile_select_mode", False)) else "Select OFF"
-                self._set_preview_info_message(f"Preview ready. {mode_txt} • Tap to inspect • Double-tap to link.")
+                self.preview_info.text = f"Preview ready. {mode_txt} • Tap to inspect • Double-tap to link."
             else:
-                self._set_preview_info_message("Preview ready. Tap to inspect • Double-tap a box to link it.")
+                self.preview_info.text = "Preview ready. Tap to inspect • Double-tap a box to link it."
             self._update_selection_inspector()
             self._update_bottom_statusbar()
             return
@@ -8909,7 +8796,7 @@ class FormAlchemistApp(MDApp):
         first = ids[0]
         box_type = self.engine.box_types[first] if first < len(self.engine.box_types) else "field"
         mapping = self.engine.describe_box_mapping(first, self.current_page_idx())
-        self._set_preview_info_message(f"Selected: {ids} • {mapping}")
+        self.preview_info.text = f"Selected: {ids} • {mapping}"
         self._update_selection_inspector()
         self._update_bottom_statusbar()
         try:
@@ -9141,9 +9028,9 @@ class FormAlchemistApp(MDApp):
         if sel_ids:
             first = sel_ids[0]
             sel_mapping = self.engine.describe_box_mapping(first, self.current_page_idx())
-            self._set_preview_info_message(f"Selected: {sel_ids} • {sel_mapping}")
+            self.preview_info.text = f"Selected: {sel_ids} • {sel_mapping}"
         else:
-            self._set_preview_info_message(hover_text)
+            self.preview_info.text = hover_text
         if hasattr(self, "desktop_status_detail_lbl") and self.desktop_status_detail_lbl is not None:
             self.desktop_status_detail_lbl.text = f"{verb} • Box {hit['id']} • {mapping}"
         if hasattr(self, "inspector_hover_lbl") and self.inspector_hover_lbl is not None:
@@ -10641,9 +10528,9 @@ class FormAlchemistApp(MDApp):
             Clock.schedule_once(lambda dt, open_state=sidebar_open: self._set_mobile_sidebar_state(open_state), 0)
         try:
             if getattr(self.engine, "pdf_path", ""):
-                self._set_preview_info_message("Config loaded. Preview restored for the active page.")
+                self.preview_info.text = "Config loaded. Preview restored for the active page."
             else:
-                self._set_preview_info_message("Config loaded. Preview state restored. Load the saved PDF to resume preview on the active page.")
+                self.preview_info.text = "Config loaded. Preview state restored. Load the saved PDF to resume preview on the active page."
         except Exception:
             pass
 
