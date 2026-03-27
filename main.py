@@ -61,6 +61,33 @@ class RectCompat:
     __slots__ = ("x0", "y0", "x1", "y1")
 
     def __init__(self, x0=0.0, y0=0.0, x1=0.0, y1=0.0):
+        rect_like = None
+
+        if hasattr(x0, "x0") and hasattr(x0, "y0") and hasattr(x0, "x1") and hasattr(x0, "y1"):
+            rect_like = x0
+        elif isinstance(x0, (list, tuple)) and len(x0) >= 4:
+            rect_like = x0[:4]
+        elif not isinstance(x0, (str, bytes)):
+            try:
+                vals = list(x0)
+                if len(vals) >= 4:
+                    rect_like = vals[:4]
+            except Exception:
+                rect_like = None
+
+        if rect_like is not None:
+            if hasattr(rect_like, "x0"):
+                self.x0 = float(getattr(rect_like, "x0"))
+                self.y0 = float(getattr(rect_like, "y0"))
+                self.x1 = float(getattr(rect_like, "x1"))
+                self.y1 = float(getattr(rect_like, "y1"))
+            else:
+                self.x0 = float(rect_like[0])
+                self.y0 = float(rect_like[1])
+                self.x1 = float(rect_like[2])
+                self.y1 = float(rect_like[3])
+            return
+
         self.x0 = float(x0)
         self.y0 = float(y0)
         self.x1 = float(x1)
@@ -4831,41 +4858,16 @@ class InteractivePreview(Image):
         y = self.y + (widget_h - draw_h) / 2.0
         return x, y, draw_w, draw_h
 
-    def _base_box_color(self, box_type):
+    def _box_color(self, box_type, selected=False, hovered=False):
+        if selected:
+            return (0.15, 0.85, 1.0, 1.0)
+        if hovered:
+            return (1.0, 0.6, 0.0, 1.0)
         if box_type == "check":
             return (1.0, 0.15, 0.15, 1.0)
         if box_type == "line":
             return (1.0, 0.85, 0.1, 1.0)
         return (0.1, 1.0, 0.3, 1.0)
-
-    def _mapped_box_color(self, box_type):
-        r, g, b, _ = self._base_box_color(box_type)
-        mix = 0.22
-        return (
-            r + (1.0 - r) * mix,
-            g + (1.0 - g) * mix,
-            b + (1.0 - b) * mix,
-            0.96,
-        )
-
-    def _box_color(self, box_type, selected=False, hovered=False, mapped=False):
-        if selected:
-            return (0.15, 0.85, 1.0, 1.0)
-        if hovered:
-            return (1.0, 0.6, 0.0, 1.0)
-        if mapped:
-            return self._mapped_box_color(box_type)
-        return self._base_box_color(box_type)
-
-    def _box_fill_color(self, box_type, selected=False, hovered=False, mapped=False):
-        if selected:
-            return (0.15, 0.85, 1.0, 0.12)
-        if hovered:
-            return (1.0, 0.6, 0.0, 0.08)
-        if not mapped:
-            return (0.0, 0.0, 0.0, 0.0)
-        r, g, b, _ = self._mapped_box_color(box_type)
-        return (r, g, b, 0.05)
 
     def _draw_label(self, x, y, text, anchor="top_left"):
         core = CoreLabel(text=str(text), font_size=11)
@@ -5025,14 +5027,8 @@ class InteractivePreview(Image):
                 h = max(1.0, bh * sy)
                 selected = box["id"] in self.selected_ids
                 hovered = (box["id"] == self.hovered_box_id)
-                mapping_text = str(box.get("mapping") or "").strip()
-                mapped = bool(mapping_text and mapping_text not in {"EMPTY", "Unmapped"})
-                fill = self._box_fill_color(box.get("t", "field"), selected=selected, hovered=hovered, mapped=mapped)
-                if fill[3] > 0:
-                    Color(*fill)
-                    Rectangle(pos=(x, y), size=(w, h))
-                Color(*self._box_color(box.get("t", "field"), selected=selected, hovered=hovered, mapped=mapped))
-                Line(rectangle=(x, y, w, h), width=3.2 if selected else (2.4 if hovered else (1.6 if mapped else 1.35)))
+                Color(*self._box_color(box.get("t", "field"), selected=selected, hovered=hovered))
+                Line(rectangle=(x, y, w, h), width=3.2 if selected else (2.4 if hovered else 1.35))
                 Color(0, 0, 0, 0.88)
                 self._draw_label(x, y + h, box["id"], anchor=self._label_anchor_for_box(box, x, y, w, h, disp))
 
