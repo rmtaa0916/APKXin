@@ -5951,17 +5951,10 @@ class FormAlchemistApp(MDApp):
             orientation="horizontal",
             spacing=dp(6) if is_mobile else dp(14),
             size_hint_y=None,
-            height=dp(40) if is_mobile else dp(88),
-            padding=[dp(8), dp(3), dp(8), dp(3)],
+            height=dp(44) if is_mobile else dp(88),
+            padding=[dp(8), dp(4), dp(8), dp(4)],
         )
         style_card(appbar, palette["surface"], radius=dp(18) if is_mobile else dp(26))
-        if is_mobile:
-            try:
-                appbar._card_shadow_color.a = 0.10
-                appbar._card_shine_color.a = 0.012
-                appbar._card_border_color.a = 0.20
-            except Exception:
-                pass
 
         brand_wrap = BoxLayout(orientation="vertical", spacing=dp(4), size_hint_y=None, size_hint_x=1)
         brand_wrap.bind(minimum_height=brand_wrap.setter("height"))
@@ -6545,7 +6538,7 @@ class FormAlchemistApp(MDApp):
 
             self.btn_sidebar_toggle = self._make_compact_action_button("Menu", tone="ghost")
             self.btn_sidebar_toggle.size_hint = (None, None)
-            self.btn_sidebar_toggle.size = (dp(76), dp(32))
+            self.btn_sidebar_toggle.size = (dp(84), dp(34))
             appbar.add_widget(self.btn_sidebar_toggle)
 
             stage_column = BoxLayout(
@@ -6591,51 +6584,22 @@ class FormAlchemistApp(MDApp):
             self.preview_shell.bind(size=self._on_preview_viewport_change, pos=self._on_preview_viewport_change)
             self.preview.bind(size=self._sync_preview_stack_size)
             self.preview_info = Label(
-                text=self._preview_idle_status_text(),
-                color=palette["text"],
+                text=("No form loaded yet. Quick start: Open PDF Form → Load Data File → Choose record and page → Find Fields → Save links." if is_mobile else "No form loaded yet. Quick start: Open PDF Form → Load Data File or Google Sheet → Choose a record and page → Find Fields → Save links."),
+                color=palette["muted"],
                 size_hint_y=None,
-                height=dp(24),
+                height=(dp(18) if is_mobile else dp(18)),
                 halign="left",
                 valign="middle",
-                font_size=dp(9.3),
-                opacity=0.96,
-                padding=(dp(10), 0),
+                font_size=(dp(8.8) if is_mobile else dp(10)),
+                opacity=(0.92 if is_mobile else 1),
             )
             self.preview_info.bind(size=self._sync_label_text_size)
-            style_card(self.preview_info, palette["chip"], radius=dp(13))
-            try:
-                self.preview_info._card_shadow_color.a = 0.06
-                self.preview_info._card_shine_color.a = 0.010
-                self.preview_info._card_border_color.a = 0.16
-            except Exception:
-                pass
             preview_stack.add_widget(self.preview_info)
             self.preview_empty_hint = self._make_preview_empty_hint(palette, is_mobile=True)
-            try:
-                self.preview_empty_hint._popup_shadow_color.a = 0.12
-                self.preview_empty_hint._popup_glow_color.a = 0.015
-                self.preview_empty_hint._popup_nebula_color.a = 0.050
-                self.preview_empty_hint._popup_shine_color.a = 0.024
-                self.preview_empty_hint._popup_border_color.a = 0.20
-            except Exception:
-                pass
             preview_stack.add_widget(self.preview_empty_hint)
             preview_stack.add_widget(self.preview)
             preview_wrap.add_widget(preview_stack)
             preview_stage.add_widget(preview_wrap)
-            self.preview_canvas_hint = Label(
-                text="PDF preview appears here\nOpen a form to begin",
-                color=palette["muted"],
-                size_hint=(1, None),
-                height=dp(44),
-                halign="center",
-                valign="middle",
-                font_size=dp(10.2),
-                opacity=0.20,
-                pos_hint={"center_x": 0.5, "center_y": 0.38},
-            )
-            self.preview_canvas_hint.bind(size=self._sync_label_text_size)
-            preview_stage.add_widget(self.preview_canvas_hint)
 
             self.preview_hud = _make_preview_hud()
             self.preview_hud.size_hint = (None, None)
@@ -6750,8 +6714,8 @@ class FormAlchemistApp(MDApp):
             self.btn_mobile_more.bind(on_release=self._toggle_mobile_inspect_panel)
             self.btn_mobile_tools_fab = self._make_compact_action_button("Tools", tone="primary")
             self.btn_mobile_tools_fab.size_hint = (None, None)
-            self.btn_mobile_tools_fab.size = (dp(82), dp(44))
-            self.btn_mobile_tools_fab.pos = (Window.width - dp(94), dp(16))
+            self.btn_mobile_tools_fab.size = (dp(88), dp(48))
+            self.btn_mobile_tools_fab.pos = (Window.width - dp(86), dp(12))
             self.btn_mobile_tools_fab.bind(on_release=self._toggle_mobile_tools_tray)
             self.page_input = self.page_input_mobile
             self.btn_mobile_prev.text = "Prev"
@@ -6957,15 +6921,9 @@ class FormAlchemistApp(MDApp):
             preview_wrap.bind(size=self._on_preview_viewport_change, pos=self._on_preview_viewport_change)
             self.preview_shell.bind(size=self._on_preview_viewport_change, pos=self._on_preview_viewport_change)
             self.preview.bind(size=self._sync_preview_stack_size)
-            self.preview_info = Label(text=self._preview_idle_status_text(), color=palette["text"], size_hint_y=None, height=dp(32), halign="left", valign="middle", font_size=dp(11), padding=(dp(12), 0))
+            self.preview_info = Label(text="No form loaded yet. Quick start: Open PDF Form → Load Data File or Google Sheet → Choose a record and page → Find Fields → Save links.", color=palette["text"], size_hint_y=None, height=dp(32), halign="left", valign="middle", font_size=dp(11))
             self.preview_info.bind(size=self._sync_label_text_size)
             style_card(self.preview_info, palette["chip"], radius=dp(16))
-            try:
-                self.preview_info._card_shadow_color.a = 0.09
-                self.preview_info._card_shine_color.a = 0.014
-                self.preview_info._card_border_color.a = 0.22
-            except Exception:
-                pass
             preview_stack.add_widget(self.preview_info)
             self.preview_empty_hint = self._make_preview_empty_hint(palette, is_mobile=False)
             preview_stack.add_widget(self.preview_empty_hint)
@@ -7049,7 +7007,7 @@ class FormAlchemistApp(MDApp):
         self._style_popup_card(card, palette.get("surface_alt", (0.11, 0.135, 0.185, 1)), radius=dp(18 if is_mobile else 20))
 
         title = Label(
-            text=("Welcome" if is_mobile else "Welcome to the preview area"),
+            text="Welcome to the preview area",
             color=palette.get("text", (0.93, 0.96, 1.0, 1)),
             size_hint_y=None,
             height=dp(24),
@@ -7061,85 +7019,46 @@ class FormAlchemistApp(MDApp):
         title.bind(size=self._sync_label_text_size)
         self._bind_auto_height_label(title, min_height=dp(24), extra_pad=dp(4))
 
-        subtitle = Label(
+        body = Label(
             text=(
-                "Open a PDF form to begin preview, field detection, and mapping."
-                if is_mobile else
-                "Open a PDF form to begin preview, field detection, mapping, and export."
-            ),
-            color=palette.get("muted", (0.60, 0.68, 0.80, 1)),
-            size_hint_y=None,
-            height=dp(34 if is_mobile else 28),
-            halign="left",
-            valign="middle",
-            font_size=dp(10.4 if is_mobile else 11.2),
-        )
-        subtitle.bind(size=self._sync_label_text_size)
-        self._bind_auto_height_label(subtitle, min_height=dp(28 if is_mobile else 24), extra_pad=dp(4))
-
-        steps = Label(
-            text=(
+                "Your loaded PDF form will appear below this guide.\n\n"
                 "Quick start:\n"
                 "1. Open PDF Form\n"
                 "2. Load Data File or Google Sheet\n"
                 "3. Choose a record and page\n"
                 "4. Tap Find Fields\n"
-                "5. Tap a box to link it"
+                "5. Tap a box, then save the link"
             ),
-            color=palette.get("text", (0.93, 0.96, 1.0, 1)),
+            color=palette.get("muted", (0.60, 0.68, 0.80, 1)),
             size_hint_y=None,
-            height=dp(102 if is_mobile else 98),
+            height=dp(112 if is_mobile else 106),
             halign="left",
             valign="top",
-            font_size=dp(10.4 if is_mobile else 11.2),
+            font_size=dp(10.8 if is_mobile else 11.5),
         )
-        steps.bind(size=self._sync_label_text_size)
-        self._bind_auto_height_label(steps, min_height=dp(92 if is_mobile else 88), extra_pad=dp(8))
+        body.bind(size=self._sync_label_text_size)
+        self._bind_auto_height_label(body, min_height=dp(102 if is_mobile else 96), extra_pad=dp(8))
 
-        border = palette.get("border", (0.205, 0.275, 0.455, 0.54))
-        tip_chip = BoxLayout(
-            orientation="horizontal",
-            padding=[dp(10), dp(6), dp(10), dp(6)],
-            size_hint_y=None,
-            height=dp(34 if is_mobile else 32),
-        )
-        self._style_popup_card(
-            tip_chip,
-            palette.get("chip", (0.055, 0.080, 0.152, 0.992)),
-            radius=dp(14),
-            border_color=(border[0], border[1], border[2], 0.18),
-        )
-        try:
-            tip_chip._popup_shadow_color.a = 0.08
-            tip_chip._popup_glow_color.a = 0.010
-            tip_chip._popup_nebula_color.a = 0.030
-            tip_chip._popup_shine_color.a = 0.018
-        except Exception:
-            pass
         tip = Label(
             text=(
-                "Tip: page 0 is the first page." if is_mobile else
-                "Tip: page 0 is the first page, and double-tap a box to jump into linking."
+                "Tip: page 0 means the first page." if is_mobile else
+                "Tip: page 0 means the first page, and double-tap a box to jump into linking."
             ),
             color=palette.get("accent", (0.96, 0.71, 0.30, 1)),
+            size_hint_y=None,
+            height=dp(18),
             halign="left",
             valign="middle",
-            font_size=dp(10.0 if is_mobile else 10.6),
+            font_size=dp(10.2 if is_mobile else 10.8),
         )
         tip.bind(size=self._sync_label_text_size)
-        tip_chip.add_widget(tip)
+        self._bind_auto_height_label(tip, min_height=dp(18), extra_pad=dp(4))
 
         card.add_widget(title)
-        card.add_widget(subtitle)
-        card.add_widget(steps)
-        card.add_widget(tip_chip)
-        card._expanded_height = max(card.height, dp(182 if is_mobile else 174))
+        card.add_widget(body)
+        card.add_widget(tip)
+        card._expanded_height = max(card.height, dp(170 if is_mobile else 162))
         return card
-
-    def _preview_idle_status_text(self):
-        if bool(getattr(self, "ui_mobile", False)):
-            return "No form loaded • Open PDF Form to begin"
-        return "No form loaded • Open PDF Form, then load data and run Find Fields"
 
     def _refresh_preview_empty_hint(self, *_):
         hint = getattr(self, "preview_empty_hint", None)
@@ -7156,13 +7075,8 @@ class FormAlchemistApp(MDApp):
             hint.opacity = 0
             hint.disabled = True
             hint.height = 0
-        canvas_hint = getattr(self, "preview_canvas_hint", None)
-        if canvas_hint is not None:
-            canvas_hint.opacity = 0.20 if show else 0
-            canvas_hint.disabled = not show
         if show and getattr(self, "preview_info", None) is not None:
-            self.preview_info.text = self._preview_idle_status_text()
-        self._sync_preview_stack_size()
+            self.preview_info.text = "No form loaded yet. Quick start: Open PDF Form → Load Data File or Google Sheet → Choose a record and page → Find Fields → Save links."
 
     def _build_startup_presplash(self):
         # Route B startup: disable the in-app splash completely so the app never falls back
@@ -7227,36 +7141,18 @@ class FormAlchemistApp(MDApp):
         wrap = getattr(self, "preview_wrap", None)
         if stack is None or preview is None or wrap is None:
             return
-
-        spacing = float(getattr(stack, "spacing", 0) or 0)
+        info = getattr(self, "preview_info", None)
+        info_h = 0.0
+        info_spacing = float(getattr(stack, "spacing", 0) or 0)
+        if info is not None and float(getattr(info, "opacity", 1) or 0) > 0 and float(getattr(info, "height", 0) or 0) > 0:
+            info_h = float(getattr(info, "height", 0) or 0)
         wrap_w = max(float(getattr(wrap, "width", 0) or 0), 1.0)
-
-        visible_heights = []
-        candidate_widths = [wrap_w]
-        for child_name in ("preview_info", "preview_empty_hint", "preview"):
-            child = getattr(self, child_name, None)
-            if child is None:
-                continue
-            child_h = float(getattr(child, "height", 0) or 0)
-            child_w = float(getattr(child, "width", 0) or 0)
-            child_opacity = float(getattr(child, "opacity", 1) or 0)
-            child_disabled = bool(getattr(child, "disabled", False))
-            is_preview = (child is preview)
-            candidate_widths.append(child_w)
-            if child_h <= 0:
-                continue
-            if is_preview:
-                visible_heights.append(child_h)
-            elif child_opacity > 0 and not child_disabled:
-                visible_heights.append(child_h)
-
-        visible_count = len(visible_heights)
-        total_height = sum(visible_heights) + (spacing * max(0, visible_count - 1))
-
+        preview_w = float(getattr(preview, "width", 0) or 0)
+        preview_h = float(getattr(preview, "height", 0) or 0)
         stack.size_hint_x = None
         stack.size_hint_y = None
-        stack.width = max(dp(1), *candidate_widths)
-        stack.height = max(dp(1), total_height)
+        stack.width = max(dp(1), wrap_w, preview_w)
+        stack.height = max(dp(1), preview_h + info_h + (info_spacing if info_h > 0 else 0.0))
 
     def _on_preview_viewport_change(self, *_):
         Clock.unschedule(self._refresh_preview_for_viewport)
@@ -8902,7 +8798,7 @@ class FormAlchemistApp(MDApp):
         tray_open = bool(getattr(self, "mobile_tools_tray_open", False))
         if fab is not None:
             try:
-                fab.pos = (max(dp(8), Window.width - fab.width - dp(12)), dp(16))
+                fab.pos = (max(dp(8), Window.width - fab.width - dp(12)), dp(12))
             except Exception:
                 pass
         if panel is not None:
@@ -9786,6 +9682,23 @@ class FormAlchemistApp(MDApp):
 
         self._bind_popup_background_softening(popup)
 
+        run_after_dismiss = {"armed": False}
+
+        def _after_popup_dismiss(*_):
+            if not run_after_dismiss["armed"]:
+                return
+            run_after_dismiss["armed"] = False
+            Clock.schedule_once(
+                lambda dt: self._rerun_detection_and_refresh_current_page(
+                    reason="Detection tuning applied",
+                    preserve_anchor=True,
+                    clear_selection=True,
+                ),
+                0,
+            )
+
+        popup.bind(on_dismiss=_after_popup_dismiss)
+
         def _apply_settings(*_):
             try:
                 for key, payload in controls.items():
@@ -9800,18 +9713,7 @@ class FormAlchemistApp(MDApp):
                     popup.dismiss()
                     self.set_status("Detection tuning applied. Load a PDF to see the updated field finding.", kind="action", hold_seconds=2.0, force=True)
                     return
-                page_idx = self.current_page_idx()
-                self.engine.invalidate_detection_cache(page_idx=page_idx, clear_current=True)
-                self.set_status("Detection tuning applied. Refreshing field finding on the current page...", kind="action", hold_seconds=2.5, force=True)
-
-                def _after_dismiss(*__):
-                    try:
-                        popup.unbind(on_dismiss=_after_dismiss)
-                    except Exception:
-                        pass
-                    self.on_run_detect(None, immediate_preview=True)
-
-                popup.bind(on_dismiss=_after_dismiss)
+                run_after_dismiss["armed"] = True
                 popup.dismiss()
             except Exception as e:
                 self.set_status(f"Detection tuning error:\n{e}", kind="error", force=True)
@@ -10675,47 +10577,88 @@ class FormAlchemistApp(MDApp):
     # Detection / preview    # --------------------------------------------------------
     # Detection / preview
     # --------------------------------------------------------
-    def on_run_detect(self, instance, immediate_preview=False):
-        try:
-            if not self.engine.pdf_path:
-                self.set_status("Load PDF first.")
-                return
+    def _rerun_detection_and_refresh_current_page(
+        self,
+        reason="Detection refreshed",
+        preserve_anchor=True,
+        clear_selection=True,
+    ):
+        if not self.engine.pdf_path:
+            self.set_status("Load PDF first.")
+            return False
 
-            self.apply_ui_settings_to_engine()
-            page_idx = self.current_page_idx()
-            prev_count = len(getattr(self.engine, "all_boxes", []) or []) if getattr(self.engine, "detected_page_idx", None) == page_idx else 0
-            ctx = self.engine.prepare_learning_for_detection(page_idx=page_idx, allow_profile_apply=False)
-            profile_applied = bool((ctx or {}).get("profile_applied", False))
-            profile_matched = bool((ctx or {}).get("matched_profile"))
-            self.engine.invalidate_detection_cache(page_idx=page_idx, clear_current=True)
-            self.engine.run_detection(page_idx=page_idx)
-            self.engine.finalize_learning_after_detection(page_idx=page_idx)
+        self.apply_ui_settings_to_engine()
+        page_idx = self.current_page_idx()
+        prev_count = (
+            len(getattr(self.engine, "all_boxes", []) or [])
+            if getattr(self.engine, "detected_page_idx", None) == page_idx
+            else 0
+        )
+        anchor = self._capture_preview_anchor() if preserve_anchor else None
+
+        ctx = self.engine.prepare_learning_for_detection(
+            page_idx=page_idx,
+            allow_profile_apply=False,
+        )
+        profile_applied = bool((ctx or {}).get("profile_applied", False))
+        profile_matched = bool((ctx or {}).get("matched_profile"))
+
+        self.engine.invalidate_detection_cache(page_idx=page_idx, clear_current=True)
+        self.engine.run_detection(page_idx=page_idx)
+        self.engine.finalize_learning_after_detection(page_idx=page_idx)
+
+        if clear_selection:
             self.engine.selected_box_ids = []
-            self._stash_page_selection(page_idx)
-            counts = self._box_type_counts()
-            if profile_applied:
-                profile_msg = "\nLearned profile: applied"
-            elif profile_matched:
-                profile_msg = "\nLearned profile: matched but skipped (manual tuning kept)"
-            else:
-                profile_msg = "\nLearned profile: no match"
-            summary = (
-                f"Detection done.\n"
-                f"Page: {page_idx}\n"
-                f"Boxes: {prev_count} -> {len(self.engine.all_boxes)}"
-                f"\nChecks: {counts.get('check', 0)}"
-                f"\nLines: {counts.get('line', 0)}"
-                f"\nFields: {counts.get('field', 0)}"
-                f"\nCache: refreshed{profile_msg}"
+        else:
+            kept_ids = []
+            max_len = len(getattr(self.engine, "all_boxes", []) or [])
+            for raw_id in getattr(self.engine, "selected_box_ids", []) or []:
+                try:
+                    bid = int(raw_id)
+                except Exception:
+                    continue
+                if 0 <= bid < max_len:
+                    kept_ids.append(bid)
+            self.engine.selected_box_ids = sorted(set(kept_ids))
+
+        self._stash_page_selection(page_idx)
+        counts = self._box_type_counts()
+        rendered = self._render_session_page(page_idx=page_idx, reason=reason)
+
+        if preserve_anchor and anchor is not None and rendered:
+            Clock.schedule_once(lambda dt, a=anchor: self._restore_preview_anchor(a), 0)
+            Clock.schedule_once(lambda dt, a=anchor: self._restore_preview_anchor(a), 0.06)
+
+        self._persist_runtime_session_state(current_page_idx=page_idx)
+
+        if profile_applied:
+            profile_msg = "\nLearned profile: applied"
+        elif profile_matched:
+            profile_msg = "\nLearned profile: matched but skipped (manual tuning kept)"
+        else:
+            profile_msg = "\nLearned profile: no match"
+
+        self.set_status(
+            f"{reason}.\n"
+            f"Page: {page_idx}\n"
+            f"Boxes: {prev_count} -> {len(self.engine.all_boxes)}"
+            f"\nChecks: {counts.get('check', 0)}"
+            f"\nLines: {counts.get('line', 0)}"
+            f"\nFields: {counts.get('field', 0)}"
+            f"\nCache: refreshed{profile_msg}",
+            kind="detect",
+            hold_seconds=3.0,
+            force=True,
+        )
+        return True
+
+    def on_run_detect(self, instance):
+        try:
+            self._rerun_detection_and_refresh_current_page(
+                reason="Detection done",
+                preserve_anchor=True,
+                clear_selection=True,
             )
-            self._persist_runtime_session_state(current_page_idx=page_idx)
-            if immediate_preview:
-                self.on_preview(None)
-                Clock.schedule_once(lambda dt: self.on_preview(None), 0.05)
-            else:
-                Clock.schedule_once(lambda dt: self.on_preview(None), 0)
-                Clock.schedule_once(lambda dt: self.on_preview(None), 0.05)
-            self.set_status(summary, kind="detect", hold_seconds=3.5, force=True)
         except Exception as e:
             traceback.print_exc()
             self.set_status(f"Detect error:\n{e}", kind="error", force=True)
