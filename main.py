@@ -61,6 +61,31 @@ class RectCompat:
     __slots__ = ("x0", "y0", "x1", "y1")
 
     def __init__(self, x0=0.0, y0=0.0, x1=0.0, y1=0.0):
+        if hasattr(x0, "x0") and hasattr(x0, "y0") and hasattr(x0, "x1") and hasattr(x0, "y1"):
+            self.x0 = float(x0.x0)
+            self.y0 = float(x0.y0)
+            self.x1 = float(x0.x1)
+            self.y1 = float(x0.y1)
+            return
+
+        if y0 == 0.0 and x1 == 0.0 and y1 == 0.0:
+            if isinstance(x0, (list, tuple)) and len(x0) == 4:
+                self.x0 = float(x0[0])
+                self.y0 = float(x0[1])
+                self.x1 = float(x0[2])
+                self.y1 = float(x0[3])
+                return
+            try:
+                vals = list(x0)
+                if len(vals) == 4:
+                    self.x0 = float(vals[0])
+                    self.y0 = float(vals[1])
+                    self.x1 = float(vals[2])
+                    self.y1 = float(vals[3])
+                    return
+            except Exception:
+                pass
+
         self.x0 = float(x0)
         self.y0 = float(y0)
         self.x1 = float(x1)
@@ -2856,14 +2881,6 @@ class FormAlchemistEngine:
         # --- Page 0 semantic target detection
         self.geom = self._empty_geom()
         self.semantic_targets = self._empty_semantic_targets()
-        if page_idx == 0:
-            self._set_semantic_targets(
-                self._infer_semantic_targets_from_dem_roi(
-                    img,
-                    field_area_thresh=field_area_thresh,
-                    field_min_h_val=field_min_h_val,
-                )
-            )
         self._set_semantic_targets(self._apply_semantic_target_overrides(page_idx, self.semantic_targets))
 
         # --- General detection
