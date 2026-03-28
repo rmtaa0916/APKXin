@@ -1843,6 +1843,7 @@ class FormAlchemistEngine:
         self.suf_col = None
         self.dob_col = None
         self.phil_col = None
+        self.record_label_source_column = ""
 
         self.geom = {"names": [], "dob": [], "phil": []}
         self.all_boxes = []
@@ -2098,8 +2099,25 @@ class FormAlchemistEngine:
         self.dob_col = find_col_safe(df, "birth", "date") or find_col_safe(df, "birthdate")
         self.phil_col = find_col_safe(df, "philhealth")
     
-        f_col_safe = self.first_col if self.first_col else df.columns[0]
-        l_col_safe = self.last_col if self.last_col else df.columns[0]
+        self.rebuild_record_labels(source_column=self.record_label_source_column)
+
+    def has_name_identity_columns(self):
+        return bool(str(self.first_col or "").strip() or str(self.last_col or "").strip())
+
+    def rebuild_record_labels(self, source_column=None):
+        if self.df is None or self.df.empty:
+            self.patient_names = []
+            self.record_label_source_column = ""
+            return
+
+        df = self.df
+        chosen_source = str(self.record_label_source_column if source_column is None else source_column or "").strip()
+        if chosen_source and chosen_source not in df.columns:
+            chosen_source = ""
+
+        self.record_label_source_column = chosen_source
+        f_col_safe = self.first_col if self.first_col else (df.columns[0] if len(df.columns) else None)
+        l_col_safe = self.last_col if self.last_col else (df.columns[0] if len(df.columns) else None)
 
         def _clean_piece(value):
             value = str(value or "").strip()
@@ -2108,13 +2126,20 @@ class FormAlchemistEngine:
         base_labels = []
         dob_values = []
         for row_idx, (_, row) in enumerate(df.iterrows(), start=1):
-            first_val = _clean_piece(row.get(f_col_safe, ""))
-            last_val = _clean_piece(row.get(l_col_safe, ""))
+            first_val = _clean_piece(row.get(f_col_safe, "")) if f_col_safe else ""
+            last_val = _clean_piece(row.get(l_col_safe, "")) if l_col_safe else ""
             dob_val = _clean_piece(row.get(self.dob_col, "")) if self.dob_col else ""
-            if last_val and first_val:
-                base_label = f"{last_val}, {first_val}"
+
+            if chosen_source:
+                base_label = _clean_piece(row.get(chosen_source, ""))
+                if not base_label:
+                    base_label = f"Record {row_idx}"
             else:
-                base_label = first_val or last_val or f"Record {row_idx}"
+                if last_val and first_val:
+                    base_label = f"{last_val}, {first_val}"
+                else:
+                    base_label = first_val or last_val or f"Record {row_idx}"
+
             base_labels.append(base_label)
             dob_values.append(dob_val)
 
@@ -2132,12 +2157,14 @@ class FormAlchemistEngine:
         self.df["_RECORD_KEY"] = pd.Series([f"row:{i}" for i in range(1, len(df) + 1)], index=df.index, dtype=str)
         self.df["_RECORD_LABEL"] = pd.Series(final_labels, index=df.index, dtype=str)
         self.df["_DISPLAY_NAME"] = self.df["_RECORD_LABEL"]
-
         self.patient_names = sorted([
             str(x).strip()
             for x in self.df["_RECORD_LABEL"].dropna().tolist()
             if str(x).strip()
         ])
+
+    def needs_record_label_source_fallback(self):
+        return bool(self.df is not None and not self.df.empty and not self.has_name_identity_columns() and not str(self.record_label_source_column or "").strip())
 
     def _record_label_column(self):
         if self.df is None or self.df.empty:
@@ -3490,6 +3517,38 @@ class FormAlchemistEngine:
 
         return ops
 
+    def _collect_overlay_ops_by_page(self, patient_name, record_key=None):
+        row = self._get_patient_row(patient_name, record_key=record_key)
+        ops_by_page = {}
+
+        for configs in self.custom_mappings.values():
+            for c in configs:
+                page_idx = int(c.get("page", 0) or 0)
+                target_rects = [self._coerce_rect(r) for r in self._mapping_rect_list(c)]
+                if not target_rects:
+                    continue
+
+                csv_val = str(row.get(c["column"], "")).strip()
+                trigger = str(c.get("trigger", "")).strip()
+
+                if trigger:
+                    if csv_val.upper() != trigger.upper():
+                        continue
+                    ops_by_page.setdefault(page_idx, []).append({
+                        "kind": "check",
+                        "rects": target_rects,
+                    })
+                elif csv_val:
+                    ops_by_page.setdefault(page_idx, []).append({
+                        "kind": "text",
+                        "text": csv_val,
+                        "rects": target_rects,
+                        "grid": bool(c.get("g", False)),
+                        "grid_n": int(c.get("n", 1)),
+                    })
+
+        return ops_by_page
+
     def _reportlab_baseline_y(self, page_height, rect, oy=0):
         return float(page_height) - (float(rect.y1) - (float(rect.height) * 0.2) + float(oy))
 
@@ -3550,7 +3609,7 @@ class FormAlchemistEngine:
         c.setFont("Helvetica-Bold", fs)
         c.drawString(x, y, "X")
 
-    def _build_filled_pdf_bytes_raster(self, patient_name, page_idx=0, record_key=None, preview_zoom=2.0):
+    def _build_filled_pdf_bytes_raster(self, patient_name, page_idx=0, record_key=None, preview_zoom=2.0, export_scope="document"):
         if not self.pdf_path or not os.path.exists(self.pdf_path):
             raise FileNotFoundError("PDF path is missing or invalid.")
 
@@ -3560,27 +3619,31 @@ class FormAlchemistEngine:
         if total_pages <= 0:
             raise ValueError("PDF has no pages.")
 
+        export_scope = str(export_scope or "document").strip().lower()
         target_idx = min(max(int(page_idx), 0), total_pages - 1)
-        ops = self._collect_overlay_ops(patient_name, page_idx=target_idx, record_key=record_key)
+        if export_scope == "page":
+            ops_by_page = {target_idx: self._collect_overlay_ops(patient_name, page_idx=target_idx, record_key=record_key)}
+        else:
+            ops_by_page = self._collect_overlay_ops_by_page(patient_name, record_key=record_key)
+
         pil_pages = []
 
         for i in range(total_pages):
             img = self._render_pdf_page_bgr(self.pdf_path, page_idx=i, preview_zoom=preview_zoom)
             if img is None or getattr(img, "size", 0) == 0:
                 raise ValueError(f"Failed to render page {i + 1} for raster export.")
-            if i == target_idx:
-                for op in ops:
-                    if op.get("kind") == "check":
-                        self._draw_check_op_cv(img, op.get("rects", []), preview_zoom=preview_zoom)
-                    else:
-                        self._draw_text_op_cv(
-                            img,
-                            op.get("text", ""),
-                            op.get("rects", []),
-                            preview_zoom=preview_zoom,
-                            is_grid=bool(op.get("grid", False)),
-                            grid_n=int(op.get("grid_n", 1)),
-                        )
+            for op in ops_by_page.get(i, []):
+                if op.get("kind") == "check":
+                    self._draw_check_op_cv(img, op.get("rects", []), preview_zoom=preview_zoom)
+                else:
+                    self._draw_text_op_cv(
+                        img,
+                        op.get("text", ""),
+                        op.get("rects", []),
+                        preview_zoom=preview_zoom,
+                        is_grid=bool(op.get("grid", False)),
+                        grid_n=int(op.get("grid_n", 1)),
+                    )
             rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             pil_pages.append(PILImage.fromarray(rgb))
 
@@ -3596,17 +3659,16 @@ class FormAlchemistEngine:
         )
         return out_buf.getvalue()
 
-    def _build_filled_pdf_bytes(self, patient_name, page_idx=0, record_key=None):
+    def _build_filled_pdf_bytes(self, patient_name, page_idx=0, record_key=None, export_scope="document"):
         if not self.supports_export_backend():
             raise RuntimeError("PDF export backend is unavailable in this build.")
-        return self._build_filled_pdf_bytes_raster(patient_name, page_idx=page_idx, record_key=record_key)
+        return self._build_filled_pdf_bytes_raster(patient_name, page_idx=page_idx, record_key=record_key, export_scope=export_scope)
 
-    def export_filled_pdf(self, patient_name, out_path, page_idx=0, record_key=None):
-        pdf_bytes = self._build_filled_pdf_bytes(patient_name, page_idx=page_idx, record_key=record_key)
+    def export_filled_pdf(self, patient_name, out_path, page_idx=0, record_key=None, export_scope="document"):
+        pdf_bytes = self._build_filled_pdf_bytes(patient_name, page_idx=page_idx, record_key=record_key, export_scope=export_scope)
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
         with open(out_path, "wb") as fh:
             fh.write(pdf_bytes)
-        return out_path
 
     def process_doc(self, patient_name, page_idx=0):
         """
@@ -4469,6 +4531,7 @@ class FormAlchemistEngine:
         return {
             "version": 7,
             "record_label_column": str(self._record_label_column()),
+            "record_label_source_column": str(getattr(self, "record_label_source_column", "") or ""),
             "record_key_column": str(self._record_key_column()),
             "pdf_path": self.pdf_path,
             "zoom": float(ZOOM),
@@ -4543,6 +4606,7 @@ class FormAlchemistEngine:
         self.settings["Grid_N"] = int(cfg.get("Grid_N", self.settings["Grid_N"]))
         self.config_zoom = float(cfg.get("zoom", getattr(self, "config_zoom", ZOOM)))
         self.config_pdf_path = str(cfg.get("pdf_path", getattr(self, "config_pdf_path", "")) or "")
+        self.record_label_source_column = str(cfg.get("record_label_source_column", getattr(self, "record_label_source_column", "")) or "").strip()
         self.apply_learning_meta(cfg.get("learning_meta", {}))
         restored_ctx = cfg.get("current_detection_context", {}) or {}
         self.current_detection_context = dict(restored_ctx) if isinstance(restored_ctx, dict) else {}
@@ -4674,6 +4738,7 @@ class FormAlchemistEngine:
             return
         if val.endswith(".0"):
             val = val[:-2]
+        val = val.upper()
 
         rects = sorted([self._coerce_rect(r) for r in rects], key=lambda rr: (round(rr.y0, 3), rr.x0))
         if not rects:
@@ -4702,12 +4767,18 @@ class FormAlchemistEngine:
 
         def build_font_candidates():
             candidates = [
+                "/system/fonts/NotoSans-Bold.ttf",
+                "/system/fonts/NotoSansDisplay-Bold.ttf",
+                "/system/fonts/Roboto-Bold.ttf",
+                "/system/fonts/DroidSans-Bold.ttf",
                 "/system/fonts/NotoSans-Regular.ttf",
                 "/system/fonts/NotoSansDisplay-Regular.ttf",
                 "/system/fonts/Roboto-Regular.ttf",
                 "/system/fonts/RobotoStatic-Regular.ttf",
                 "/system/fonts/DroidSans.ttf",
+                "/data/data/com.termux/files/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
                 "/data/data/com.termux/files/usr/share/fonts/TTF/DejaVuSans.ttf",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
                 "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
             ]
             try:
@@ -4720,7 +4791,10 @@ class FormAlchemistEngine:
                             continue
                         full = os.path.join("/system/fonts", name)
                         if any(tag in low for tag in ["noto", "roboto", "dejavu", "free", "sans"]):
-                            preferred.append(full)
+                            if any(tag in low for tag in ["bold", "medium", "semibold"]):
+                                preferred.insert(0, full)
+                            else:
+                                preferred.append(full)
                         else:
                             fallback.append(full)
                     candidates.extend(preferred)
@@ -4745,28 +4819,30 @@ class FormAlchemistEngine:
                 return None
             probe_size = 28
             best_path = None
-            best_score = -1
+            best_score = -1.0
             for path in candidates:
                 try:
                     font = ImageFont.truetype(path, probe_size)
                 except Exception:
                     continue
                 qsig = glyph_signature(font, "?")
-                score = 0
+                score = 0.0
                 for ch in sample_key:
                     sig = glyph_signature(font, ch)
                     if sig and sig != qsig:
-                        score += 1
+                        score += 1.0
+                if any(tag in os.path.basename(path).lower() for tag in ["bold", "medium", "semibold"]):
+                    score += 0.25
                 if score > best_score:
                     best_score = score
                     best_path = path
-                if score >= len(sample_key):
+                if score >= len(sample_key) + 0.25:
                     break
             font_path_cache[sample_key] = best_path
             return best_path
 
         def sanitize_for_font(value, font):
-            value = unicodedata.normalize("NFC", str(value or ""))
+            value = unicodedata.normalize("NFC", str(value or "")).upper()
             qsig = glyph_signature(font, "?")
             pieces = []
             changed = False
@@ -4778,7 +4854,7 @@ class FormAlchemistEngine:
                 if sig and sig != qsig:
                     pieces.append(ch)
                     continue
-                fallback = unicodedata.normalize("NFKD", ch).encode("ascii", "ignore").decode("ascii")
+                fallback = unicodedata.normalize("NFKD", ch).encode("ascii", "ignore").decode("ascii").upper()
                 if fallback:
                     pieces.append(fallback)
                 else:
@@ -4787,7 +4863,7 @@ class FormAlchemistEngine:
             return "".join(pieces), changed
 
         def pick_font(size_px, sample_text=""):
-            size_px = max(int(size_px), 8)
+            size_px = max(int(size_px), 9)
             cache_key = (size_px, tuple(sorted({ch for ch in str(sample_text or "") if ord(ch) > 127})))
             if cache_key in font_cache:
                 return font_cache[cache_key]
@@ -4806,25 +4882,29 @@ class FormAlchemistEngine:
             font_cache[cache_key] = font
             return font
 
-        def measure(value, font):
-            bbox = draw.textbbox((0, 0), value, font=font)
-            return max(1, bbox[2] - bbox[0]), max(1, bbox[3] - bbox[1])
+        def measure_bbox(value, font, stroke_width=0):
+            bbox = draw.textbbox((0, 0), value, font=font, stroke_width=stroke_width)
+            return bbox, max(1, bbox[2] - bbox[0]), max(1, bbox[3] - bbox[1])
 
         def fit_text(single_val, target_w, target_h):
-            candidate = unicodedata.normalize("NFC", str(single_val or ""))
+            candidate = unicodedata.normalize("NFC", str(single_val or "")).upper()
             target_w = max(int(target_w), 1)
-            start_size = max(int(target_h * max(fs_scale, 0.78)), 10)
-            min_size = 8
+            target_h = max(int(target_h), 1)
+            inner_w = max(target_w - 6, 1)
+            inner_h = max(target_h - 4, 1)
+            start_size = max(int(target_h * max(fs_scale, 0.92)), 11)
+            min_size = 9
+            stroke = 1 if target_h >= 18 else 0
             for size in range(start_size, min_size - 1, -1):
                 font = pick_font(size, candidate)
                 if font is None:
                     break
                 safe_val, _ = sanitize_for_font(candidate, font)
-                tw, th = measure(safe_val, font)
-                if tw <= target_w - 4 and th <= target_h - 2:
-                    return safe_val, font, tw, th
+                bbox, tw, th = measure_bbox(safe_val, font, stroke_width=stroke)
+                if tw <= inner_w and th <= inner_h:
+                    return safe_val, font, bbox, tw, th, stroke
             ellipsis = "..."
-            for size in range(max(min_size, int(target_h * 0.52)), min_size - 1, -1):
+            for size in range(max(min_size, int(target_h * 0.58)), min_size - 1, -1):
                 font = pick_font(size, candidate)
                 if font is None:
                     break
@@ -4832,37 +4912,52 @@ class FormAlchemistEngine:
                 shortened = safe_base
                 while len(shortened) > 0:
                     probe = (shortened + ellipsis) if shortened else ellipsis
-                    tw, th = measure(probe, font)
-                    if tw <= target_w - 4 and th <= target_h - 2:
-                        return probe, font, tw, th
+                    bbox, tw, th = measure_bbox(probe, font, stroke_width=stroke)
+                    if tw <= inner_w and th <= inner_h:
+                        return probe, font, bbox, tw, th, stroke
                     shortened = shortened[:-1].rstrip()
             font = pick_font(min_size, candidate)
             if font is None:
-                return "", None, 0, 0
-            tw, th = measure(ellipsis, font)
-            return ellipsis, font, tw, th
+                return "", None, None, 0, 0, 0
+            bbox, tw, th = measure_bbox(ellipsis, font, stroke_width=stroke)
+            return ellipsis, font, bbox, tw, th, stroke
+
+        def centered_xy(rect, bbox, text_w, text_h):
+            target_w = max(int(rect.width * preview_zoom), 1)
+            target_h = max(int(rect.height * preview_zoom), 1)
+            left = (rect.x0 * preview_zoom) + (ox * preview_zoom)
+            top = (rect.y0 * preview_zoom) + (oy * preview_zoom)
+            bx0, by0, _, _ = bbox
+            x = left + ((target_w - text_w) / 2.0) - bx0
+            y = top + ((target_h - text_h) / 2.0) - by0
+            return int(round(x)), int(round(y))
 
         def draw_single(single_val, rect):
             target_w = max(int(rect.width * preview_zoom), 1)
             target_h = max(int(rect.height * preview_zoom), 1)
-            display_val, font, tw, th = fit_text(single_val, target_w, target_h)
-            if not display_val or font is None:
+            display_val, font, bbox, tw, th, stroke = fit_text(single_val, target_w, target_h)
+            if not display_val or font is None or bbox is None:
                 return
-            x = int((rect.x0 * preview_zoom) + ((target_w - tw) / 2.0) + (ox * preview_zoom))
-            y = int((rect.y0 * preview_zoom) + ((target_h - th) / 2.0) + (oy * preview_zoom))
-            draw.text((x, y), display_val, font=font, fill=(0, 0, 0))
+            x, y = centered_xy(rect, bbox, tw, th)
+            draw.text((x, y), display_val, font=font, fill=(0, 0, 0), stroke_width=stroke, stroke_fill=(0, 0, 0))
 
         def draw_grid(grid_val, rect, cells):
             cells = max(int(cells), 1)
             target_h = max(int(rect.height * preview_zoom), 1)
             cell_w = (rect.width * preview_zoom) / cells
-            for i, ch in enumerate(str(grid_val)[:cells]):
-                display_val, font, tw, th = fit_text(str(ch), cell_w - 1, target_h)
-                if not display_val or font is None:
+            base_cell_w = rect.width / cells
+            for i, ch in enumerate(str(grid_val).upper()[:cells]):
+                display_val, font, bbox, tw, th, stroke = fit_text(str(ch), cell_w - 1, target_h)
+                if not display_val or font is None or bbox is None:
                     continue
-                x = int((rect.x0 * preview_zoom) + (i * cell_w) + ((cell_w - tw) / 2.0) + (ox * preview_zoom))
-                y = int((rect.y0 * preview_zoom) + ((target_h - th) / 2.0) + (oy * preview_zoom))
-                draw.text((x, y), display_val, font=font, fill=(0, 0, 0))
+                cell_rect = fitz.Rect(
+                    rect.x0 + (i * base_cell_w),
+                    rect.y0,
+                    rect.x0 + ((i + 1) * base_cell_w),
+                    rect.y1,
+                )
+                x, y = centered_xy(cell_rect, bbox, tw, th)
+                draw.text((x, y), display_val, font=font, fill=(0, 0, 0), stroke_width=stroke, stroke_fill=(0, 0, 0))
 
         if is_grid and len(rects) > 1:
             counts = self._allocate_cells_by_width(rects, grid_n)
@@ -8474,6 +8569,124 @@ class FormAlchemistApp(MDApp):
         elif hasattr(self, "use_extent"):
             self.use_extent.text = "1" if s["Use_Extent"] else "0"
 
+    def _apply_record_label_source_column(self, column_name, popup=None):
+        column_name = str(column_name or "").strip()
+        if self.engine.df is None or self.engine.df.empty:
+            if popup is not None:
+                try:
+                    popup.dismiss()
+                except Exception:
+                    pass
+            return
+        if column_name and column_name not in list(self.engine.df.columns):
+            self.set_status(f"Record label column not found:\n{column_name}")
+            return
+        try:
+            self.engine.rebuild_record_labels(source_column=column_name)
+            self.refresh_patient_and_column_lists()
+            self._persist_runtime_session_state(current_page_idx=self.current_page_idx())
+            if popup is not None:
+                try:
+                    popup.dismiss()
+                except Exception:
+                    pass
+            if column_name:
+                self.set_status(f"Session fallback applied.\nRecord labels now use column:\n{column_name}")
+            else:
+                self.set_status("Session fallback cleared. Using generated row labels.")
+            if getattr(self.engine, "pdf_path", ""):
+                Clock.schedule_once(lambda dt: self.on_preview(None), 0.05)
+        except Exception as e:
+            traceback.print_exc()
+            self.set_status(f"Record label fallback error:\n{e}")
+
+    def _prompt_record_label_fallback_if_needed(self):
+        if not getattr(self, "engine", None):
+            return
+        if not self.engine.needs_record_label_source_fallback():
+            return
+        if getattr(self, "_record_label_fallback_popup", None):
+            try:
+                if self._record_label_fallback_popup.parent is not None:
+                    return
+            except Exception:
+                return
+
+        cols = [str(c) for c in list(self.engine.df.columns) if str(c).strip() and not str(c).startswith("_")]
+        if not cols:
+            return
+
+        palette = getattr(self, "theme_palette", {}) or {}
+        def _c(name, fallback):
+            return palette.get(name, fallback)
+
+        outer = BoxLayout(orientation="vertical", spacing=dp(10), padding=[dp(14), dp(14), dp(14), dp(14)])
+        title = Label(
+            text="No name columns found",
+            color=_c("text", (0.93, 0.96, 1.0, 1)),
+            size_hint_y=None,
+            height=dp(26),
+            halign="left",
+            valign="middle",
+            font_size=dp(16),
+            bold=True,
+        )
+        title.bind(size=lambda inst, value: setattr(inst, "text_size", value))
+        outer.add_widget(title)
+
+        helper = Label(
+            text="Session mode needs something to identify each record. Choose a target column to use as the record label.",
+            color=_c("muted", (0.60, 0.68, 0.80, 1)),
+            size_hint_y=None,
+            height=dp(52),
+            halign="left",
+            valign="middle",
+            font_size=dp(11),
+        )
+        helper.bind(size=lambda inst, value: setattr(inst, "text_size", value))
+        outer.add_widget(helper)
+
+        picker = SearchableSelectField(
+            text=(cols[0] if cols else COLUMN_SELECT_TEXT),
+            values=cols,
+            placeholder=COLUMN_SELECT_TEXT,
+            picker_title="Choose record label column",
+            search_hint="Type to find a target column",
+            size_hint_y=None,
+            height=dp(46),
+            font_size=dp(14),
+            background_normal="",
+            background_color=_c("surface_alt", (0.11, 0.135, 0.185, 1)),
+            color=_c("text", (0.93, 0.96, 1.0, 1)),
+        )
+        outer.add_widget(picker)
+
+        btn_row = GridLayout(cols=3, size_hint_y=None, height=dp(44), spacing=dp(8))
+        btn_rows = Button(text="Use Rows", background_normal="", background_color=_c("surface_alt", (0.11, 0.135, 0.185, 1)), color=_c("text", (0.93, 0.96, 1.0, 1)))
+        btn_apply = Button(text="Apply", background_normal="", background_color=_c("primary", (0.10, 0.78, 0.63, 1)), color=_c("button_text", (1, 1, 1, 1)))
+        btn_close = Button(text="Close", background_normal="", background_color=_c("surface_alt", (0.11, 0.135, 0.185, 1)), color=_c("text", (0.93, 0.96, 1.0, 1)))
+        btn_row.add_widget(btn_rows)
+        btn_row.add_widget(btn_apply)
+        btn_row.add_widget(btn_close)
+        outer.add_widget(btn_row)
+
+        popup = Popup(
+            title="",
+            separator_height=0,
+            background="",
+            background_color=(0, 0, 0, 0.78),
+            content=outer,
+            size_hint=((0.94 if getattr(self, "ui_mobile", False) else 0.66), (0.46 if getattr(self, "ui_mobile", False) else 0.40)),
+            auto_dismiss=False,
+        )
+        self._record_label_fallback_popup = popup
+
+        btn_apply.bind(on_release=lambda *_: self._apply_record_label_source_column(picker.text, popup=popup))
+        btn_rows.bind(on_release=lambda *_: self._apply_record_label_source_column("", popup=popup))
+        btn_close.bind(on_release=lambda *_: popup.dismiss())
+        popup.bind(on_dismiss=lambda *_: setattr(self, "_record_label_fallback_popup", None))
+        popup.open()
+
     def refresh_patient_and_column_lists(self):
         if self.engine.df is None or self.engine.df.empty:
             self.patient_spinner.values = []
@@ -10438,6 +10651,7 @@ class FormAlchemistApp(MDApp):
         self.set_status(
             f"Data loaded:\n{os.path.basename(path)}\nRows: {len(self.engine.df)}"
         )
+        Clock.schedule_once(lambda dt: self._prompt_record_label_fallback_if_needed(), 0.05)
         if self.engine.pdf_path:
             Clock.schedule_once(lambda dt: self.on_preview(None), 0.1)
 
@@ -10634,6 +10848,7 @@ class FormAlchemistApp(MDApp):
             "selected_box_ids": selected_ids,
             "selected_record_label": str(self.selected_record() or ""),
             "selected_record_key": str(self.selected_record_key() or ""),
+            "record_label_source_column": str(getattr(self.engine, "record_label_source_column", "") or ""),
             "session_preview_mode": str(self._session_preview_mode(page_idx)),
             "status_kind": str(getattr(self, "_status_kind", "info") or "info"),
             "mobile_sidebar_open": bool(getattr(self, "_mobile_sidebar_open", False)),
@@ -10781,6 +10996,14 @@ class FormAlchemistApp(MDApp):
 
         selected_record_label = str(ui_state.get("selected_record_label", cfg.get("selected_record_label", "") if isinstance(cfg, dict) else "") or "").strip()
         selected_record_key = str(ui_state.get("selected_record_key", cfg.get("selected_record_key", "") if isinstance(cfg, dict) else "") or "").strip()
+        restored_record_label_source = str(ui_state.get("record_label_source_column", cfg.get("record_label_source_column", "") if isinstance(cfg, dict) else "") or "").strip()
+        if restored_record_label_source and getattr(self.engine, "df", None) is not None and not self.engine.df.empty and restored_record_label_source in list(self.engine.df.columns):
+            try:
+                self.engine.rebuild_record_labels(source_column=restored_record_label_source)
+                if hasattr(self, "patient_spinner") and hasattr(self, "column_spinner"):
+                    self.refresh_patient_and_column_lists()
+            except Exception:
+                pass
         self._pending_restored_record_label = selected_record_label
         self._pending_restored_record_key = selected_record_key
 
@@ -11126,22 +11349,22 @@ class FormAlchemistApp(MDApp):
                 return
 
             page_idx = self.current_page_idx()
-            filename = f"Filled_{safe_name(patient)}_page_{page_idx + 1}.pdf"
+            filename = f"Filled_{safe_name(patient)}.pdf"
 
             if platform == "android":
-                pdf_bytes = self.engine._build_filled_pdf_bytes(patient, page_idx=page_idx, record_key=record_key)
+                pdf_bytes = self.engine._build_filled_pdf_bytes(patient, page_idx=page_idx, record_key=record_key, export_scope="document")
                 return self._save_android_bytes_via_picker(
                     pdf_bytes,
                     filename,
                     mime_type="application/pdf",
                     request_code=42441,
                     success_message="Export saved",
-                    extra_status_lines=[f"Record: {patient}", f"Page: {page_idx + 1}"],
+                    extra_status_lines=[f"Record: {patient}", "Scope: full document"],
                 )
 
             out_dir = self.get_app_output_dir()
             out_path = os.path.join(out_dir, filename)
-            self.engine.export_filled_pdf(patient, out_path, page_idx=page_idx, record_key=record_key)
+            self.engine.export_filled_pdf(patient, out_path, page_idx=page_idx, record_key=record_key, export_scope="document")
             self.set_status("Generated:\n" + out_path)
         except Exception as e:
             traceback.print_exc()
@@ -11340,6 +11563,7 @@ class FormAlchemistApp(MDApp):
                 f"Rows: {len(self.engine.df)}\n"
                 f"Records: {len(self.engine.patient_names)}"
             )
+            Clock.schedule_once(lambda dt: self._prompt_record_label_fallback_if_needed(), 0.05)
     
             if self.engine.pdf_path:
                 Clock.schedule_once(lambda dt: self.on_preview(None), 0.1)
@@ -11377,7 +11601,7 @@ class FormAlchemistApp(MDApp):
                         try:
                             safe_p_name = "".join(c if c.isalnum() or c in (" ", "-", "_") else "_" for c in patient_name).strip()
                             pdf_name = f"Filled_{safe_p_name or 'Unknown'}.pdf"
-                            pdf_bytes = self.engine._build_filled_pdf_bytes(patient_name, page_idx=page_idx)
+                            pdf_bytes = self.engine._build_filled_pdf_bytes(patient_name, page_idx=page_idx, export_scope="document")
                             zf.writestr(pdf_name, pdf_bytes)
                             success += 1
                         except Exception:
@@ -11387,14 +11611,14 @@ class FormAlchemistApp(MDApp):
                 if success <= 0:
                     self.set_status(f"Batch error:\nNo PDFs were generated. Skipped: {skipped}")
                     return
-                batch_name = f"FormAlchemist_Batch_page_{page_idx + 1}.zip"
+                batch_name = "FormAlchemist_Batch.zip"
                 return self._save_android_bytes_via_picker(
                     zip_buffer.getvalue(),
                     batch_name,
                     mime_type="application/zip",
                     request_code=42442,
                     success_message="Batch ZIP saved",
-                    extra_status_lines=[f"Success: {success}", f"Skipped: {skipped}", f"Page: {page_idx + 1}"],
+                    extra_status_lines=[f"Success: {success}", f"Skipped: {skipped}", "Scope: full document"],
                 )
 
             out_dir = os.path.join(self.get_app_output_dir(), "batch_output")
@@ -11404,7 +11628,7 @@ class FormAlchemistApp(MDApp):
                 try:
                     safe_p_name = "".join(c if c.isalnum() or c in (" ", "-", "_") else "_" for c in patient_name).strip()
                     out_path = os.path.join(out_dir, f"Filled_{safe_p_name or 'Unknown'}.pdf")
-                    self.engine.export_filled_pdf(patient_name, out_path, page_idx=page_idx)
+                    self.engine.export_filled_pdf(patient_name, out_path, page_idx=page_idx, export_scope="document")
                     success += 1
                 except Exception:
                     traceback.print_exc()
