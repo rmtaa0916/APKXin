@@ -32,6 +32,7 @@ if not hasattr(base64, "encodestring"):
     base64.encodestring = base64.encodebytes
 
 import cv2
+from PIL import Image as PILImage
 import importlib
 
 FITZ_IMPORT_ERROR = None
@@ -2267,10 +2268,10 @@ class FormAlchemistEngine:
     def supports_export_backend(self):
         """
         Return True when filled-PDF export is available.
-        This variant prefers a native PyMuPDF export path and only falls back to
-        ReportLab when PyMuPDF is unavailable.
+        This variant exports by rasterizing pages and rebuilding the PDF as images,
+        so it only requires a working PDF rendering backend.
         """
-        return bool(FITZ_AVAILABLE or REPORTLAB_AVAILABLE)
+        return bool(ANDROID_JAVA_AVAILABLE or FITZ_AVAILABLE)
 
     def supports_processing_backend(self):
         """
@@ -3548,109 +3549,56 @@ class FormAlchemistEngine:
         c.setFont("Helvetica-Bold", fs)
         c.drawString(x, y, "X")
 
-    def _write_check_op_fitz(self, page, rects):
-        rects = sorted([self._coerce_rect(r) for r in rects], key=lambda rr: (round(rr.y0, 3), rr.x0))
-        if not rects:
-            return
-        target = rects[0] if len(rects) == 1 else self._rect_union(rects)
-        fs = max(float(target.height) * 0.95, 8.0)
-        p = fitz.Point(
-            float(target.x0) + (float(target.width) * 0.15),
-            float(target.y1) - (float(target.height) * 0.15)
-        )
-        page.insert_text(p, "X", fontsize=fs, fontname="helv")
-
-    def _build_filled_pdf_bytes_fitz(self, patient_name, page_idx=0, record_key=None):
-        if not FITZ_AVAILABLE:
-            raise RuntimeError("PyMuPDF export backend is unavailable in this build.")
+    def _build_filled_pdf_bytes_raster(self, patient_name, page_idx=0, record_key=None, preview_zoom=2.0):
         if not self.pdf_path or not os.path.exists(self.pdf_path):
             raise FileNotFoundError("PDF path is missing or invalid.")
 
-        ops = self._collect_overlay_ops(patient_name, page_idx=page_idx, record_key=record_key)
-        with fitz.open(self.pdf_path) as doc:
-            total_pages = len(doc)
-            if total_pages <= 0:
-                raise ValueError("PDF has no pages.")
-            target_idx = min(max(int(page_idx), 0), total_pages - 1)
-            page = doc[target_idx]
-            for op in ops:
-                if op.get("kind") == "check":
-                    self._write_check_op_fitz(page, op.get("rects", []))
-                else:
-                    self.draw_logic(
-                        page,
-                        op.get("text", ""),
-                        op.get("rects", []),
-                        is_grid=bool(op.get("grid", False)),
-                        grid_n=int(op.get("grid_n", 1)),
-                    )
-            if hasattr(doc, "subset_fonts"):
-                try:
-                    doc.subset_fonts()
-                except Exception:
-                    pass
-            if hasattr(doc, "tobytes"):
-                return bytes(doc.tobytes())
-            if hasattr(doc, "write"):
-                return bytes(doc.write())
-            out_buf = io.BytesIO()
-            doc.save(out_buf)
-            return out_buf.getvalue()
-
-    def _build_filled_pdf_bytes(self, patient_name, page_idx=0, record_key=None):
-        if FITZ_AVAILABLE:
-            return self._build_filled_pdf_bytes_fitz(patient_name, page_idx=page_idx, record_key=record_key)
-        if not self.supports_export_backend():
-            raise RuntimeError("PDF export backend is unavailable in this build.")
-        if not self.pdf_path or not os.path.exists(self.pdf_path):
-            raise FileNotFoundError("PDF path is missing or invalid.")
-
-        ops = self._collect_overlay_ops(patient_name, page_idx=page_idx, record_key=record_key)
         with open(self.pdf_path, "rb") as fh:
             reader = PdfReader(fh)
             total_pages = len(reader.pages)
-            if total_pages <= 0:
-                raise ValueError("PDF has no pages.")
+        if total_pages <= 0:
+            raise ValueError("PDF has no pages.")
 
-            overlay_buf = io.BytesIO()
-            first_page = reader.pages[0]
-            first_size = (float(first_page.mediabox.width), float(first_page.mediabox.height))
-            c = rl_canvas.Canvas(overlay_buf, pagesize=first_size)
+        target_idx = min(max(int(page_idx), 0), total_pages - 1)
+        ops = self._collect_overlay_ops(patient_name, page_idx=target_idx, record_key=record_key)
+        pil_pages = []
 
-            for i in range(total_pages):
-                page = reader.pages[i]
-                page_w = float(page.mediabox.width)
-                page_h = float(page.mediabox.height)
-                c.setPageSize((page_w, page_h))
+        for i in range(total_pages):
+            img = self._render_pdf_page_bgr(self.pdf_path, page_idx=i, preview_zoom=preview_zoom)
+            if img is None or getattr(img, "size", 0) == 0:
+                raise ValueError(f"Failed to render page {i + 1} for raster export.")
+            if i == target_idx:
+                for op in ops:
+                    if op.get("kind") == "check":
+                        self._draw_check_op_cv(img, op.get("rects", []), preview_zoom=preview_zoom)
+                    else:
+                        self._draw_text_op_cv(
+                            img,
+                            op.get("text", ""),
+                            op.get("rects", []),
+                            preview_zoom=preview_zoom,
+                            is_grid=bool(op.get("grid", False)),
+                            grid_n=int(op.get("grid_n", 1)),
+                        )
+            rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            pil_pages.append(PILImage.fromarray(rgb))
 
-                if i == int(page_idx):
-                    for op in ops:
-                        if op.get("kind") == "check":
-                            self._write_check_op_reportlab(c, page_h, op.get("rects", []))
-                        else:
-                            self._write_text_op_reportlab(
-                                c,
-                                page_h,
-                                op.get("text", ""),
-                                op.get("rects", []),
-                                is_grid=bool(op.get("grid", False)),
-                                grid_n=int(op.get("grid_n", 1)),
-                            )
-                c.showPage()
+        out_buf = io.BytesIO()
+        first = pil_pages[0].convert("RGB")
+        rest = [im.convert("RGB") for im in pil_pages[1:]]
+        first.save(
+            out_buf,
+            format="PDF",
+            save_all=True,
+            append_images=rest,
+            resolution=max(float(preview_zoom), 1.0) * 72.0,
+        )
+        return out_buf.getvalue()
 
-            c.save()
-            overlay_buf.seek(0)
-            overlay_reader = PdfReader(overlay_buf)
-
-            writer = PdfWriter()
-            for i, page in enumerate(reader.pages):
-                if i < len(overlay_reader.pages):
-                    page.merge_page(overlay_reader.pages[i])
-                writer.add_page(page)
-
-            out_buf = io.BytesIO()
-            writer.write(out_buf)
-            return out_buf.getvalue()
+    def _build_filled_pdf_bytes(self, patient_name, page_idx=0, record_key=None):
+        if not self.supports_export_backend():
+            raise RuntimeError("PDF export backend is unavailable in this build.")
+        return self._build_filled_pdf_bytes_raster(patient_name, page_idx=page_idx, record_key=record_key)
 
     def export_filled_pdf(self, patient_name, out_path, page_idx=0, record_key=None):
         pdf_bytes = self._build_filled_pdf_bytes(patient_name, page_idx=page_idx, record_key=record_key)
