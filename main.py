@@ -4664,69 +4664,66 @@ class FormAlchemistEngine:
         self.persist_learning_session(current_page_idx=self.detected_page_idx or 0)
         return cfg
 
+
     def _draw_text_op_cv(self, img, text, rects, preview_zoom=1.5, is_grid=False, grid_n=1, ox=0, oy=0, fs_scale=0.65):
         val = str(text or "").strip()
         if not val or val.lower() in ["nan", "none"]:
             return
         if val.endswith(".0"):
             val = val[:-2]
-        val = val.upper()
 
         rects = sorted([self._coerce_rect(r) for r in rects], key=lambda rr: (round(rr.y0, 3), rr.x0))
         if not rects:
             return
 
-        def fit_value_to_width(single_val, base_font_scale, thickness, max_text_w, min_font_scale=0.22):
+        def fit_value_to_width(single_val, base_font_scale, thickness, max_text_w, min_font_scale=0.30):
             candidate = str(single_val)
             max_text_w = max(int(max_text_w), 1)
             font_scale = max(float(base_font_scale), float(min_font_scale))
-
-            # First try to keep the full text by shrinking the font a little.
             while font_scale >= min_font_scale:
-                (tw, th), _ = cv2.getTextSize(candidate, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
+                (tw, th), baseline = cv2.getTextSize(candidate, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
                 if tw <= max_text_w:
-                    return candidate, tw, th, font_scale
+                    return candidate, tw, th, baseline, font_scale
                 font_scale = round(font_scale - 0.02, 4)
 
-            # Fallback to safe ASCII ellipsis so OpenCV does not render it as ???.
             ellipsis = '...'
             font_scale = float(min_font_scale)
             shortened = candidate
             while len(shortened) > 0:
                 probe = (shortened + ellipsis) if shortened else ellipsis
-                (tw, th), _ = cv2.getTextSize(probe, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
+                (tw, th), baseline = cv2.getTextSize(probe, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
                 if tw <= max_text_w:
-                    return probe, tw, th, font_scale
+                    return probe, tw, th, baseline, font_scale
                 shortened = shortened[:-1].rstrip()
 
-            return '', 0, 0, font_scale
+            return '', 0, 0, 0, font_scale
 
         def draw_single(single_val, rect):
             target_w = max(int(rect.width * preview_zoom), 1)
             target_h = max(int(rect.height * preview_zoom), 1)
-            # Allow a higher initial scale, then shrink-to-fit. This keeps more full values visible
-            # and reduces zoom-sensitive truncation caused by the previous hard max cap.
-            base_font_scale = max((target_h * fs_scale) / 30.0, 0.24)
-            thickness = 1 if target_h < 40 else 2
-            display_val, tw, _, font_scale = fit_value_to_width(single_val, base_font_scale, thickness, target_w - 6)
+            base_font_scale = max((target_h * max(fs_scale, 0.78)) / 30.0, 0.34)
+            thickness = 2 if target_h < 54 else 3
+            display_val, tw, th, baseline, font_scale = fit_value_to_width(single_val, base_font_scale, thickness, target_w - 4)
             if not display_val:
                 return
-            x = int((rect.x0 * preview_zoom) + max((target_w - tw) / 2.0, 1.0) + (ox * preview_zoom))
-            y = int((rect.y1 * preview_zoom) - (target_h * 0.2) + (oy * preview_zoom))
+            x = int((rect.x0 * preview_zoom) + ((target_w - tw) / 2.0) + (ox * preview_zoom))
+            y_top = (rect.y0 * preview_zoom) + ((target_h - th) / 2.0) + (oy * preview_zoom)
+            y = int(y_top + th)
             cv2.putText(img, display_val, (x, y), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), thickness, cv2.LINE_AA)
 
         def draw_grid(grid_val, rect, cells):
             cells = max(int(cells), 1)
             target_h = max(int(rect.height * preview_zoom), 1)
-            base_font_scale = max((target_h * 0.60) / 30.0, 0.22)
-            thickness = 1 if target_h < 40 else 2
             cell_w = (rect.width * preview_zoom) / cells
-            y = int((rect.y1 * preview_zoom) - (target_h * 0.2) + (oy * preview_zoom))
-            for i, ch in enumerate(grid_val[:cells]):
-                display_val, tw, _, font_scale = fit_value_to_width(str(ch), base_font_scale, thickness, cell_w - 2, min_font_scale=0.18)
+            base_font_scale = max((target_h * 0.74) / 30.0, 0.28)
+            thickness = 2 if target_h < 54 else 3
+            for i, ch in enumerate(str(grid_val)[:cells]):
+                display_val, tw, th, baseline, font_scale = fit_value_to_width(str(ch), base_font_scale, thickness, cell_w - 2, min_font_scale=0.22)
                 if not display_val:
                     continue
-                x = int((rect.x0 * preview_zoom) + (i * cell_w) + max((cell_w - tw) / 2.0, 1.0) + (ox * preview_zoom))
+                x = int((rect.x0 * preview_zoom) + (i * cell_w) + ((cell_w - tw) / 2.0) + (ox * preview_zoom))
+                y_top = (rect.y0 * preview_zoom) + ((target_h - th) / 2.0) + (oy * preview_zoom)
+                y = int(y_top + th)
                 cv2.putText(img, display_val, (x, y), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), thickness, cv2.LINE_AA)
 
         if is_grid and len(rects) > 1:
