@@ -61,13 +61,30 @@ class RectCompat:
     __slots__ = ("x0", "y0", "x1", "y1")
 
     def __init__(self, x0=0.0, y0=0.0, x1=0.0, y1=0.0):
-        # Always prefer rect-like unpacking first.
-        rect_like = _extract_rect_like(x0)
+        rect_like = None
+        if hasattr(x0, "x0") and hasattr(x0, "y0") and hasattr(x0, "x1") and hasattr(x0, "y1"):
+            rect_like = x0
+        elif y0 == 0.0 and x1 == 0.0 and y1 == 0.0 and not isinstance(x0, (int, float)):
+            try:
+                vals = list(x0)
+                if len(vals) == 4:
+                    rect_like = vals
+            except Exception:
+                rect_like = None
+
         if rect_like is not None:
-            self.x0, self.y0, self.x1, self.y1 = rect_like
+            if hasattr(rect_like, "x0"):
+                self.x0 = float(rect_like.x0)
+                self.y0 = float(rect_like.y0)
+                self.x1 = float(rect_like.x1)
+                self.y1 = float(rect_like.y1)
+            else:
+                self.x0 = float(rect_like[0])
+                self.y0 = float(rect_like[1])
+                self.x1 = float(rect_like[2])
+                self.y1 = float(rect_like[3])
             return
 
-        # If the caller passed 4 explicit values, coerce them individually.
         self.x0 = float(x0)
         self.y0 = float(y0)
         self.x1 = float(x1)
@@ -89,165 +106,6 @@ class RectCompat:
 
     def __repr__(self):
         return f"RectCompat({self.x0}, {self.y0}, {self.x1}, {self.y1})"
-
-
-def _extract_rect_like(value):
-    """Return (x0, y0, x1, y1) floats for rect-like values, else None."""
-    if value is None:
-        return None
-    try:
-        if all(hasattr(value, attr) for attr in ("x0", "y0", "x1", "y1")):
-            return (
-                float(value.x0),
-                float(value.y0),
-                float(value.x1),
-                float(value.y1),
-            )
-    except Exception:
-        pass
-    if isinstance(value, (str, bytes)):
-        return None
-    try:
-        vals = list(value)
-    except Exception:
-        return None
-    if len(vals) != 4:
-        return None
-    try:
-        return (
-            float(vals[0]),
-            float(vals[1]),
-            float(vals[2]),
-            float(vals[3]),
-        )
-    except Exception:
-        return None
-
-
-def _safe_rect(value=None, *coords):
-    """Best-effort rectangle coercion that avoids float(rect_object) crashes."""
-    rect_like = None
-    if coords:
-        try:
-            rect_like = (
-                float(value),
-                float(coords[0]),
-                float(coords[1]),
-                float(coords[2]),
-            )
-        except Exception:
-            rect_like = _extract_rect_like((value, *coords))
-    else:
-        rect_like = _extract_rect_like(value)
-
-    if rect_like is not None:
-        try:
-            return fitz.Rect(*rect_like)
-        except Exception:
-            try:
-                return RectCompat(*rect_like)
-            except Exception:
-                pass
-
-    try:
-        return fitz.Rect(0.0, 0.0, 0.0, 0.0)
-    except Exception:
-        return RectCompat(0.0, 0.0, 0.0, 0.0)
-
-
-def _safe_int_value(value, default=0):
-    try:
-        return int(str(value).strip())
-    except Exception:
-        try:
-            return int(float(value))
-        except Exception:
-            return int(default)
-
-
-def _safe_float_value(value, default=0.0):
-    try:
-        return float(str(value).strip())
-    except Exception:
-        try:
-            return float(value)
-        except Exception:
-            return float(default)
-
-
-def _normalize_box_ids(values):
-    cleaned = []
-    seen = set()
-    for raw in list(values or []):
-        try:
-            val = int(raw)
-        except Exception:
-            continue
-        if val in seen:
-            continue
-        seen.add(val)
-        cleaned.append(val)
-    return sorted(cleaned)
-
-
-def _safe_widget_text(widget, default=""):
-    try:
-        return str(getattr(widget, "text", default) or default).strip()
-    except Exception:
-        return str(default or "").strip()
-
-
-def _safe_widget_active(widget, default=False):
-    try:
-        return bool(getattr(widget, "active", default))
-    except Exception:
-        return bool(default)
-
-
-def _safe_set_widget_text(widget, value):
-    if widget is None:
-        return False
-    try:
-        widget.text = "" if value is None else str(value)
-        return True
-    except Exception:
-        return False
-
-
-def _safe_set_widget_active(widget, value):
-    if widget is None:
-        return False
-    try:
-        widget.active = bool(value)
-        return True
-    except Exception:
-        return False
-
-
-def _safe_popup_dismiss(popup):
-    try:
-        if popup is not None:
-            _safe_popup_dismiss(popup)
-            return True
-    except Exception:
-        traceback.print_exc()
-    return False
-
-
-def _safe_invoke(callback, *args, context="UI callback", on_error=None):
-    if not callable(callback):
-        return False
-    try:
-        callback(*args)
-        return True
-    except Exception as e:
-        traceback.print_exc()
-        if callable(on_error):
-            try:
-                on_error(f"{context}: {e}")
-            except Exception:
-                pass
-        return False
 
 if fitz is None:
     fitz = SimpleNamespace(Rect=RectCompat)
@@ -448,7 +306,7 @@ class SearchableSelectField(Button):
 
         def _select_value(value):
             self.text = str(value)
-            _safe_popup_dismiss(popup)
+            popup.dismiss()
 
         def _pick_top(*_):
             matches = list(state.get("matches") or [])
@@ -515,7 +373,7 @@ class SearchableSelectField(Button):
         quick_pick_btn.bind(on_release=_pick_top)
         if self.allow_clear:
             clear_btn.bind(on_release=lambda *_: (_select_value(self.placeholder)))
-        close_btn.bind(on_release=lambda *_: _safe_popup_dismiss(popup))
+        close_btn.bind(on_release=lambda *_: popup.dismiss())
         _refresh_results()
         popup.open()
         Clock.schedule_once(lambda dt: setattr(search_input, "focus", True), 0.05)
@@ -1937,10 +1795,10 @@ class FormAlchemistEngine:
             rects = []
             for rect in (src.get(key, []) or []):
                 try:
-                    rects.append(_safe_rect(rect))
+                    rects.append(fitz.Rect(rect))
                 except Exception:
                     try:
-                        rects.append(_safe_rect(rect))
+                        rects.append(fitz.Rect(*rect))
                     except Exception:
                         continue
             normalized[key] = rects
@@ -1950,7 +1808,7 @@ class FormAlchemistEngine:
         geom = geom or self._empty_geom()
         targets = self._empty_semantic_targets()
         for legacy_key, semantic_keys in LEGACY_GEOM_TO_SEMANTIC.items():
-            rects = [_safe_rect(r) for r in (geom.get(legacy_key, []) or [])]
+            rects = [fitz.Rect(r) for r in (geom.get(legacy_key, []) or [])]
             for semantic_key, rect in zip(semantic_keys, rects):
                 targets[semantic_key].append(rect)
         return targets
@@ -1958,9 +1816,9 @@ class FormAlchemistEngine:
     def _legacy_geom_from_semantic_targets(self, targets=None):
         targets = self._normalize_semantic_targets(targets)
         return {
-            "names": [_safe_rect(r) for key in NAME_TARGET_KEYS for r in targets.get(key, [])],
-            "dob": [_safe_rect(r) for key in DOB_TARGET_KEYS for r in targets.get(key, [])],
-            "phil": [_safe_rect(r) for r in targets.get("record_identity.membership_number", [])],
+            "names": [fitz.Rect(r) for key in NAME_TARGET_KEYS for r in targets.get(key, [])],
+            "dob": [fitz.Rect(r) for key in DOB_TARGET_KEYS for r in targets.get(key, [])],
+            "phil": [fitz.Rect(r) for r in targets.get("record_identity.membership_number", [])],
         }
 
     def _set_semantic_targets(self, targets=None):
@@ -1983,7 +1841,7 @@ class FormAlchemistEngine:
                 rects = []
                 for rect in (target_map.get(key, []) or []):
                     try:
-                        rects.append(_safe_rect(rect))
+                        rects.append(fitz.Rect(rect))
                     except Exception:
                         continue
                 page_targets[key] = rects
@@ -1996,7 +1854,7 @@ class FormAlchemistEngine:
         page_targets = self.semantic_target_overrides.get(int(page_idx), {})
         if isinstance(page_targets, dict):
             for key in SEMANTIC_TARGET_KEYS:
-                rects = [_safe_rect(r) for r in (page_targets.get(key, []) or [])]
+                rects = [fitz.Rect(r) for r in (page_targets.get(key, []) or [])]
                 if rects:
                     merged[key] = rects
         return self._normalize_semantic_targets(merged)
@@ -2051,7 +1909,7 @@ class FormAlchemistEngine:
                     continue
                 kept.append(existing_rect)
             page_targets[key] = kept
-        page_targets[target_key] = [_safe_rect(r) for r in selected_rects]
+        page_targets[target_key] = [fitz.Rect(r) for r in selected_rects]
         self.semantic_target_overrides[page_idx] = page_targets
         merged_targets = self._apply_semantic_target_overrides(page_idx, self._current_semantic_targets_for_page(page_idx))
         self.semantic_targets_by_page[page_idx] = self._normalize_semantic_targets(merged_targets)
@@ -2092,7 +1950,7 @@ class FormAlchemistEngine:
     def _semantic_rects(self, *keys):
         out = []
         for key in keys:
-            out.extend([_safe_rect(r) for r in self.semantic_targets.get(key, [])])
+            out.extend([fitz.Rect(r) for r in self.semantic_targets.get(key, [])])
         return out
 
     # --------------------------------------------------------
@@ -2389,11 +2247,11 @@ class FormAlchemistEngine:
 
     def _cache_detection_for_page(self, page_idx):
         page_idx = int(page_idx)
-        self.boxes_by_page[page_idx] = [_safe_rect(r) for r in self.all_boxes]
+        self.boxes_by_page[page_idx] = [fitz.Rect(r) for r in self.all_boxes]
         self.box_types_by_page[page_idx] = list(self.box_types)
         geom_copy = {}
         for key, rects in (self.geom or {}).items():
-            geom_copy[key] = [_safe_rect(r) for r in rects]
+            geom_copy[key] = [fitz.Rect(r) for r in rects]
         self.geom_by_page[page_idx] = geom_copy
         self.semantic_targets_by_page[page_idx] = self._normalize_semantic_targets(self.semantic_targets)
         sig = self._settings_signature()
@@ -2443,7 +2301,7 @@ class FormAlchemistEngine:
         cached_sig = str(self.boxes_settings_signature_by_page.get(page_idx, "") or "")
         if required_signature is not None and cached_sig != str(required_signature or ""):
             return False
-        self.all_boxes = [_safe_rect(r) for r in self.boxes_by_page.get(page_idx, [])]
+        self.all_boxes = [fitz.Rect(r) for r in self.boxes_by_page.get(page_idx, [])]
         self.box_types = list(self.box_types_by_page.get(page_idx, []))
         geom_src = self.geom_by_page.get(page_idx, {}) or {}
         semantic_src = self.semantic_targets_by_page.get(page_idx)
@@ -2451,7 +2309,7 @@ class FormAlchemistEngine:
             self.semantic_targets = self._normalize_semantic_targets(semantic_src)
             self.geom = self._legacy_geom_from_semantic_targets(self.semantic_targets)
         else:
-            self.geom = {k: [_safe_rect(r) for r in rects] for k, rects in geom_src.items()}
+            self.geom = {k: [fitz.Rect(r) for r in rects] for k, rects in geom_src.items()}
             self.semantic_targets = self._semantic_targets_from_geom(self.geom)
         self.detected_page_idx = page_idx
         self.detected_settings_signature = cached_sig or self._settings_signature()
@@ -3197,13 +3055,13 @@ class FormAlchemistEngine:
         if rects:
             out = []
             for r in rects:
-                out.append(_safe_rect(r))
+                out.append(r if isinstance(r, fitz.Rect) else fitz.Rect(*r))
             return sorted(out, key=lambda rr: (round(rr.y0, 3), rr.x0))
 
         r = item.get("rect")
         if r is None:
             return []
-        return [_safe_rect(r)]
+        return [r if isinstance(r, fitz.Rect) else fitz.Rect(*r)]
 
     def _rects_refer_to_same_target(self, a, b, tol=0.01):
         if (
@@ -3471,7 +3329,7 @@ class FormAlchemistEngine:
         val = val.upper()
 
         rects = rect_or_rects if isinstance(rect_or_rects, list) else [rect_or_rects]
-        rects = [_safe_rect(r) for r in rects]
+        rects = [r if isinstance(r, fitz.Rect) else fitz.Rect(*r) for r in rects]
         rects = sorted(rects, key=lambda rr: (round(rr.y0, 3), rr.x0))
         if not rects:
             return
@@ -3507,7 +3365,7 @@ class FormAlchemistEngine:
             return rect
         if isinstance(rect, RectCompat):
             return rect
-        return _safe_rect(rect)
+        return fitz.Rect(*rect)
 
     def _collect_overlay_ops(self, patient_name, page_idx=0, record_key=None):
         self._ensure_detection_for_page(page_idx=page_idx)
@@ -3770,13 +3628,13 @@ class FormAlchemistEngine:
                 if isinstance(r, fitz.Rect):
                     rects.append(r)
                 elif isinstance(r, (list, tuple)) and len(r) == 4:
-                    rects.append(_safe_rect(r))
+                    rects.append(fitz.Rect(*r))
         elif item.get("rect") is not None:
             r = item.get("rect")
             if isinstance(r, fitz.Rect):
                 rects = [r]
             elif isinstance(r, (list, tuple)) and len(r) == 4:
-                rects = [_safe_rect(r)]
+                rects = [fitz.Rect(*r)]
 
         rects = sorted(rects, key=lambda rr: (round(rr.y0, 3), rr.x0, rr.x1, rr.y1))
 
@@ -3830,7 +3688,7 @@ class FormAlchemistEngine:
             out[map_key].append({
                 "column": self._norm_str(e.get("column", "")),
                 "trigger": self._norm_str(e.get("trigger", "")),
-                "rects": [_safe_rect(r) for r in e.get("rects", [])],
+                "rects": [r if isinstance(r, fitz.Rect) else fitz.Rect(*r) for r in e.get("rects", [])],
                 "page": int(e.get("page", 0)),
                 "g": bool(e.get("g", False)),
                 "n": int(e.get("n", 1)),
@@ -3885,7 +3743,7 @@ class FormAlchemistEngine:
                 continue
 
     def _serialize_rect(self, rect):
-        rect = rect if isinstance(rect, fitz.Rect) else _safe_rect(rect)
+        rect = rect if isinstance(rect, fitz.Rect) else fitz.Rect(*rect)
         return [float(rect.x0), float(rect.y0), float(rect.x1), float(rect.y1)]
 
     def _serialize_rects(self, rects):
@@ -4065,7 +3923,7 @@ class FormAlchemistEngine:
         return ctx
 
     def _rect_signature(self, rect, rect_type=""):
-        rect = rect if isinstance(rect, fitz.Rect) else _safe_rect(rect)
+        rect = rect if isinstance(rect, fitz.Rect) else fitz.Rect(*rect)
         return f"{rect_type}:{rect.x0:.3f}:{rect.y0:.3f}:{rect.x1:.3f}:{rect.y1:.3f}"
 
     def _normalize_learning_weight(self, reason="manual", approved=False, learning_weight=None):
@@ -4099,8 +3957,8 @@ class FormAlchemistEngine:
         return round(float(effective), 6), trust_class
 
     def _rect_iou(self, a, b):
-        ra = a if isinstance(a, fitz.Rect) else _safe_rect(a)
-        rb = b if isinstance(b, fitz.Rect) else _safe_rect(b)
+        ra = a if isinstance(a, fitz.Rect) else fitz.Rect(*a)
+        rb = b if isinstance(b, fitz.Rect) else fitz.Rect(*b)
         ix0 = max(ra.x0, rb.x0)
         iy0 = max(ra.y0, rb.y0)
         ix1 = min(ra.x1, rb.x1)
@@ -4114,8 +3972,8 @@ class FormAlchemistEngine:
         return float(inter / denom) if denom > 0 else 0.0
 
     def _rect_change_metrics(self, raw_rect, final_rect):
-        r0 = raw_rect if isinstance(raw_rect, fitz.Rect) else _safe_rect(raw_rect)
-        r1 = final_rect if isinstance(final_rect, fitz.Rect) else _safe_rect(final_rect)
+        r0 = raw_rect if isinstance(raw_rect, fitz.Rect) else fitz.Rect(*raw_rect)
+        r1 = final_rect if isinstance(final_rect, fitz.Rect) else fitz.Rect(*final_rect)
         raw_w = max(1.0, r0.width)
         raw_h = max(1.0, r0.height)
         final_w = max(1.0, r1.width)
@@ -4575,7 +4433,7 @@ class FormAlchemistEngine:
         for page_idx, target_map in (self.semantic_target_overrides or {}).items():
             page_payload = {}
             for key in SEMANTIC_TARGET_KEYS:
-                rects = [_safe_rect(r) for r in (target_map.get(key, []) or [])]
+                rects = [fitz.Rect(r) for r in (target_map.get(key, []) or [])]
                 if rects:
                     page_payload[key] = [[r.x0, r.y0, r.x1, r.y1] for r in rects]
             if page_payload:
@@ -4688,11 +4546,11 @@ class FormAlchemistEngine:
                 if item.get("rects"):
                     for coords in item.get("rects", []):
                         if isinstance(coords, (list, tuple)) and len(coords) == 4:
-                            rects.append(_safe_rect(coords))
+                            rects.append(fitz.Rect(*coords))
                 else:
                     rect_coords = item.get("rect", [0, 0, 0, 0])
                     if isinstance(rect_coords, (list, tuple)) and len(rect_coords) == 4:
-                        rects = [_safe_rect(rect_coords)]
+                        rects = [fitz.Rect(*rect_coords)]
 
                 self.custom_mappings[k].append({
                     "column": str(item.get("column", "")),
@@ -4719,11 +4577,8 @@ class FormAlchemistEngine:
 
         if keep_current_detection:
             merged_cfg = dict(current_cfg)
-            incoming_ui = dict(incoming_cfg.get("ui_state", {}) or {}) if isinstance(incoming_cfg, dict) else {}
             current_ui = dict(merged_cfg.get("ui_state", {}) or {})
-            if incoming_ui:
-                current_ui.update(incoming_ui)
-                merged_cfg["ui_state"] = current_ui
+            merged_cfg["ui_state"] = current_ui
             if isinstance(incoming_cfg, dict):
                 for meta_key in ("semantic_target_schema", "record_label_column", "record_key_column"):
                     if meta_key in incoming_cfg:
@@ -4815,6 +4670,20 @@ class FormAlchemistEngine:
         if not rects:
             return
 
+        def draw_text_into_roi(single_val, abs_x, abs_y, x0, y0, x1, y1, font_scale, thickness):
+            x0 = max(int(x0), 0)
+            y0 = max(int(y0), 0)
+            x1 = min(int(x1), int(img.shape[1]))
+            y1 = min(int(y1), int(img.shape[0]))
+            if x1 <= x0 or y1 <= y0:
+                return
+            roi = img[y0:y1, x0:x1]
+            if roi.size == 0:
+                return
+            rel_x = int(abs_x - x0)
+            rel_y = int(abs_y - y0)
+            cv2.putText(roi, single_val, (rel_x, rel_y), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), thickness, cv2.LINE_AA)
+
         def draw_single(single_val, rect):
             target_w = max(int(rect.width * preview_zoom), 1)
             target_h = max(int(rect.height * preview_zoom), 1)
@@ -4823,7 +4692,7 @@ class FormAlchemistEngine:
             (tw, th), _ = cv2.getTextSize(single_val, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
             x = int((rect.x0 * preview_zoom) + max((target_w - tw) / 2.0, 1.0) + (ox * preview_zoom))
             y = int((rect.y1 * preview_zoom) - (target_h * 0.2) + (oy * preview_zoom))
-            cv2.putText(img, single_val, (x, y), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), thickness, cv2.LINE_AA)
+            draw_text_into_roi(single_val, x, y, (rect.x0 * preview_zoom) + (ox * preview_zoom) + 1, rect.y0 * preview_zoom, (rect.x1 * preview_zoom) + (ox * preview_zoom) - 1, rect.y1 * preview_zoom + (oy * preview_zoom), font_scale, thickness)
 
         def draw_grid(grid_val, rect, cells):
             cells = max(int(cells), 1)
@@ -4833,8 +4702,10 @@ class FormAlchemistEngine:
             cell_w = (rect.width * preview_zoom) / cells
             y = int((rect.y1 * preview_zoom) - (target_h * 0.2) + (oy * preview_zoom))
             for i, ch in enumerate(grid_val[:cells]):
-                x = int((rect.x0 * preview_zoom) + (i * cell_w) + (cell_w * 0.25) + (ox * preview_zoom))
-                cv2.putText(img, ch, (x, y), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), thickness, cv2.LINE_AA)
+                x0 = (rect.x0 * preview_zoom) + (i * cell_w) + (ox * preview_zoom)
+                x1 = x0 + cell_w
+                x = int(x0 + (cell_w * 0.25))
+                draw_text_into_roi(str(ch), x, y, x0 + 1, rect.y0 * preview_zoom, x1 - 1, rect.y1 * preview_zoom + (oy * preview_zoom), font_scale, thickness)
 
         if is_grid and len(rects) > 1:
             counts = self._allocate_cells_by_width(rects, grid_n)
@@ -5263,7 +5134,7 @@ class InteractivePreview(Image):
             if self.collide_point(*touch.pos):
                 direction = "in" if getattr(touch, "button", "") == "scrollup" else "out"
                 if callable(self.zoom_request_callback) and getattr(touch, "button", "") in ("scrollup", "scrolldown"):
-                    _safe_invoke(self.zoom_request_callback, "step", direction, context="Preview zoom request")
+                    self.zoom_request_callback("step", direction)
                     return True
             return super().on_touch_down(touch)
 
@@ -5292,19 +5163,19 @@ class InteractivePreview(Image):
 
             if hit is not None and tap_count >= 2:
                 if callable(self.box_double_tap_callback):
-                    _safe_invoke(self.box_double_tap_callback, hit, context="Preview double tap")
+                    self.box_double_tap_callback(hit)
                     self._recent_taps = []
                     return True
 
             if hit is None and pt is not None and tap_count >= 3:
                 if callable(self.zoom_request_callback):
-                    _safe_invoke(self.zoom_request_callback, "step", "in", context="Preview zoom request")
+                    self.zoom_request_callback("step", "in")
                     self._recent_taps = []
                     return True
 
             if hit is not None:
                 if callable(self.box_tap_callback):
-                    _safe_invoke(self.box_tap_callback, hit, context="Preview tap")
+                    self.box_tap_callback(hit)
                 return True
             return super().on_touch_down(touch)
 
@@ -5395,7 +5266,7 @@ class InteractivePreview(Image):
                 cur_dist = math.hypot(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1])
                 if self._pinch_start_dist and cur_dist > 0:
                     factor = cur_dist / float(max(self._pinch_start_dist, 1e-6))
-                    _safe_invoke(self.zoom_request_callback, "scale", self._pinch_start_scale * factor, context="Preview pinch scale")
+                    self.zoom_request_callback("scale", self._pinch_start_scale * factor)
                     return True
         return super().on_touch_move(touch)
 
@@ -5425,25 +5296,25 @@ class InteractivePreview(Image):
                 self._pinch_last_midpoint = None
                 self._release_android_tracked_grabs()
                 if had_multi_touch and callable(self.zoom_request_callback):
-                    _safe_invoke(self.zoom_request_callback, "gesture_end", None, context="Preview gesture end")
+                    self.zoom_request_callback("gesture_end", None)
 
             if candidate and (not moved) and (not had_multi_touch):
                 hit = candidate.get("hit")
                 tap_count = self._register_tap(float(candidate.get("x", touch.x)), float(candidate.get("y", touch.y)))
                 if hit is not None and tap_count >= 2:
                     if callable(self.box_double_tap_callback):
-                        _safe_invoke(self.box_double_tap_callback, hit, context="Preview double tap")
+                        self.box_double_tap_callback(hit)
                         self._recent_taps = []
                         self._set_pointed_box(hit, notify=True)
                         return True
                 if hit is not None:
                     if callable(self.box_tap_callback):
-                        _safe_invoke(self.box_tap_callback, hit, context="Preview tap")
+                        self.box_tap_callback(hit)
                         self._set_pointed_box(hit, notify=True)
                         return True
                 if hit is None and tap_count >= 3:
                     if callable(self.zoom_request_callback):
-                        _safe_invoke(self.zoom_request_callback, "step", "in", context="Preview zoom request")
+                        self.zoom_request_callback("step", "in")
                         self._recent_taps = []
                         return True
             elif not had_multi_touch:
@@ -7336,23 +7207,27 @@ class FormAlchemistApp(MDApp):
         if preview is None:
             return
         tex = getattr(preview, "texture", None)
-        try:
-            if tex is not None:
-                self._update_preview_size(preview, tex)
-                self._refresh_preview_boxes_for_current_view()
-            self._sync_preview_stack_size()
-            if getattr(self, "ui_mobile", False):
-                wrap = getattr(self, "preview_wrap", None)
-                mode = str(getattr(self, "preview_zoom_mode", "fit_width") or "fit_width")
-                if tex is not None and wrap is not None and bool(getattr(self, "_mobile_zoom_bootstrap_pending", False)):
-                    wrap_w = float(getattr(wrap, "width", 0) or 0)
-                    preview_w = float(getattr(preview, "width", 0) or 0)
-                    if wrap_w > 1 and preview_w > 1 and mode == "fit_width":
-                        self._mobile_zoom_bootstrap_pending = False
-        except Exception as e:
-            traceback.print_exc()
-            self.set_status(f"Preview viewport refresh error:\n{e}", kind="error", force=True)
-        Clock.schedule_once(self._perform_preview_resync, 0.08 if getattr(self, "ui_mobile", False) else 0.04)
+        if tex is not None:
+            self._update_preview_size(preview, tex)
+            self._refresh_preview_boxes_for_current_view()
+        self._sync_preview_stack_size()
+        if getattr(self, "ui_mobile", False):
+            wrap = getattr(self, "preview_wrap", None)
+            mode = str(getattr(self, "preview_zoom_mode", "fit_width") or "fit_width")
+            if tex is not None and wrap is not None and bool(getattr(self, "_mobile_zoom_bootstrap_pending", False)):
+                wrap_w = float(getattr(wrap, "width", 0) or 0)
+                preview_w = float(getattr(preview, "width", 0) or 0)
+                bootstrap_fit = (mode != "manual")
+                if wrap_w > dp(220) and preview_w > 0 and preview_w < (wrap_w * 0.94):
+                    bootstrap_fit = True
+                if bootstrap_fit:
+                    self.preview_zoom_mode = "fit_width"
+                    self._update_preview_size(preview, tex)
+                    self._sync_preview_stack_size()
+                self._mobile_zoom_bootstrap_pending = False
+            if wrap is not None and str(getattr(self, "preview_zoom_mode", "fit_width") or "fit_width") in ("fit_width", "fit_page"):
+                wrap.scroll_x = 0.0
+                wrap.scroll_y = 1.0
 
     def _update_preview_size(self, instance, texture):
         if not texture:
@@ -7455,7 +7330,7 @@ class FormAlchemistApp(MDApp):
         self._apply_preview_zoom(mode="fit_page")
 
     def _update_selection_inspector(self):
-        ids = _normalize_box_ids(getattr(self.engine, "selected_box_ids", []) or [])
+        ids = sorted(set(int(x) for x in getattr(self.engine, "selected_box_ids", []) if isinstance(x, int) or str(x).isdigit()))
         if hasattr(self, "inspector_selected_lbl") and self.inspector_selected_lbl is not None:
             self.inspector_selected_lbl.text = (", ".join(str(i) for i in ids) if ids else "None")
         if hasattr(self, "inspector_count_lbl") and self.inspector_count_lbl is not None:
@@ -8020,7 +7895,7 @@ class FormAlchemistApp(MDApp):
     def _open_revision_from_browser(self, revision_id, browser_popup=None):
         if browser_popup is not None:
             try:
-                browser__safe_popup_dismiss(popup)
+                browser_popup.dismiss()
             except Exception:
                 pass
         revision = self.engine.learning_storage.load_revision(revision_id)
@@ -8047,7 +7922,7 @@ class FormAlchemistApp(MDApp):
         self.refresh_learning_ui()
         if browser_popup is not None:
             try:
-                browser__safe_popup_dismiss(popup)
+                browser_popup.dismiss()
             except Exception:
                 pass
         self.set_status(f"Current revision set to:\n{revision_id}")
@@ -8364,11 +8239,7 @@ class FormAlchemistApp(MDApp):
             self.engine.settings["Ext_High"] = float(self.ext_high.text)
             self.engine.settings["C_FillMin"] = float(self.c_fill.text)
             self.engine.settings["C_Eps"] = float(self.c_eps.text)
-            use_extent_chk = getattr(self, "use_extent_chk", None)
-            if use_extent_chk is not None:
-                self.engine.settings["Use_Extent"] = bool(getattr(use_extent_chk, "active", False))
-            else:
-                self.engine.settings["Use_Extent"] = bool(int(getattr(self, "use_extent", None).text.strip() or "0")) if getattr(self, "use_extent", None) is not None else False
+            self.engine.settings["Use_Extent"] = bool(getattr(self, "use_extent_chk", None).active if hasattr(self, "use_extent_chk") else int(self.use_extent.text.strip() or "0"))
         except Exception as e:
             raise ValueError(f"Invalid settings input: {e}")
 
@@ -8389,68 +8260,73 @@ class FormAlchemistApp(MDApp):
         
     def push_engine_settings_to_ui(self):
         s = self.engine.settings
-        widget_values = {
-            "f_area": s["F_Area"],
-            "f_minw": s["F_MinW"],
-            "f_minh": s["F_MinH"],
-            "f_close": s["F_Close"],
-            "line_minw": s["Line_MinW"],
-            "line_maxw": s["Line_MaxW"],
-            "c_strict": s["C_Strict"],
-            "c_size_min": s["C_Size"][0],
-            "c_size_max": s["C_Size"][1],
-            "c_border": s["C_Border"],
-            "c_inner": s["C_Inner"],
-            "roi_max": s["ROI_Max"],
-            "c_open": s["C_Open"],
-            "c_close": s["C_Close"],
-            "c_band": s["C_BandPct"],
-            "c_aspect": s["C_AspectTol"],
-            "ext_low": s["Ext_Low"],
-            "ext_high": s["Ext_High"],
-            "c_fill": s["C_FillMin"],
-            "c_eps": s["C_Eps"],
-        }
-        for attr, value in widget_values.items():
-            _safe_set_widget_text(getattr(self, attr, None), value)
-        if not _safe_set_widget_active(getattr(self, "use_extent_chk", None), bool(s["Use_Extent"])):
-            _safe_set_widget_text(getattr(self, "use_extent", None), "1" if s["Use_Extent"] else "0")
+        self.f_area.text = str(s["F_Area"])
+        self.f_minw.text = str(s["F_MinW"])
+        self.f_minh.text = str(s["F_MinH"])
+        self.f_close.text = str(s["F_Close"])
+        self.line_minw.text = str(s["Line_MinW"])
+        self.line_maxw.text = str(s["Line_MaxW"])
+
+        self.c_strict.text = str(s["C_Strict"])
+        self.c_size_min.text = str(s["C_Size"][0])
+        self.c_size_max.text = str(s["C_Size"][1])
+        self.c_border.text = str(s["C_Border"])
+        self.c_inner.text = str(s["C_Inner"])
+        self.roi_max.text = str(s["ROI_Max"])
+
+        self.c_open.text = str(s["C_Open"])
+        self.c_close.text = str(s["C_Close"])
+        self.c_band.text = str(s["C_BandPct"])
+        self.c_aspect.text = str(s["C_AspectTol"])
+        self.ext_low.text = str(s["Ext_Low"])
+        self.ext_high.text = str(s["Ext_High"])
+        self.c_fill.text = str(s["C_FillMin"])
+        self.c_eps.text = str(s["C_Eps"])
+        
+        if hasattr(self, "use_extent_chk"):
+            self.use_extent_chk.active = bool(s["Use_Extent"])
+        elif hasattr(self, "use_extent"):
+            self.use_extent.text = "1" if s["Use_Extent"] else "0"
 
     def refresh_patient_and_column_lists(self):
-        patient_spinner = getattr(self, "patient_spinner", None)
-        column_spinner = getattr(self, "column_spinner", None)
         if self.engine.df is None or self.engine.df.empty:
-            if patient_spinner is not None:
-                patient_spinner.values = []
-                patient_spinner.text = RECORD_SELECT_TEXT
-            if column_spinner is not None:
-                column_spinner.values = []
-                column_spinner.text = COLUMN_SELECT_TEXT
+            self.patient_spinner.values = []
+            self.column_spinner.values = []
+            self.patient_spinner.text = RECORD_SELECT_TEXT
+            self.column_spinner.text = COLUMN_SELECT_TEXT
             return
 
         label_col = "_RECORD_LABEL" if "_RECORD_LABEL" in self.engine.df.columns else "_DISPLAY_NAME"
-        patient_names = sorted([str(x).strip() for x in self.engine.df[label_col].dropna().tolist() if str(x).strip()])
-        previous_label = self.selected_record() if patient_spinner is not None else None
+        patient_names = sorted([
+            str(x).strip()
+            for x in self.engine.df[label_col].dropna().tolist()
+            if str(x).strip()
+        ])
+        previous_label = self.selected_record() if hasattr(self, "patient_spinner") else None
         pending_key = str(getattr(self, "_pending_restored_record_key", "") or "").strip()
         pending_label = str(getattr(self, "_pending_restored_record_label", "") or "").strip()
         resolved_label = self.engine.resolve_record_label(record_key=pending_key, fallback_label=pending_label or previous_label or "")
 
-        if patient_spinner is not None:
-            patient_spinner.values = patient_names
-            patient_spinner.text = resolved_label if resolved_label and resolved_label in patient_names else (patient_names[0] if patient_names else RECORD_SELECT_TEXT)
+        self.patient_spinner.values = patient_names
+        if resolved_label and resolved_label in patient_names:
+            self.patient_spinner.text = resolved_label
+        else:
+            self.patient_spinner.text = patient_names[0] if patient_names else RECORD_SELECT_TEXT
 
         self._pending_restored_record_key = ""
         self._pending_restored_record_label = ""
 
         cols = sorted([str(c) for c in self.engine.df.columns.tolist()])
-        previous_column = _safe_widget_text(column_spinner, "")
-        if column_spinner is not None:
-            column_spinner.values = cols
-            column_spinner.text = previous_column if previous_column and previous_column in cols else (cols[0] if cols else COLUMN_SELECT_TEXT)
+        previous_column = str(getattr(self, "column_spinner", None).text or "").strip() if hasattr(self, "column_spinner") else ""
+        self.column_spinner.values = cols
+        if previous_column and previous_column in cols:
+            self.column_spinner.text = previous_column
+        else:
+            self.column_spinner.text = cols[0] if cols else COLUMN_SELECT_TEXT
         self.refresh_backend_capabilities_ui()
 
     def selected_record(self):
-        val = _safe_widget_text(getattr(self, "patient_spinner", None), "")
+        val = self.patient_spinner.text.strip()
         if not val or val in {RECORD_SELECT_TEXT, "Select Patient"}:
             return None
         return val
@@ -8504,13 +8380,8 @@ class FormAlchemistApp(MDApp):
         page_idx = self.current_page_idx() if page_idx is None else int(page_idx)
         self._set_page_inputs_text(page_idx)
         record = self.selected_record()
-        try:
-            self.apply_ui_settings_to_engine()
-            self._prepare_page_context(page_idx)
-        except Exception as e:
-            traceback.print_exc()
-            self.set_status(f"{reason} error:\n{e}", kind="error", force=True)
-            return False
+        self.apply_ui_settings_to_engine()
+        self._prepare_page_context(page_idx)
         mode = self._session_preview_mode(page_idx)
 
         if mode == "android_preview":
@@ -8860,14 +8731,11 @@ class FormAlchemistApp(MDApp):
         page_idx = self.current_page_idx()
         patient = self.selected_patient()
         has_data = bool(getattr(self.engine, "df", None) is not None and not self.engine.df.empty)
+        has_boxes = bool(getattr(self.engine, "all_boxes", None))
 
         if abs(desired_zoom - last_zoom) / max(last_zoom, 1e-6) < 0.035:
-            try:
-                self._refresh_preview_boxes_for_current_view()
-                Clock.schedule_once(lambda dt: self._restore_preview_anchor(anchor), 0)
-            except Exception as e:
-                traceback.print_exc()
-                self.set_status(f"Preview resync error:\n{e}", kind="error", force=True)
+            self._refresh_preview_boxes_for_current_view()
+            Clock.schedule_once(lambda dt: self._restore_preview_anchor(anchor), 0)
             return
 
         try:
@@ -8880,29 +8748,24 @@ class FormAlchemistApp(MDApp):
             else:
                 img = self.engine.get_processed_preview_pixmap(patient_name=patient, page_idx=page_idx, preview_zoom=desired_zoom)
                 boxes_payload = self._build_preview_boxes_payload(page_idx=page_idx, preview_zoom=desired_zoom)
-            self.render_preview_image(img, boxes_payload=boxes_payload, page_idx=page_idx, preview_zoom=desired_zoom)
+            self.render_preview_image(
+                img,
+                boxes_payload=boxes_payload,
+                page_idx=page_idx,
+                preview_zoom=desired_zoom,
+            )
             self._sync_box_selection_ui()
             Clock.schedule_once(lambda dt: self._restore_preview_anchor(anchor), 0)
-        except Exception as e:
-            traceback.print_exc()
-            try:
-                self._refresh_preview_boxes_for_current_view()
-                Clock.schedule_once(lambda dt: self._restore_preview_anchor(anchor), 0)
-            except Exception as inner:
-                traceback.print_exc()
-                self.set_status(f"Preview resync error:\n{inner or e}", kind="error", force=True)
+        except Exception:
+            self._refresh_preview_boxes_for_current_view()
+            Clock.schedule_once(lambda dt: self._restore_preview_anchor(anchor), 0)
 
     def _focus_selected_preview_box(self, *_):
-        ids = _normalize_box_ids(getattr(self.engine, "selected_box_ids", []) or [])
+        ids = sorted(set(int(x) for x in getattr(self.engine, "selected_box_ids", []) if isinstance(x, int) or str(x).isdigit()))
         if not ids:
+            self.set_status("Select a preview box first.")
             return
-        preview = getattr(self, "preview", None)
-        if preview is None or not hasattr(preview, "focus_box_by_id"):
-            return
-        try:
-            preview.focus_box_by_id(ids[0])
-        except Exception:
-            pass
+        self._focus_preview_box(ids[0])
 
     def _find_mapping_for_box(self, box_id, page_idx):
         if box_id < 0 or box_id >= len(self.engine.all_boxes):
@@ -8924,27 +8787,34 @@ class FormAlchemistApp(MDApp):
         return None
 
     def _sync_box_selection_ui(self):
-        ids = _normalize_box_ids(getattr(self.engine, "selected_box_ids", []) or [])
+        ids = sorted(set(int(x) for x in self.engine.selected_box_ids if isinstance(x, int) or str(x).isdigit()))
         self.engine.selected_box_ids = ids
         if hasattr(self, "_page_selected_box_ids"):
             self._page_selected_box_ids[int(self.current_page_idx())] = list(ids)
             self._active_selection_page_idx = int(self.current_page_idx())
-        _safe_set_widget_text(getattr(self, "box_ids_input", None), ",".join(str(i) for i in ids))
+        if hasattr(self, "box_ids_input") and self.box_ids_input is not None:
+            self.box_ids_input.text = ",".join(str(i) for i in ids)
         preview = getattr(self, "preview", None)
         if preview is not None and hasattr(preview, "set_selected_ids"):
-            try:
-                preview.set_selected_ids(ids)
-            except Exception:
-                pass
+            preview.set_selected_ids(ids)
 
         if not ids:
             self._reset_mapping_editor_state(clear_box_ids=False)
+            if hasattr(self, "preview_info") and self.preview_info is not None:
+                if getattr(self, "ui_mobile", False):
+                    mode_txt = "Select ON" if bool(getattr(self, "mobile_select_mode", False)) else "Select OFF"
+                    self.preview_info.text = f"Preview ready. {mode_txt} • Tap to inspect • Double-tap to link."
+                else:
+                    self.preview_info.text = "Preview ready. Tap to inspect • Double-tap a box to link it."
             self._update_selection_inspector()
             self._update_bottom_statusbar()
             return
 
         first = ids[0]
         self._load_mapping_into_editor(first)
+        mapping = self.engine.describe_box_mapping(first, self.current_page_idx())
+        if hasattr(self, "preview_info") and self.preview_info is not None:
+            self.preview_info.text = f"Selected: {ids} • {mapping}"
         self._update_selection_inspector()
         self._update_bottom_statusbar()
         try:
@@ -8988,14 +8858,20 @@ class FormAlchemistApp(MDApp):
         if mapping:
             col = str(mapping.get("column", "")).strip()
             trig = str(mapping.get("trigger", "")).strip()
-            _safe_set_widget_text(getattr(self, "column_spinner", None), col if col else COLUMN_SELECT_TEXT)
-            _safe_set_widget_text(getattr(self, "trigger_input", None), trig)
-            if not _safe_set_widget_active(getattr(self, "grid_flag_chk", None), bool(mapping.get("g", False))):
-                _safe_set_widget_text(getattr(self, "grid_flag_input", None), "1" if bool(mapping.get("g", False)) else "0")
-            _safe_set_widget_text(getattr(self, "grid_n_input", None), _safe_int_value(mapping.get("n", 1), 1))
+            if col:
+                self.column_spinner.text = col
+            else:
+                self.column_spinner.text = COLUMN_SELECT_TEXT
+            self.trigger_input.text = trig
+            if hasattr(self, "grid_flag_chk"):
+                self.grid_flag_chk.active = bool(mapping.get("g", False))
+            else:
+                self.grid_flag_input.text = "1" if bool(mapping.get("g", False)) else "0"
+            self.grid_n_input.text = str(int(mapping.get("n", 1)))
         else:
             self._reset_mapping_editor_state(clear_box_ids=False)
         return mapping
+
 
     def _sync_mobile_tools_layout(self, *_):
         if not getattr(self, "ui_mobile", False):
@@ -9097,7 +8973,7 @@ class FormAlchemistApp(MDApp):
 
     def _toggle_mobile_inspect_panel(self, *_):
         hud = getattr(self, "preview_hud", None)
-        sel_ids = _normalize_box_ids(getattr(self.engine, "selected_box_ids", []) or []) if hasattr(self, "engine") else []
+        sel_ids = sorted(set(int(x) for x in getattr(self.engine, "selected_box_ids", []) if isinstance(x, int) or str(x).isdigit())) if hasattr(self, "engine") else []
         if not sel_ids:
             self._toggle_mobile_quick_rail()
             return
@@ -9550,7 +9426,7 @@ class FormAlchemistApp(MDApp):
     def _refresh_mobile_hud_restore_button(self, *_):
         btn = getattr(self, "btn_show_hud", None)
         hud = getattr(self, "preview_hud", None)
-        sel_ids = _normalize_box_ids(getattr(self.engine, "selected_box_ids", []) or []) if hasattr(self, "engine") else []
+        sel_ids = sorted(set(int(x) for x in getattr(self.engine, "selected_box_ids", []) if isinstance(x, int) or str(x).isdigit())) if hasattr(self, "engine") else []
         if btn is not None:
             btn.disabled = True
             btn.opacity = 0
@@ -9588,15 +9464,12 @@ class FormAlchemistApp(MDApp):
             try:
                 hud.toggle_collapsed()
             except Exception:
-                try:
-                    hud._collapsed = False
-                    hud._refresh_collapse_state()
-                except Exception:
-                    traceback.print_exc()
+                hud._collapsed = False
+                hud._refresh_collapse_state()
         self._refresh_mobile_hud_restore_button()
 
     def _update_preview_hud(self, hit=None):
-        sel_ids = _normalize_box_ids(getattr(self.engine, "selected_box_ids", []) or [])
+        sel_ids = sorted(set(int(x) for x in getattr(self.engine, "selected_box_ids", []) if isinstance(x, int) or str(x).isdigit()))
         if hasattr(self, "btn_hud_map") and self.btn_hud_map is not None:
             self.btn_hud_map.disabled = not bool(sel_ids)
         if hasattr(self, "btn_hud_clear") and self.btn_hud_clear is not None:
@@ -9657,7 +9530,7 @@ class FormAlchemistApp(MDApp):
         self._refresh_mobile_hud_restore_button()
 
     def _open_mapping_from_hud(self, *_):
-        ids = _normalize_box_ids(getattr(self.engine, "selected_box_ids", []) or [])
+        ids = sorted(set(int(x) for x in getattr(self.engine, "selected_box_ids", []) if isinstance(x, int) or str(x).isdigit()))
         if not ids:
             self.set_status("Select a preview box before opening the mapping HUD action.")
             return
@@ -9837,7 +9710,7 @@ class FormAlchemistApp(MDApp):
             self._style_popup_card(card, palette.get("surface_alt", (0.11, 0.135, 0.185, 1)), radius=dp(18))
             content.add_widget(card)
 
-        extent_toggle = CheckBox(active=_safe_widget_active(getattr(self, "use_extent_chk", None), False))
+        extent_toggle = CheckBox(active=bool(getattr(self.use_extent_chk, "active", False)))
         extent_row_h = dp(42)
         extent_row = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint_y=None, height=extent_row_h)
         extent_lbl = Label(text=detection_ui_label("use_extent", "Use Extent"), color=palette.get("text", (0.93, 0.96, 1.0, 1)), halign="left", valign="middle", font_size=dp(11))
@@ -9914,10 +9787,10 @@ class FormAlchemistApp(MDApp):
                     spec = payload["spec"]
                     as_int = spec["widget_type"] == "int"
                     new_text = _format_slider_value(slider.value, spec["decimals"], as_int)
-                    _safe_set_widget_text(getattr(self, key, None), new_text)
-                _safe_set_widget_active(getattr(self, "use_extent_chk", None), bool(extent_toggle.active))
+                    getattr(self, key).text = new_text
+                self.use_extent_chk.active = bool(extent_toggle.active)
                 self.apply_ui_settings_to_engine()
-                _safe_popup_dismiss(popup)
+                popup.dismiss()
                 if not self.engine.pdf_path:
                     self.set_status("Detection tuning applied. Load a PDF to see the updated field finding.", kind="action", hold_seconds=2.0, force=True)
                     return
@@ -9984,11 +9857,11 @@ class FormAlchemistApp(MDApp):
         btn_preset_sensitive.bind(on_release=lambda *_: _apply_preset("sensitive"))
         btn_preset_strict.bind(on_release=lambda *_: _apply_preset("strict"))
         btn_apply.bind(on_release=_apply_settings)
-        btn_close.bind(on_release=lambda *_: _safe_popup_dismiss(popup))
+        btn_close.bind(on_release=lambda *_: popup.dismiss())
         popup.open()
 
     def open_mapping_popup_for_selection(self, primary_box_id=None):
-        ids = sorted(set(int(x) for x in getattr(self.engine, "selected_box_ids", []) or [] if isinstance(x, int) or str(x).isdigit()))
+        ids = sorted(set(int(x) for x in self.engine.selected_box_ids if isinstance(x, int) or str(x).isdigit()))
         if not ids:
             self.set_status("Tap at least one preview box first.")
             return
@@ -9998,15 +9871,10 @@ class FormAlchemistApp(MDApp):
         existing = self._find_mapping_for_box(focus_id, page_idx)
         palette = getattr(self, "ui_palette", {}) or {}
 
-        current_col = _safe_widget_text(getattr(self, "column_spinner", None), "")
-        current_col = current_col if current_col != COLUMN_SELECT_TEXT else ""
-        current_trigger = _safe_widget_text(getattr(self, "trigger_input", None), "")
-        grid_flag_chk = getattr(self, "grid_flag_chk", None)
-        if grid_flag_chk is not None:
-            current_grid_flag = "1" if bool(getattr(grid_flag_chk, "active", False)) else "0"
-        else:
-            current_grid_flag = (getattr(self, "grid_flag_input", None).text.strip() or "0") if getattr(self, "grid_flag_input", None) is not None else "0"
-        current_grid_n = _safe_widget_text(getattr(self, "grid_n_input", None), "1") or "1"
+        current_col = self.column_spinner.text if self.column_spinner.text != COLUMN_SELECT_TEXT else ""
+        current_trigger = self.trigger_input.text.strip()
+        current_grid_flag = "1" if getattr(self, "grid_flag_chk", None).active else "0" if hasattr(self, "grid_flag_chk") else (self.grid_flag_input.text.strip() or "0")
+        current_grid_n = self.grid_n_input.text.strip() or "1"
 
         current_semantic_label = SEMANTIC_TARGET_PLACEHOLDER
         existing_semantic = self.engine.get_box_semantic_target_payload(focus_id, page_idx)
@@ -10202,7 +10070,7 @@ class FormAlchemistApp(MDApp):
                 column_spinner.text,
                 trigger=trigger_input.text.strip(),
                 is_grid=bool(getattr(popup_grid_chk, "active", False)),
-                grid_n=_safe_int_value(_safe_widget_text(grid_n_input, "1") or "1", 1),
+                grid_n=int(grid_n_input.text.strip() or "1"),
             )
             if semantic_key and column_spinner.text and column_spinner.text != COLUMN_SELECT_TEXT:
                 live_preview_lbl.text = f"Sample Output: Target → {semantic_preview} | Column → {column_preview}"
@@ -10263,7 +10131,7 @@ class FormAlchemistApp(MDApp):
                     raise ValueError("Please choose a data column or a special form target.")
                 trigger = trigger_input.text.strip()
                 is_grid = bool(getattr(popup_grid_chk, "active", False))
-                grid_n = _safe_int_value(_safe_widget_text(grid_n_input, "1") or "1", 1)
+                grid_n = int(grid_n_input.text.strip() or "1")
 
                 did_mapping = False
                 did_target = False
@@ -10274,15 +10142,15 @@ class FormAlchemistApp(MDApp):
                     self.engine.assign_mapping(ids, column, trigger, is_grid, grid_n, page_idx)
                     did_mapping = True
 
-                _safe_set_widget_text(getattr(self, "column_spinner", None), column if (column and column != COLUMN_SELECT_TEXT) else COLUMN_SELECT_TEXT)
-                _safe_set_widget_text(getattr(self, "trigger_input", None), trigger if did_mapping else "")
+                self.column_spinner.text = column if (column and column != COLUMN_SELECT_TEXT) else COLUMN_SELECT_TEXT
+                self.trigger_input.text = trigger if did_mapping else ""
 
                 if hasattr(self, "grid_flag_chk"):
-                    _safe_set_widget_active(getattr(self, "grid_flag_chk", None), bool(is_grid))
+                    self.grid_flag_chk.active = bool(is_grid)
                 else:
-                    _safe_set_widget_text(getattr(self, "grid_flag_input", None), "1" if is_grid else "0")
-                _safe_set_widget_text(getattr(self, "grid_n_input", None), str(grid_n))
-                _safe_set_widget_text(getattr(self, "box_ids_input", None), ",".join(str(i) for i in ids))
+                    self.grid_flag_input.text = "1" if is_grid else "0"
+                self.grid_n_input.text = str(grid_n)
+                self.box_ids_input.text = ",".join(str(i) for i in ids)
                 self.engine.selected_box_ids = ids
                 self._sync_box_selection_ui()
                 saved_parts = []
@@ -10293,7 +10161,7 @@ class FormAlchemistApp(MDApp):
                 self.set_status(
                     f"Links saved from preview.\nPage: {page_idx}\n" + "\n".join(saved_parts) + f"\nBoxes: {ids}"
                 )
-                _safe_popup_dismiss(popup)
+                popup.dismiss()
                 self.on_preview(None)
             except Exception as e:
                 self.set_status(f"Preview mapping error:\n{e}")
@@ -10305,18 +10173,18 @@ class FormAlchemistApp(MDApp):
                 self.engine.selected_box_ids = ids
                 self._sync_box_selection_ui()
                 self.set_status(f"Cleared mapping for boxes: {ids} on page {page_idx}")
-                _safe_popup_dismiss(popup)
+                popup.dismiss()
                 self.on_preview(None)
             except Exception as e:
                 self.set_status(f"Clear mapping error:\n{e}")
 
         btn_assign.bind(on_release=_assign)
         btn_clear.bind(on_release=_clear)
-        btn_close.bind(on_release=lambda *_: _safe_popup_dismiss(popup))
+        btn_close.bind(on_release=lambda *_: popup.dismiss())
         popup.open()
 
     def clear_mapping_for_box_ids(self, box_ids, page_idx):
-        box_ids = _normalize_box_ids(box_ids)
+        box_ids = sorted(set(int(x) for x in box_ids))
         target_rects = []
         for b_id in box_ids:
             if b_id < 0 or b_id >= len(self.engine.all_boxes):
@@ -10346,7 +10214,7 @@ class FormAlchemistApp(MDApp):
                 del self.engine.custom_mappings[k]
 
     def on_clear_selected_mapping(self, *_):
-        ids = _normalize_box_ids(getattr(self.engine, "selected_box_ids", []) or [])
+        ids = sorted(set(int(x) for x in getattr(self.engine, "selected_box_ids", []) if isinstance(x, int) or str(x).isdigit()))
         if not ids:
             self.set_status("Select at least one box first.")
             return
@@ -10378,7 +10246,7 @@ class FormAlchemistApp(MDApp):
         btn_close = self._make_compact_action_button("Close", tone="soft")
         btn_close.size_hint = (None, None)
         btn_close.size = (dp(86), dp(36))
-        btn_close.bind(on_release=lambda *_: _safe_popup_dismiss(popup))
+        btn_close.bind(on_release=lambda *_: popup.dismiss())
         head.add_widget(btn_close)
         outer.add_widget(head)
         outer.add_widget(body)
@@ -10406,7 +10274,7 @@ class FormAlchemistApp(MDApp):
             on_submit(sel, popup)
 
         chooser.bind(on_submit=lambda _obj, sel, _touch: _submit(sel))
-        btn_cancel.bind(on_release=lambda *_: _safe_popup_dismiss(popup))
+        btn_cancel.bind(on_release=lambda *_: popup.dismiss())
         btn_open.bind(on_release=lambda *_: _submit())
         popup.open()
         return popup
@@ -10458,7 +10326,7 @@ class FormAlchemistApp(MDApp):
             except Exception as e:
                 traceback.print_exc()
                 self.set_status(f"Load data error:\n{e}")
-        _safe_popup_dismiss(popup)
+        popup.dismiss()
 
     def _load_config_from_local_path(self, path):
         if not path.lower().endswith(".json"):
@@ -10540,7 +10408,7 @@ class FormAlchemistApp(MDApp):
             except Exception as e:
                 traceback.print_exc()
                 self.set_status(f"Load config error:\n{e}")
-        _safe_popup_dismiss(popup)
+        popup.dismiss()
 
     def _merge_config_from_local_path(self, path):
         if not path.lower().endswith(".json"):
@@ -10594,7 +10462,7 @@ class FormAlchemistApp(MDApp):
             except Exception as e:
                 traceback.print_exc()
                 self.set_status(f"Merge config error:\n{e}")
-        _safe_popup_dismiss(popup)
+        popup.dismiss()
 
     def _collect_runtime_config_state(self):
         page_idx = 0
@@ -10669,7 +10537,72 @@ class FormAlchemistApp(MDApp):
         if hasattr(self, "box_ids_input"):
             self.box_ids_input.text = ""
 
-    def _apply_runtime_config_state(self, cfg):
+    def _config_ready_preview_hint(self):
+        if getattr(self, "ui_mobile", False):
+            mode_txt = "Select ON" if bool(getattr(self, "mobile_select_mode", False)) else "Select OFF"
+            return f"Preview ready. {mode_txt} • Tap to inspect • Double-tap to link."
+        return "Preview ready. Tap to inspect • Double-tap a box to link it."
+
+    def _clear_config_import_selection_state(self, clear_page_cache=True, update_hint=True):
+        self.engine.selected_box_ids = []
+        if clear_page_cache or not hasattr(self, "_page_selected_box_ids"):
+            self._page_selected_box_ids = {}
+        else:
+            try:
+                self._page_selected_box_ids[int(self.current_page_idx())] = []
+            except Exception:
+                pass
+        try:
+            self._active_selection_page_idx = int(self.current_page_idx())
+        except Exception:
+            self._active_selection_page_idx = 0
+        try:
+            self._reset_mapping_editor_state(clear_box_ids=True)
+        except Exception:
+            pass
+        preview = getattr(self, "preview", None)
+        if preview is not None:
+            try:
+                preview.set_selected_ids([])
+            except Exception:
+                pass
+            try:
+                preview.hovered_box_id = None
+                preview._redraw_overlay()
+            except Exception:
+                pass
+        if update_hint and hasattr(self, "preview_info") and self.preview_info is not None:
+            try:
+                self.preview_info.text = self._config_ready_preview_hint()
+            except Exception:
+                pass
+        try:
+            self._update_preview_hud(hit=None)
+        except Exception:
+            pass
+        try:
+            self._update_selection_inspector()
+        except Exception:
+            pass
+        try:
+            self._update_bottom_statusbar()
+        except Exception:
+            pass
+
+    def _refresh_after_config_import(self, page_idx=None, reason="Config updated", anchor=None):
+        try:
+            page_idx = self.current_page_idx() if page_idx is None else int(page_idx)
+        except Exception:
+            page_idx = 0
+        self._clear_config_import_selection_state(clear_page_cache=False, update_hint=False)
+        try:
+            self._render_session_page(page_idx=page_idx, reason=reason)
+        finally:
+            if anchor is not None:
+                Clock.schedule_once(lambda dt, a=anchor: self._restore_preview_anchor(a), 0)
+                Clock.schedule_once(lambda dt, a=anchor: self._restore_preview_anchor(a), 0.06)
+
+    def _apply_runtime_config_state(self, cfg, restore_selection=False):
         ui_state = cfg.get("ui_state", {}) if isinstance(cfg, dict) else {}
         if not isinstance(ui_state, dict):
             ui_state = {}
@@ -10723,18 +10656,20 @@ class FormAlchemistApp(MDApp):
         else:
             target_page = 0
 
-        page_selected = ui_state.get("page_selected_box_ids", {}) or {}
-        if isinstance(page_selected, dict):
-            self._page_selected_box_ids = {}
-            for k, v in page_selected.items():
-                try:
-                    self._page_selected_box_ids[_safe_int(k, 0)] = list(_loose_box_ids(v))
-                except Exception:
-                    continue
+        self._page_selected_box_ids = {}
+        selected_ids = []
+        if restore_selection:
+            page_selected = ui_state.get("page_selected_box_ids", {}) or {}
+            if isinstance(page_selected, dict):
+                for k, v in page_selected.items():
+                    try:
+                        self._page_selected_box_ids[_safe_int(k, 0)] = list(_loose_box_ids(v))
+                    except Exception:
+                        continue
 
-        selected_ids = list(_loose_box_ids(ui_state.get("selected_box_ids", [])))
-        if selected_ids:
-            self._page_selected_box_ids[target_page] = list(selected_ids)
+            selected_ids = list(_loose_box_ids(ui_state.get("selected_box_ids", [])))
+            if selected_ids:
+                self._page_selected_box_ids[target_page] = list(selected_ids)
 
         self._active_selection_page_idx = target_page
         self.engine.selected_box_ids = list(selected_ids)
@@ -10756,9 +10691,9 @@ class FormAlchemistApp(MDApp):
             Clock.schedule_once(lambda dt, open_state=sidebar_open: self._set_mobile_sidebar_state(open_state), 0)
         try:
             if getattr(self.engine, "pdf_path", ""):
-                self.preview_info.text = "Config loaded. Preview restored for the active page."
+                self.preview_info.text = "Config loaded. Rendering the active page with the imported mappings."
             else:
-                self.preview_info.text = "Config loaded. Preview state restored. Load the saved PDF to resume preview on the active page."
+                self.preview_info.text = "Config loaded. Load the saved PDF to resume preview on the active page."
         except Exception:
             pass
 
@@ -10830,7 +10765,6 @@ class FormAlchemistApp(MDApp):
             self.apply_ui_settings_to_engine()
             page_idx = self.current_page_idx()
             prev_count = len(getattr(self.engine, "all_boxes", []) or []) if getattr(self.engine, "detected_page_idx", None) == page_idx else 0
-            anchor = self._capture_preview_anchor()
             ctx = self.engine.prepare_learning_for_detection(page_idx=page_idx, allow_profile_apply=False)
             profile_applied = bool((ctx or {}).get("profile_applied", False))
             profile_matched = bool((ctx or {}).get("matched_profile"))
@@ -10856,8 +10790,8 @@ class FormAlchemistApp(MDApp):
                 f"\nCache: refreshed{profile_msg}"
             )
             self._persist_runtime_session_state(current_page_idx=page_idx)
-            self.on_preview(None)
-            Clock.schedule_once(lambda dt: self._restore_preview_anchor(anchor), 0)
+            Clock.schedule_once(lambda dt: self.on_preview(None), 0)
+            Clock.schedule_once(lambda dt: self.on_preview(None), 0.05)
             self.set_status(summary, kind="detect", hold_seconds=3.5, force=True)
         except Exception as e:
             traceback.print_exc()
@@ -10872,34 +10806,41 @@ class FormAlchemistApp(MDApp):
 
     def on_assign_mapping(self, instance):
         try:
-            column = _safe_widget_text(getattr(self, "column_spinner", None), "")
+            column = self.column_spinner.text.strip()
             if not column or column == COLUMN_SELECT_TEXT:
                 self.set_status("Please select a column.")
                 return
 
-            raw_ids = [x.strip() for x in _safe_widget_text(getattr(self, "box_ids_input", None), "").split(",") if x.strip()]
-            box_ids = _normalize_box_ids(raw_ids)
+            raw_ids = [x.strip() for x in self.box_ids_input.text.split(",") if x.strip()]
+            box_ids = []
+            for x in raw_ids:
+                if not x.isdigit():
+                    raise ValueError(f"Invalid Box ID: {x}")
+                box_ids.append(int(x))
+
+            box_ids = self._sanitize_box_id_list(box_ids)
             if not box_ids:
                 raise ValueError("Please enter at least one Box ID.")
 
-            trigger = _safe_widget_text(getattr(self, "trigger_input", None), "")
-            grid_flag_chk = getattr(self, "grid_flag_chk", None)
-            if grid_flag_chk is not None:
-                is_grid = _safe_widget_active(grid_flag_chk, False)
-            else:
-                is_grid = bool(_safe_int_value(_safe_widget_text(getattr(self, "grid_flag_input", None), "0") or "0", 0))
-            grid_n = max(1, _safe_int_value(_safe_widget_text(getattr(self, "grid_n_input", None), "1") or "1", 1))
+            trigger = self.trigger_input.text.strip()
+            is_grid = bool(self.grid_flag_chk.active) if hasattr(self, "grid_flag_chk") else bool(int(self.grid_flag_input.text.strip() or "0"))
+            grid_n = int(self.grid_n_input.text.strip() or "1")
             page_idx = self.current_page_idx()
 
             self.engine.assign_mapping(box_ids, column, trigger, is_grid, grid_n, page_idx)
-            self.engine.selected_box_ids = list(box_ids)
+            self.engine.selected_box_ids = sorted(set(box_ids))
             self._sync_box_selection_ui()
 
-            self.set_status(f"Mapping saved.\nPage: {page_idx}\nColumn: {column}\nBoxes: {box_ids}")
+            self.set_status(
+                f"Mapping saved.\nPage: {page_idx}\nColumn: {column}\nBoxes: {box_ids}"
+            )
             self.on_preview(None)
         except Exception as e:
             self.set_status(f"Assign mapping error:\n{e}", kind="error", force=True)
 
+    # --------------------------------------------------------
+    # Output generation
+    # --------------------------------------------------------
     def on_generate_single(self, instance):
         try:
             if not self.engine.supports_export_backend():
@@ -11002,7 +10943,7 @@ class FormAlchemistApp(MDApp):
         return self._open_legacy_pdf_picker()
     
     def _handle_pdf_selection(self, selection, popup):
-        _safe_popup_dismiss(popup)
+        popup.dismiss()
 
         if selection:
             try:
@@ -11085,21 +11026,20 @@ class FormAlchemistApp(MDApp):
 
         popup, _outer = self._make_styled_popup(title, wrap, subtitle=hint_text, size_hint=(0.92 if getattr(self, "ui_mobile", False) else 0.58, 0.34 if getattr(self, "ui_mobile", False) else 0.30))
 
-        btn_cancel.bind(on_release=lambda *_: _safe_popup_dismiss(popup))
+        btn_cancel.bind(on_release=lambda *_: popup.dismiss())
 
         def _submit(*_):
             try:
                 on_submit_callback(txt.text.strip())
-            except Exception as e:
-                traceback.print_exc()
-                self.set_status(f"Input action error:\n{e}", kind="error", force=True)
             finally:
-                _safe_popup_dismiss(popup)
+                popup.dismiss()
 
         btn_ok.bind(on_release=_submit)
         txt.bind(on_text_validate=lambda *_: _submit())
-        popup.open()
 
+        popup.open()
+    
+    
     def on_load_gsheet_url(self, instance):
         self.open_text_input_popup(
             title="Load Google Sheet URL",
