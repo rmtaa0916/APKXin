@@ -32,6 +32,7 @@ if not hasattr(base64, "encodestring"):
     base64.encodestring = base64.encodebytes
 
 import cv2
+from PIL import Image as PILImage
 import importlib
 
 FITZ_IMPORT_ERROR = None
@@ -45,7 +46,6 @@ import numpy as np
 import pandas as pd
 
 from pypdf import PdfReader, PdfWriter
-from pypdf.generic import NameObject, DictionaryObject, DecodedStreamObject, ArrayObject
 
 try:
     from reportlab.pdfgen import canvas as rl_canvas
@@ -2268,10 +2268,10 @@ class FormAlchemistEngine:
     def supports_export_backend(self):
         """
         Return True when filled-PDF export is available.
-        This variant writes PDF text operators directly with pypdf and does not
-        depend on ReportLab or PyMuPDF for export.
+        This variant exports by rasterizing pages and rebuilding the PDF as images,
+        so it only requires a working PDF rendering backend.
         """
-        return True
+        return bool(ANDROID_JAVA_AVAILABLE or FITZ_AVAILABLE)
 
     def supports_processing_backend(self):
         """
@@ -3549,180 +3549,56 @@ class FormAlchemistEngine:
         c.setFont("Helvetica-Bold", fs)
         c.drawString(x, y, "X")
 
-    def _pdf_text_width(self, value, font_size):
-        txt = str(value or "")
-        return max(len(txt), 0) * float(font_size) * 0.6
-
-    def _pdf_hex_text(self, value):
-        data = str(value or "").encode("latin-1", "replace")
-        return "<" + data.hex().upper() + ">"
-
-    def _ensure_pypdf_font_resource(self, page):
-        resources = page.get("/Resources")
-        if resources is None:
-            resources = DictionaryObject()
-            page[NameObject("/Resources")] = resources
-        else:
-            try:
-                resources = resources.get_object()
-            except Exception:
-                pass
-            if not isinstance(resources, DictionaryObject):
-                tmp = DictionaryObject()
-                page[NameObject("/Resources")] = tmp
-                resources = tmp
-
-        fonts = resources.get("/Font")
-        if fonts is None:
-            fonts = DictionaryObject()
-            resources[NameObject("/Font")] = fonts
-        else:
-            try:
-                fonts = fonts.get_object()
-            except Exception:
-                pass
-            if not isinstance(fonts, DictionaryObject):
-                tmp = DictionaryObject()
-                resources[NameObject("/Font")] = tmp
-                fonts = tmp
-
-        if "/FALCH" not in fonts:
-            fonts[NameObject("/FALCH")] = DictionaryObject({
-                NameObject("/Type"): NameObject("/Font"),
-                NameObject("/Subtype"): NameObject("/Type1"),
-                NameObject("/BaseFont"): NameObject("/Helvetica"),
-                NameObject("/Encoding"): NameObject("/WinAnsiEncoding"),
-            })
-        return resources
-
-    def _append_pypdf_content_stream(self, writer, page, stream_text):
-        stream = DecodedStreamObject()
-        stream.set_data(stream_text.encode("latin-1", "replace"))
-        stream_ref = writer._add_object(stream)
-        contents = page.get("/Contents")
-        if contents is None:
-            page[NameObject("/Contents")] = stream_ref
-            return
-
-        try:
-            contents_obj = contents.get_object()
-        except Exception:
-            contents_obj = contents
-
-        if isinstance(contents_obj, ArrayObject):
-            contents_obj.append(stream_ref)
-            page[NameObject("/Contents")] = contents_obj
-        else:
-            page[NameObject("/Contents")] = ArrayObject([contents, stream_ref])
-
-    def _build_pypdf_text_commands(self, page_height, text, rects, is_grid=False, grid_n=1, ox=0, oy=0, fs_scale=0.65):
-        val = str(text or "").strip()
-        if not val or val.lower() in ["nan", "none"]:
-            return []
-        if val.endswith(".0"):
-            val = val[:-2]
-        val = val.upper()
-
-        rects = sorted([self._coerce_rect(r) for r in rects], key=lambda rr: (round(rr.y0, 3), rr.x0))
-        if not rects:
-            return []
-
-        commands = []
-
-        def add_single(single_val, rect):
-            fs = max(float(rect.height) * fs_scale, 6.0)
-            text_w = self._pdf_text_width(single_val, fs)
-            x = float(rect.x0) + max((float(rect.width) - float(text_w)) / 2.0, 1.0) + float(ox)
-            y = self._reportlab_baseline_y(page_height, rect, oy=oy)
-            commands.append(
-                f"BT /FALCH {fs:.4f} Tf 1 0 0 1 {x:.4f} {y:.4f} Tm {self._pdf_hex_text(single_val)} Tj ET"
-            )
-
-        def add_grid(grid_val, rect, cells):
-            cells = max(int(cells), 1)
-            fs = max(float(rect.height) * 0.60, 6.0)
-            cell_w = float(rect.width) / cells
-            y = self._reportlab_baseline_y(page_height, rect, oy=oy)
-            for i, ch in enumerate(grid_val[:cells]):
-                x = float(rect.x0) + (i * cell_w) + (cell_w * 0.25) + float(ox)
-                commands.append(
-                    f"BT /FALCH {fs:.4f} Tf 1 0 0 1 {x:.4f} {y:.4f} Tm {self._pdf_hex_text(ch)} Tj ET"
-                )
-
-        if is_grid and len(rects) > 1:
-            counts = self._allocate_cells_by_width(rects, grid_n)
-            pos = 0
-            for rect, n_cells in zip(rects, counts):
-                seg = val[pos:pos + n_cells]
-                if seg:
-                    add_grid(seg, rect, n_cells)
-                pos += n_cells
-            return commands
-
-        target = rects[0] if len(rects) == 1 else self._rect_union(rects)
-        if is_grid:
-            add_grid(val, target, grid_n)
-        else:
-            add_single(val, target)
-        return commands
-
-    def _build_pypdf_check_commands(self, page_height, rects):
-        rects = sorted([self._coerce_rect(r) for r in rects], key=lambda rr: (round(rr.y0, 3), rr.x0))
-        if not rects:
-            return []
-        target = rects[0] if len(rects) == 1 else self._rect_union(rects)
-        fs = max(float(target.height) * 0.95, 8.0)
-        x = float(target.x0) + (float(target.width) * 0.15)
-        y = float(page_height) - (float(target.y1) - (float(target.height) * 0.15))
-        return [f"BT /FALCH {fs:.4f} Tf 1 0 0 1 {x:.4f} {y:.4f} Tm {self._pdf_hex_text('X')} Tj ET"]
-
-    def _build_filled_pdf_bytes_pypdf(self, patient_name, page_idx=0, record_key=None):
+    def _build_filled_pdf_bytes_raster(self, patient_name, page_idx=0, record_key=None, preview_zoom=2.0):
         if not self.pdf_path or not os.path.exists(self.pdf_path):
             raise FileNotFoundError("PDF path is missing or invalid.")
-
-        ops = self._collect_overlay_ops(patient_name, page_idx=page_idx, record_key=record_key)
 
         with open(self.pdf_path, "rb") as fh:
             reader = PdfReader(fh)
             total_pages = len(reader.pages)
-            if total_pages <= 0:
-                raise ValueError("PDF has no pages.")
+        if total_pages <= 0:
+            raise ValueError("PDF has no pages.")
 
-            writer = PdfWriter()
-            for src_page in reader.pages:
-                writer.add_page(src_page)
+        target_idx = min(max(int(page_idx), 0), total_pages - 1)
+        ops = self._collect_overlay_ops(patient_name, page_idx=target_idx, record_key=record_key)
+        pil_pages = []
 
-            target_idx = min(max(int(page_idx), 0), total_pages - 1)
-            page = writer.pages[target_idx]
-            page_h = float(page.mediabox.height)
-            self._ensure_pypdf_font_resource(page)
-
-            commands = ["q"]
-            for op in ops:
-                if op.get("kind") == "check":
-                    commands.extend(self._build_pypdf_check_commands(page_h, op.get("rects", [])))
-                else:
-                    commands.extend(
-                        self._build_pypdf_text_commands(
-                            page_h,
+        for i in range(total_pages):
+            img = self._render_pdf_page_bgr(self.pdf_path, page_idx=i, preview_zoom=preview_zoom)
+            if img is None or getattr(img, "size", 0) == 0:
+                raise ValueError(f"Failed to render page {i + 1} for raster export.")
+            if i == target_idx:
+                for op in ops:
+                    if op.get("kind") == "check":
+                        self._draw_check_op_cv(img, op.get("rects", []), preview_zoom=preview_zoom)
+                    else:
+                        self._draw_text_op_cv(
+                            img,
                             op.get("text", ""),
                             op.get("rects", []),
+                            preview_zoom=preview_zoom,
                             is_grid=bool(op.get("grid", False)),
                             grid_n=int(op.get("grid_n", 1)),
                         )
-                    )
-            commands.append("Q")
+            rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            pil_pages.append(PILImage.fromarray(rgb))
 
-            self._append_pypdf_content_stream(writer, page, "\n".join(commands) + "\n")
-
-            out_buf = io.BytesIO()
-            writer.write(out_buf)
-            return out_buf.getvalue()
+        out_buf = io.BytesIO()
+        first = pil_pages[0].convert("RGB")
+        rest = [im.convert("RGB") for im in pil_pages[1:]]
+        first.save(
+            out_buf,
+            format="PDF",
+            save_all=True,
+            append_images=rest,
+            resolution=max(float(preview_zoom), 1.0) * 72.0,
+        )
+        return out_buf.getvalue()
 
     def _build_filled_pdf_bytes(self, patient_name, page_idx=0, record_key=None):
         if not self.supports_export_backend():
             raise RuntimeError("PDF export backend is unavailable in this build.")
-        return self._build_filled_pdf_bytes_pypdf(patient_name, page_idx=page_idx, record_key=record_key)
+        return self._build_filled_pdf_bytes_raster(patient_name, page_idx=page_idx, record_key=record_key)
 
     def export_filled_pdf(self, patient_name, out_path, page_idx=0, record_key=None):
         pdf_bytes = self._build_filled_pdf_bytes(patient_name, page_idx=page_idx, record_key=record_key)
@@ -4800,28 +4676,39 @@ class FormAlchemistEngine:
         if not rects:
             return
 
-        def fit_value_to_width(single_val, font_scale, thickness, max_text_w):
+        def fit_value_to_width(single_val, base_font_scale, thickness, max_text_w, min_font_scale=0.22):
             candidate = str(single_val)
             max_text_w = max(int(max_text_w), 1)
-            (tw, th), _ = cv2.getTextSize(candidate, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
-            if tw <= max_text_w:
-                return candidate, tw, th
-            ellipsis = '…'
-            while len(candidate) > 1:
-                shortened = candidate[:-1].rstrip()
+            font_scale = max(float(base_font_scale), float(min_font_scale))
+
+            # First try to keep the full text by shrinking the font a little.
+            while font_scale >= min_font_scale:
+                (tw, th), _ = cv2.getTextSize(candidate, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
+                if tw <= max_text_w:
+                    return candidate, tw, th, font_scale
+                font_scale = round(font_scale - 0.02, 4)
+
+            # Fallback to safe ASCII ellipsis so OpenCV does not render it as ???.
+            ellipsis = '...'
+            font_scale = float(min_font_scale)
+            shortened = candidate
+            while len(shortened) > 0:
                 probe = (shortened + ellipsis) if shortened else ellipsis
                 (tw, th), _ = cv2.getTextSize(probe, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
                 if tw <= max_text_w:
-                    return probe, tw, th
-                candidate = shortened
-            return '', 0, 0
+                    return probe, tw, th, font_scale
+                shortened = shortened[:-1].rstrip()
+
+            return '', 0, 0, font_scale
 
         def draw_single(single_val, rect):
             target_w = max(int(rect.width * preview_zoom), 1)
             target_h = max(int(rect.height * preview_zoom), 1)
-            font_scale = min(max((target_h * fs_scale) / 30.0, 0.28), 0.55)
+            # Allow a higher initial scale, then shrink-to-fit. This keeps more full values visible
+            # and reduces zoom-sensitive truncation caused by the previous hard max cap.
+            base_font_scale = max((target_h * fs_scale) / 30.0, 0.24)
             thickness = 1 if target_h < 40 else 2
-            display_val, tw, _ = fit_value_to_width(single_val, font_scale, thickness, target_w - 6)
+            display_val, tw, _, font_scale = fit_value_to_width(single_val, base_font_scale, thickness, target_w - 6)
             if not display_val:
                 return
             x = int((rect.x0 * preview_zoom) + max((target_w - tw) / 2.0, 1.0) + (ox * preview_zoom))
@@ -4831,12 +4718,12 @@ class FormAlchemistEngine:
         def draw_grid(grid_val, rect, cells):
             cells = max(int(cells), 1)
             target_h = max(int(rect.height * preview_zoom), 1)
-            font_scale = min(max((target_h * 0.60) / 30.0, 0.28), 0.50)
+            base_font_scale = max((target_h * 0.60) / 30.0, 0.22)
             thickness = 1 if target_h < 40 else 2
             cell_w = (rect.width * preview_zoom) / cells
             y = int((rect.y1 * preview_zoom) - (target_h * 0.2) + (oy * preview_zoom))
             for i, ch in enumerate(grid_val[:cells]):
-                display_val, tw, _ = fit_value_to_width(str(ch), font_scale, thickness, cell_w - 2)
+                display_val, tw, _, font_scale = fit_value_to_width(str(ch), base_font_scale, thickness, cell_w - 2, min_font_scale=0.18)
                 if not display_val:
                     continue
                 x = int((rect.x0 * preview_zoom) + (i * cell_w) + max((cell_w - tw) / 2.0, 1.0) + (ox * preview_zoom))
