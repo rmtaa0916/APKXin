@@ -46,6 +46,14 @@ import pandas as pd
 from pypdf import PdfReader, PdfWriter
 
 try:
+    from PIL import Image
+    PIL_AVAILABLE = True
+except Exception:
+    Image = None
+    PIL_AVAILABLE = False
+
+
+try:
     from reportlab.pdfgen import canvas as rl_canvas
     from reportlab.pdfbase.pdfmetrics import stringWidth as rl_string_width
     REPORTLAB_AVAILABLE = True
@@ -2228,10 +2236,13 @@ class FormAlchemistEngine:
     def supports_export_backend(self):
         """
         Return True when filled-PDF export is available.
-        Prefer PyMuPDF when available because it avoids Android/runtime issues seen
-        with some ReportLab builds. ReportLab+pypdf remains as a fallback.
+        Backends are tried in this order:
+        1) PyMuPDF (vector-safe when packaged)
+        2) Raster export using the existing page renderer + Pillow
+        3) ReportLab+pypdf fallback
         """
-        return bool(FITZ_AVAILABLE or REPORTLAB_AVAILABLE)
+        raster_ok = bool(PIL_AVAILABLE and self.supports_detection_backend())
+        return bool(FITZ_AVAILABLE or raster_ok or REPORTLAB_AVAILABLE)
 
     def supports_processing_backend(self):
         """
@@ -3521,6 +3532,153 @@ class FormAlchemistEngine:
         )
         page.insert_text(p, "X", fontsize=fs, fontname="helv")
 
+    def _get_pdf_page_size_points(self, page_idx=0):
+        if not self.pdf_path or not os.path.exists(self.pdf_path):
+            raise FileNotFoundError("PDF path is missing or invalid.")
+        with open(self.pdf_path, "rb") as fh:
+            reader = PdfReader(fh)
+            total_pages = len(reader.pages)
+            if total_pages <= 0:
+                raise ValueError("PDF has no pages.")
+            page_idx = max(0, min(int(page_idx), total_pages - 1))
+            page = reader.pages[page_idx]
+            return float(page.mediabox.width), float(page.mediabox.height)
+
+    def _rect_to_raster_px(self, rect, sx, sy):
+        r = self._coerce_rect(rect)
+        x0 = int(round(float(r.x0) * float(sx)))
+        y0 = int(round(float(r.y0) * float(sy)))
+        x1 = int(round(float(r.x1) * float(sx)))
+        y1 = int(round(float(r.y1) * float(sy)))
+        if x1 < x0:
+            x0, x1 = x1, x0
+        if y1 < y0:
+            y0, y1 = y1, y0
+        return x0, y0, x1, y1
+
+    def _fit_raster_text(self, text, max_w, max_h, bold=False):
+        font_face = cv2.FONT_HERSHEY_SIMPLEX
+        base_scale = max(float(max_h) / 26.0, 0.35)
+        scale = min(base_scale, 3.0)
+        thickness = max(1, int(round(scale * (2.2 if bold else 1.6))))
+        safe_text = str(text or "")
+        while scale > 0.20:
+            (tw, th), _ = cv2.getTextSize(safe_text, font_face, scale, thickness)
+            if tw <= max(max_w - 4, 4) and th <= max(max_h - 2, 2):
+                return font_face, scale, thickness, tw, th
+            scale *= 0.90
+            thickness = max(1, int(round(scale * (2.2 if bold else 1.6))))
+        (tw, th), _ = cv2.getTextSize(safe_text, font_face, scale, thickness)
+        return font_face, scale, thickness, tw, th
+
+    def _write_text_op_raster(self, img_bgr, text, rects, is_grid=False, grid_n=1, sx=1.0, sy=1.0):
+        val = str(text or "").strip()
+        if not val or val.lower() in ["nan", "none"]:
+            return
+        if val.endswith('.0'):
+            val = val[:-2]
+        val = val.upper()
+
+        rects = sorted([self._coerce_rect(r) for r in rects], key=lambda rr: (round(rr.y0, 3), rr.x0))
+        if not rects:
+            return
+
+        color = (0, 0, 0)
+
+        def draw_single(single_val, rect):
+            x0, y0, x1, y1 = self._rect_to_raster_px(rect, sx, sy)
+            w = max(x1 - x0, 6)
+            h = max(y1 - y0, 6)
+            font_face, scale, thickness, tw, th = self._fit_raster_text(single_val, w, h, bold=False)
+            x = int(x0 + max((w - tw) / 2.0, 1.0))
+            baseline = int(y1 - max(h * 0.18, 2.0))
+            cv2.putText(img_bgr, single_val, (x, baseline), font_face, scale, color, thickness, cv2.LINE_AA)
+
+        def draw_grid(grid_val, rect, cells):
+            cells = max(int(cells), 1)
+            x0, y0, x1, y1 = self._rect_to_raster_px(rect, sx, sy)
+            w = max(x1 - x0, 6)
+            h = max(y1 - y0, 6)
+            cell_w = max(float(w) / cells, 4.0)
+            for i, ch in enumerate(grid_val[:cells]):
+                cx0 = int(round(x0 + i * cell_w))
+                cx1 = int(round(x0 + (i + 1) * cell_w))
+                cw = max(cx1 - cx0, 4)
+                font_face, scale, thickness, tw, th = self._fit_raster_text(ch, cw, h, bold=False)
+                x = int(cx0 + max((cw - tw) / 2.0, 0.0))
+                baseline = int(y1 - max(h * 0.18, 2.0))
+                cv2.putText(img_bgr, ch, (x, baseline), font_face, scale, color, thickness, cv2.LINE_AA)
+
+        if is_grid and len(rects) > 1:
+            counts = self._allocate_cells_by_width(rects, grid_n)
+            pos = 0
+            for rect, n_cells in zip(rects, counts):
+                seg = val[pos:pos + n_cells]
+                if seg:
+                    draw_grid(seg, rect, n_cells)
+                pos += n_cells
+            return
+
+        target = rects[0] if len(rects) == 1 else self._rect_union(rects)
+        if is_grid:
+            draw_grid(val, target, grid_n)
+        else:
+            draw_single(val, target)
+
+    def _write_check_op_raster(self, img_bgr, rects, sx=1.0, sy=1.0):
+        rects = sorted([self._coerce_rect(r) for r in rects], key=lambda rr: (round(rr.y0, 3), rr.x0))
+        if not rects:
+            return
+        target = rects[0] if len(rects) == 1 else self._rect_union(rects)
+        x0, y0, x1, y1 = self._rect_to_raster_px(target, sx, sy)
+        w = max(x1 - x0, 6)
+        h = max(y1 - y0, 6)
+        font_face, scale, thickness, tw, th = self._fit_raster_text('X', w, h, bold=True)
+        x = int(x0 + max((w - tw) / 2.0, 0.0))
+        baseline = int(y1 - max(h * 0.10, 1.0))
+        cv2.putText(img_bgr, 'X', (x, baseline), font_face, scale, (0, 0, 0), thickness, cv2.LINE_AA)
+
+    def _build_filled_pdf_bytes_raster(self, patient_name, page_idx=0, record_key=None):
+        if not PIL_AVAILABLE:
+            raise RuntimeError('Raster PDF export backend is unavailable in this build.')
+        if not self.pdf_path or not os.path.exists(self.pdf_path):
+            raise FileNotFoundError('PDF path is missing or invalid.')
+
+        ops = self._collect_overlay_ops(patient_name, page_idx=page_idx, record_key=record_key)
+        page_w, page_h = self._get_pdf_page_size_points(page_idx=page_idx)
+        render_zoom = 2.4
+        img_bgr = self.pdf_source.render_page_bgr(self.pdf_path, page_idx=page_idx, preview_zoom=render_zoom)
+        if img_bgr is None:
+            raise RuntimeError('Raster renderer returned no page image.')
+        if len(img_bgr.shape) == 2:
+            img_bgr = cv2.cvtColor(img_bgr, cv2.COLOR_GRAY2BGR)
+        elif img_bgr.shape[2] == 4:
+            img_bgr = cv2.cvtColor(img_bgr, cv2.COLOR_BGRA2BGR)
+        else:
+            img_bgr = img_bgr.copy()
+
+        sx = float(img_bgr.shape[1]) / max(float(page_w), 1.0)
+        sy = float(img_bgr.shape[0]) / max(float(page_h), 1.0)
+
+        for op in ops:
+            if op.get('kind') == 'check':
+                self._write_check_op_raster(img_bgr, op.get('rects', []), sx=sx, sy=sy)
+            else:
+                self._write_text_op_raster(
+                    img_bgr,
+                    op.get('text', ''),
+                    op.get('rects', []),
+                    is_grid=bool(op.get('grid', False)),
+                    grid_n=int(op.get('grid_n', 1)),
+                    sx=sx,
+                    sy=sy,
+                )
+
+        img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+        out_buf = io.BytesIO()
+        Image.fromarray(img_rgb).save(out_buf, format='PDF', resolution=150.0)
+        return out_buf.getvalue()
+
     def _build_filled_pdf_bytes_fitz(self, patient_name, page_idx=0, record_key=None):
         if not FITZ_AVAILABLE:
             raise RuntimeError("PyMuPDF export backend is unavailable in this build.")
@@ -3618,16 +3776,33 @@ class FormAlchemistEngine:
                 fitz_err = e
                 traceback.print_exc()
 
+        raster_err = None
+        if PIL_AVAILABLE and self.supports_detection_backend():
+            try:
+                return self._build_filled_pdf_bytes_raster(patient_name, page_idx=page_idx, record_key=record_key)
+            except Exception as e:
+                raster_err = e
+                traceback.print_exc()
+
         if REPORTLAB_AVAILABLE:
             try:
                 return self._build_filled_pdf_bytes_reportlab(patient_name, page_idx=page_idx, record_key=record_key)
             except Exception as reportlab_err:
+                details = []
                 if fitz_err is not None:
-                    raise RuntimeError(f"Export failed. PyMuPDF: {fitz_err} | ReportLab: {reportlab_err}")
-                raise
+                    details.append(f"PyMuPDF: {fitz_err}")
+                if raster_err is not None:
+                    details.append(f"Raster: {raster_err}")
+                details.append(f"ReportLab: {reportlab_err}")
+                raise RuntimeError("Export failed. " + " | ".join(details))
 
+        details = []
         if fitz_err is not None:
-            raise fitz_err
+            details.append(f"PyMuPDF: {fitz_err}")
+        if raster_err is not None:
+            details.append(f"Raster: {raster_err}")
+        if details:
+            raise RuntimeError("Export failed. " + " | ".join(details))
         raise RuntimeError("No usable PDF export backend is available.")
 
     def export_filled_pdf(self, patient_name, out_path, page_idx=0, record_key=None):
