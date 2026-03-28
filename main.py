@@ -4670,42 +4670,47 @@ class FormAlchemistEngine:
         if not rects:
             return
 
-        def draw_text_into_roi(single_val, abs_x, abs_y, x0, y0, x1, y1, font_scale, thickness):
-            x0 = max(int(x0), 0)
-            y0 = max(int(y0), 0)
-            x1 = min(int(x1), int(img.shape[1]))
-            y1 = min(int(y1), int(img.shape[0]))
-            if x1 <= x0 or y1 <= y0:
-                return
-            roi = img[y0:y1, x0:x1]
-            if roi.size == 0:
-                return
-            rel_x = int(abs_x - x0)
-            rel_y = int(abs_y - y0)
-            cv2.putText(roi, single_val, (rel_x, rel_y), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), thickness, cv2.LINE_AA)
+        def fit_value_to_width(single_val, font_scale, thickness, max_text_w):
+            candidate = str(single_val)
+            max_text_w = max(int(max_text_w), 1)
+            (tw, th), _ = cv2.getTextSize(candidate, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
+            if tw <= max_text_w:
+                return candidate, tw, th
+            ellipsis = '…'
+            while len(candidate) > 1:
+                shortened = candidate[:-1].rstrip()
+                probe = (shortened + ellipsis) if shortened else ellipsis
+                (tw, th), _ = cv2.getTextSize(probe, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
+                if tw <= max_text_w:
+                    return probe, tw, th
+                candidate = shortened
+            return '', 0, 0
 
         def draw_single(single_val, rect):
             target_w = max(int(rect.width * preview_zoom), 1)
             target_h = max(int(rect.height * preview_zoom), 1)
-            font_scale = max((target_h * fs_scale) / 30.0, 0.35)
+            font_scale = min(max((target_h * fs_scale) / 30.0, 0.28), 0.55)
             thickness = 1 if target_h < 40 else 2
-            (tw, th), _ = cv2.getTextSize(single_val, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
+            display_val, tw, _ = fit_value_to_width(single_val, font_scale, thickness, target_w - 6)
+            if not display_val:
+                return
             x = int((rect.x0 * preview_zoom) + max((target_w - tw) / 2.0, 1.0) + (ox * preview_zoom))
             y = int((rect.y1 * preview_zoom) - (target_h * 0.2) + (oy * preview_zoom))
-            draw_text_into_roi(single_val, x, y, (rect.x0 * preview_zoom) + (ox * preview_zoom) + 1, rect.y0 * preview_zoom, (rect.x1 * preview_zoom) + (ox * preview_zoom) - 1, rect.y1 * preview_zoom + (oy * preview_zoom), font_scale, thickness)
+            cv2.putText(img, display_val, (x, y), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), thickness, cv2.LINE_AA)
 
         def draw_grid(grid_val, rect, cells):
             cells = max(int(cells), 1)
             target_h = max(int(rect.height * preview_zoom), 1)
-            font_scale = max((target_h * 0.60) / 30.0, 0.35)
+            font_scale = min(max((target_h * 0.60) / 30.0, 0.28), 0.50)
             thickness = 1 if target_h < 40 else 2
             cell_w = (rect.width * preview_zoom) / cells
             y = int((rect.y1 * preview_zoom) - (target_h * 0.2) + (oy * preview_zoom))
             for i, ch in enumerate(grid_val[:cells]):
-                x0 = (rect.x0 * preview_zoom) + (i * cell_w) + (ox * preview_zoom)
-                x1 = x0 + cell_w
-                x = int(x0 + (cell_w * 0.25))
-                draw_text_into_roi(str(ch), x, y, x0 + 1, rect.y0 * preview_zoom, x1 - 1, rect.y1 * preview_zoom + (oy * preview_zoom), font_scale, thickness)
+                display_val, tw, _ = fit_value_to_width(str(ch), font_scale, thickness, cell_w - 2)
+                if not display_val:
+                    continue
+                x = int((rect.x0 * preview_zoom) + (i * cell_w) + max((cell_w - tw) / 2.0, 1.0) + (ox * preview_zoom))
+                cv2.putText(img, display_val, (x, y), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), thickness, cv2.LINE_AA)
 
         if is_grid and len(rects) > 1:
             counts = self._allocate_cells_by_width(rects, grid_n)
