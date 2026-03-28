@@ -33,7 +33,6 @@ if not hasattr(base64, "encodestring"):
 
 import cv2
 from PIL import Image as PILImage
-from PIL import ImageDraw, ImageFont
 import importlib
 
 FITZ_IMPORT_ERROR = None
@@ -4677,102 +4676,89 @@ class FormAlchemistEngine:
         if not rects:
             return
 
-        rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        pil_img = PILImage.fromarray(rgb)
-        draw = ImageDraw.Draw(pil_img)
-
-        def pick_font(size_px):
-            size_px = max(int(size_px), 8)
-            candidates = [
-                "/system/fonts/Roboto-Regular.ttf",
-                "/system/fonts/NotoSans-Regular.ttf",
-                "/system/fonts/DroidSans.ttf",
-                "/data/data/com.termux/files/usr/share/fonts/TTF/DejaVuSans.ttf",
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            ]
-            for path in candidates:
-                try:
-                    if os.path.exists(path):
-                        return ImageFont.truetype(path, size_px)
-                except Exception:
-                    pass
-            try:
-                return ImageFont.load_default()
-            except Exception:
-                return None
-
-        def fit_text(single_val, target_w, target_h):
+        def fit_value(single_val, base_font_scale, thickness, max_text_w, min_font_scale=0.28):
             candidate = str(single_val)
-            target_w = max(int(target_w), 1)
-            start_size = max(int(target_h * max(fs_scale, 0.78)), 10)
-            min_size = 8
-            for size in range(start_size, min_size - 1, -1):
-                font = pick_font(size)
-                if font is None:
-                    break
-                bbox = draw.textbbox((0, 0), candidate, font=font)
-                tw = max(1, bbox[2] - bbox[0])
-                th = max(1, bbox[3] - bbox[1])
-                if tw <= target_w - 4 and th <= target_h - 2:
-                    return candidate, font, tw, th
+            font_scale = max(float(base_font_scale), float(min_font_scale))
+            max_text_w = max(int(max_text_w), 1)
+            while font_scale >= min_font_scale:
+                (tw, th), baseline = cv2.getTextSize(candidate, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
+                if tw <= max_text_w:
+                    return candidate, tw, th, baseline, font_scale
+                font_scale = round(font_scale - 0.03, 4)
+
             ellipsis = "..."
-            for size in range(max(min_size, int(target_h * 0.52)), min_size - 1, -1):
-                font = pick_font(size)
-                if font is None:
-                    break
-                shortened = candidate
-                while len(shortened) > 0:
-                    probe = (shortened + ellipsis) if shortened else ellipsis
-                    bbox = draw.textbbox((0, 0), probe, font=font)
-                    tw = max(1, bbox[2] - bbox[0])
-                    th = max(1, bbox[3] - bbox[1])
-                    if tw <= target_w - 4 and th <= target_h - 2:
-                        return probe, font, tw, th
-                    shortened = shortened[:-1].rstrip()
-            font = pick_font(min_size)
-            if font is None:
-                return "", None, 0, 0
-            bbox = draw.textbbox((0, 0), ellipsis, font=font)
-            return ellipsis, font, max(1, bbox[2] - bbox[0]), max(1, bbox[3] - bbox[1])
+            font_scale = float(min_font_scale)
+            shortened = candidate
+            while len(shortened) > 0:
+                probe = (shortened + ellipsis) if shortened else ellipsis
+                (tw, th), baseline = cv2.getTextSize(probe, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
+                if tw <= max_text_w:
+                    return probe, tw, th, baseline, font_scale
+                shortened = shortened[:-1].rstrip()
+            return "", 0, 0, 0, font_scale
 
-        def draw_single(single_val, rect):
-            target_w = max(int(rect.width * preview_zoom), 1)
-            target_h = max(int(rect.height * preview_zoom), 1)
-            display_val, font, tw, th = fit_text(single_val, target_w, target_h)
-            if not display_val or font is None:
+        def blend_supersampled_text(rect, single_val):
+            x0 = max(int(rect.x0 * preview_zoom), 0)
+            y0 = max(int(rect.y0 * preview_zoom), 0)
+            x1 = min(int(rect.x1 * preview_zoom), img.shape[1])
+            y1 = min(int(rect.y1 * preview_zoom), img.shape[0])
+            if x1 <= x0 or y1 <= y0:
                 return
-            x = int((rect.x0 * preview_zoom) + ((target_w - tw) / 2.0) + (ox * preview_zoom))
-            y = int((rect.y0 * preview_zoom) + ((target_h - th) / 2.0) + (oy * preview_zoom))
-            draw.text((x, y), display_val, font=font, fill=(0, 0, 0))
 
-        def draw_grid(grid_val, rect, cells):
-            cells = max(int(cells), 1)
-            target_h = max(int(rect.height * preview_zoom), 1)
-            cell_w = (rect.width * preview_zoom) / cells
-            for i, ch in enumerate(str(grid_val)[:cells]):
-                display_val, font, tw, th = fit_text(str(ch), cell_w - 1, target_h)
-                if not display_val or font is None:
-                    continue
-                x = int((rect.x0 * preview_zoom) + (i * cell_w) + ((cell_w - tw) / 2.0) + (ox * preview_zoom))
-                y = int((rect.y0 * preview_zoom) + ((target_h - th) / 2.0) + (oy * preview_zoom))
-                draw.text((x, y), display_val, font=font, fill=(0, 0, 0))
+            pad = max(2, int(min(x1 - x0, y1 - y0) * 0.12))
+            roi_x0 = max(x0 - pad, 0)
+            roi_y0 = max(y0 - pad, 0)
+            roi_x1 = min(x1 + pad, img.shape[1])
+            roi_y1 = min(y1 + pad, img.shape[0])
+            roi = img[roi_y0:roi_y1, roi_x0:roi_x1]
+            if roi.size == 0:
+                return
+
+            scale = 3
+            up_h = max((roi_y1 - roi_y0) * scale, 1)
+            up_w = max((roi_x1 - roi_x0) * scale, 1)
+            overlay = np.full((up_h, up_w, 3), 255, dtype=np.uint8)
+
+            target_w = max((x1 - x0) * scale, 1)
+            target_h = max((y1 - y0) * scale, 1)
+            base_font_scale = max((target_h * max(fs_scale, 0.82)) / 30.0, 0.42)
+            thickness = 3 if target_h < 120 else 4
+            display_val, tw, th, baseline, font_scale = fit_value(single_val, base_font_scale, thickness, target_w - 8, min_font_scale=0.30)
+            if not display_val:
+                return
+
+            local_box_x = (x0 - roi_x0) * scale
+            local_box_y = (y0 - roi_y0) * scale
+            x = int(local_box_x + ((target_w - tw) / 2.0))
+            y = int(local_box_y + ((target_h - th) / 2.0) + th)
+            cv2.putText(overlay, display_val, (x, y), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), thickness, cv2.LINE_AA)
+
+            down = cv2.resize(overlay, (roi.shape[1], roi.shape[0]), interpolation=cv2.INTER_AREA)
+            img[roi_y0:roi_y1, roi_x0:roi_x1] = cv2.min(roi, down)
+
+        def blend_supersampled_char(rect, idx, total_cells, ch):
+            x0 = rect.x0 + (rect.width * idx / total_cells)
+            x1 = rect.x0 + (rect.width * (idx + 1) / total_cells)
+            cell_rect = fitz.Rect(x0, rect.y0, x1, rect.y1)
+            blend_supersampled_text(cell_rect, str(ch))
 
         if is_grid and len(rects) > 1:
             counts = self._allocate_cells_by_width(rects, grid_n)
             pos = 0
             for rect, n_cells in zip(rects, counts):
                 seg = val[pos:pos + n_cells]
-                if seg:
-                    draw_grid(seg, rect, n_cells)
+                for i, ch in enumerate(seg[:max(int(n_cells), 1)]):
+                    blend_supersampled_char(rect, i, max(int(n_cells), 1), ch)
                 pos += n_cells
-        else:
-            target = rects[0] if len(rects) == 1 else self._rect_union(rects)
-            if is_grid:
-                draw_grid(val, target, grid_n)
-            else:
-                draw_single(val, target)
+            return
 
-        img[:] = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+        target = rects[0] if len(rects) == 1 else self._rect_union(rects)
+        if is_grid:
+            cells = max(int(grid_n), 1)
+            for i, ch in enumerate(val[:cells]):
+                blend_supersampled_char(target, i, cells, ch)
+        else:
+            blend_supersampled_text(target, val)
 
     def _draw_check_op_cv(self, img, rects, preview_zoom=1.5):
         rects = sorted([self._coerce_rect(r) for r in rects], key=lambda rr: (round(rr.y0, 3), rr.x0))
