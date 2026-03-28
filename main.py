@@ -478,22 +478,81 @@ def get_form_alchemist_download_root(app_name="FormAlchemist"):
 
 
 def get_form_alchemist_private_storage_root(app_name="form_alchemist"):
-    # Backward-compatible helper name, but storage now points to the shared
-    # Download/FormAlchemist root so learning artifacts land beside exports.
-    return get_form_alchemist_download_root(CANONICAL_SHARED_FOLDER_NAME)
+    """Return a true app-private storage root for internal learning/session files."""
+    folder_name = _safe_slug(app_name or "form_alchemist") or "form_alchemist"
+    try:
+        running_app = App.get_running_app()
+    except Exception:
+        running_app = None
+
+    user_data_dir = str(getattr(running_app, "user_data_dir", "") or "").strip()
+    candidates = []
+    if user_data_dir:
+        candidates.extend([
+            os.path.join(user_data_dir, "private_storage", folder_name),
+            os.path.join(user_data_dir, folder_name),
+        ])
+
+    home = os.path.expanduser("~")
+    candidates.extend([
+        os.path.join(home, f".{folder_name}"),
+        os.path.join(tempfile.gettempdir(), folder_name),
+    ])
+
+    last_error = None
+    for candidate in candidates:
+        try:
+            return _ensure_writable_directory(candidate)
+        except Exception as exc:
+            last_error = exc
+            continue
+
+    if last_error:
+        raise last_error
+    raise RuntimeError("Could not resolve a private storage directory.")
 
 
 class LearningStorage:
-    """Shared Download/FormAlchemist storage for learned profiles, revisions, and session state."""
+    """App-private storage for learned profiles, revisions, cache, and session state."""
 
     def __init__(self, base_dir=None, app_name="form_alchemist"):
-        canonical_root = get_form_alchemist_private_storage_root(CANONICAL_SHARED_FOLDER_NAME)
+        canonical_root = get_form_alchemist_private_storage_root(app_name or CANONICAL_SHARED_FOLDER_NAME)
         self.base_dir = str(base_dir or canonical_root)
         self.learning_dir = os.path.join(self.base_dir, "learning")
         self.revisions_dir = os.path.join(self.base_dir, "revisions")
         self.projects_dir = os.path.join(self.base_dir, "projects")
         self.cache_dir = os.path.join(self.base_dir, "cache")
         self._ensure_tree()
+        self._migrate_legacy_shared_jsons()
+
+    def _migrate_legacy_shared_jsons(self):
+        """Best-effort one-time copy of old shared-storage learning/session JSONs into private storage."""
+        try:
+            legacy_root = get_form_alchemist_download_root(CANONICAL_SHARED_FOLDER_NAME)
+        except Exception:
+            legacy_root = ""
+        legacy_root = str(legacy_root or "").strip()
+        if not legacy_root or os.path.abspath(legacy_root) == os.path.abspath(self.base_dir):
+            return
+        for subfolder in ("learning", "revisions", "projects", "cache"):
+            src_dir = os.path.join(legacy_root, subfolder)
+            dst_dir = os.path.join(self.base_dir, subfolder)
+            if not os.path.isdir(src_dir):
+                continue
+            os.makedirs(dst_dir, exist_ok=True)
+            try:
+                names = os.listdir(src_dir)
+            except Exception:
+                continue
+            for name in names:
+                src_path = os.path.join(src_dir, name)
+                dst_path = os.path.join(dst_dir, name)
+                if os.path.exists(dst_path) or not os.path.isfile(src_path):
+                    continue
+                try:
+                    shutil.copy2(src_path, dst_path)
+                except Exception:
+                    continue
 
     def _ensure_tree(self):
         for folder in [self.base_dir, self.learning_dir, self.revisions_dir, self.projects_dir, self.cache_dir]:
@@ -513,9 +572,22 @@ class LearningStorage:
         parent = os.path.dirname(path)
         os.makedirs(parent, exist_ok=True)
         tmp_path = path + ".tmp"
-        with open(tmp_path, "w", encoding="utf-8") as fh:
-            json.dump(payload, fh, indent=2, ensure_ascii=False)
-        os.replace(tmp_path, path)
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as fh:
+                json.dump(payload, fh, indent=2, ensure_ascii=False)
+                fh.flush()
+                try:
+                    os.fsync(fh.fileno())
+                except Exception:
+                    pass
+            os.replace(tmp_path, path)
+        except Exception:
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except Exception:
+                pass
+            raise
 
     def _rel(self, *parts):
         return os.path.join(self.base_dir, *parts)
@@ -10016,6 +10088,22 @@ class FormAlchemistApp(MDApp):
 
         self._bind_popup_background_softening(popup)
 
+        _detect_after_dismiss = {"armed": False}
+
+        def _after_popup_dismiss(*_):
+            if not _detect_after_dismiss["armed"]:
+                return
+            _detect_after_dismiss["armed"] = False
+            if not self.engine.pdf_path:
+                self.set_status("Detection tuning applied. Load a PDF to see the updated field finding.", kind="action", hold_seconds=2.0, force=True)
+                return
+            page_idx = self.current_page_idx()
+            self.engine.invalidate_detection_cache(page_idx=page_idx, clear_current=True)
+            self.set_status("Detection tuning applied. Refreshing field finding on the current page...", kind="action", hold_seconds=2.5, force=True)
+            Clock.schedule_once(lambda dt: self.on_run_detect(None, preserve_selection=True), 0)
+
+        popup.bind(on_dismiss=_after_popup_dismiss)
+
         def _apply_settings(*_):
             try:
                 for key, payload in controls.items():
@@ -10026,14 +10114,8 @@ class FormAlchemistApp(MDApp):
                     getattr(self, key).text = new_text
                 self.use_extent_chk.active = bool(extent_toggle.active)
                 self.apply_ui_settings_to_engine()
+                _detect_after_dismiss["armed"] = True
                 popup.dismiss()
-                if not self.engine.pdf_path:
-                    self.set_status("Detection tuning applied. Load a PDF to see the updated field finding.", kind="action", hold_seconds=2.0, force=True)
-                    return
-                page_idx = self.current_page_idx()
-                self.engine.invalidate_detection_cache(page_idx=page_idx, clear_current=True)
-                self.set_status("Detection tuning applied. Refreshing field finding on the current page...", kind="action", hold_seconds=2.5, force=True)
-                Clock.schedule_once(lambda dt: self.on_run_detect(None), 0)
             except Exception as e:
                 self.set_status(f"Detection tuning error:\n{e}", kind="error", force=True)
 
@@ -10954,7 +11036,7 @@ class FormAlchemistApp(MDApp):
     # Detection / preview    # --------------------------------------------------------
     # Detection / preview
     # --------------------------------------------------------
-    def on_run_detect(self, instance):
+    def on_run_detect(self, instance, preserve_selection=False):
         try:
             if not self.engine.pdf_path:
                 self.set_status("Load PDF first.")
@@ -10963,13 +11045,17 @@ class FormAlchemistApp(MDApp):
             self.apply_ui_settings_to_engine()
             page_idx = self.current_page_idx()
             prev_count = len(getattr(self.engine, "all_boxes", []) or []) if getattr(self.engine, "detected_page_idx", None) == page_idx else 0
+            prev_selected = list(getattr(self.engine, "selected_box_ids", []) or [])
             ctx = self.engine.prepare_learning_for_detection(page_idx=page_idx, allow_profile_apply=False)
             profile_applied = bool((ctx or {}).get("profile_applied", False))
             profile_matched = bool((ctx or {}).get("matched_profile"))
             self.engine.invalidate_detection_cache(page_idx=page_idx, clear_current=True)
             self.engine.run_detection(page_idx=page_idx)
             self.engine.finalize_learning_after_detection(page_idx=page_idx)
-            self.engine.selected_box_ids = []
+            if preserve_selection:
+                self.engine.selected_box_ids = self._sanitize_box_id_list(prev_selected)
+            else:
+                self.engine.selected_box_ids = []
             self._stash_page_selection(page_idx)
             counts = self._box_type_counts()
             if profile_applied:
@@ -10988,15 +11074,22 @@ class FormAlchemistApp(MDApp):
                 f"\nCache: refreshed{profile_msg}"
             )
             self._persist_runtime_session_state(current_page_idx=page_idx)
-            Clock.schedule_once(lambda dt: self.on_preview(None), 0)
-            Clock.schedule_once(lambda dt: self.on_preview(None), 0.05)
+            self.on_preview(None, preserve_anchor=True)
             self.set_status(summary, kind="detect", hold_seconds=3.5, force=True)
         except Exception as e:
             traceback.print_exc()
             self.set_status(f"Detect error:\n{e}", kind="error", force=True)
 
-    def on_preview(self, instance):
+    def on_preview(self, instance, preserve_anchor=False):
         try:
+            if preserve_anchor:
+                anchor = self._capture_preview_anchor()
+                result = self._render_session_page(page_idx=self.current_page_idx(), reason="Preview refreshed")
+                try:
+                    self._restore_preview_anchor(anchor)
+                except Exception:
+                    pass
+                return result
             return self._render_session_page(page_idx=self.current_page_idx(), reason="Preview refreshed")
         except Exception as e:
             traceback.print_exc()
