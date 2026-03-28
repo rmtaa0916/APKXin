@@ -17,6 +17,7 @@ import time
 import sys
 import hashlib
 import uuid
+import zipfile
 from urllib.parse import urlparse, parse_qs
 from types import SimpleNamespace
 
@@ -44,14 +45,6 @@ import numpy as np
 import pandas as pd
 
 from pypdf import PdfReader, PdfWriter
-
-try:
-    from PIL import Image
-    PIL_AVAILABLE = True
-except Exception:
-    Image = None
-    PIL_AVAILABLE = False
-
 
 try:
     from reportlab.pdfgen import canvas as rl_canvas
@@ -400,159 +393,50 @@ def _sha1_json(value):
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
 
-def _ensure_writable_directory(path):
-    path = str(path or "").strip()
-    if not path:
-        raise ValueError("Directory path is empty.")
-    os.makedirs(path, exist_ok=True)
-    probe_name = f".fa_write_test_{uuid.uuid4().hex}"
-    probe_path = os.path.join(path, probe_name)
-    with open(probe_path, "wb") as fh:
-        fh.write(b"ok")
+def get_form_alchemist_private_storage_root(app_name="form_alchemist"):
     try:
-        os.remove(probe_path)
+        running_app = App.get_running_app()
     except Exception:
-        pass
-    return path
+        running_app = None
 
-
-CANONICAL_SHARED_FOLDER_NAME = "FormAlchemist"
-
-
-def get_form_alchemist_download_root(app_name="FormAlchemist"):
-    # Keep all user-visible saves under one stable shared folder.
-    # We intentionally ignore alternate app_name values here so learning,
-    # config, imports, and exports do not drift into separate directories
-    # like Download/form_alchemist vs Download/FormAlchemist.
-    folder_name = CANONICAL_SHARED_FOLDER_NAME
-    candidates = []
+    user_data_dir = str(getattr(running_app, "user_data_dir", "") or "").strip()
+    if user_data_dir:
+        try:
+            os.makedirs(user_data_dir, exist_ok=True)
+            return user_data_dir
+        except Exception:
+            pass
 
     if platform == "android":
         try:
-            from android.storage import primary_external_storage_path
-            primary = str(primary_external_storage_path() or "").strip()
-            if primary:
-                candidates.extend([
-                    os.path.join(primary, "Download", folder_name),
-                    os.path.join(primary, "Downloads", folder_name),
-                ])
+            from android.storage import app_storage_path
+            base = str(app_storage_path() or "").strip()
+            if base:
+                os.makedirs(base, exist_ok=True)
+                return base
         except Exception:
             pass
 
-        candidates.extend([
-            os.path.join("/storage/emulated/0", "Download", folder_name),
-            os.path.join("/storage/self/primary", "Download", folder_name),
-            os.path.join("/sdcard", "Download", folder_name),
-        ])
-    else:
-        home = os.path.expanduser("~")
-        candidates.extend([
-            os.path.join(home, "Downloads", folder_name),
-            os.path.join(home, "Download", folder_name),
-        ])
-
-    for candidate in candidates:
-        try:
-            return _ensure_writable_directory(candidate)
-        except Exception:
-            continue
-
+    fallback = os.path.join(os.path.expanduser("~"), f".{_safe_slug(app_name)}")
     try:
-        running_app = App.get_running_app()
+        os.makedirs(fallback, exist_ok=True)
+        return fallback
     except Exception:
-        running_app = None
-
-    user_data_dir = str(getattr(running_app, "user_data_dir", "") or "").strip()
-    if user_data_dir:
-        try:
-            return _ensure_writable_directory(os.path.join(user_data_dir, folder_name))
-        except Exception:
-            pass
-
-    fallback = os.path.join(os.path.expanduser("~"), f".{_safe_slug(folder_name)}")
-    try:
-        return _ensure_writable_directory(fallback)
-    except Exception:
-        final_fallback = os.path.join(tempfile.gettempdir(), _safe_slug(folder_name))
-        return _ensure_writable_directory(final_fallback)
-
-
-def get_form_alchemist_private_storage_root(app_name="form_alchemist"):
-    """Return a true app-private storage root for internal learning/session files."""
-    folder_name = _safe_slug(app_name or "form_alchemist") or "form_alchemist"
-    try:
-        running_app = App.get_running_app()
-    except Exception:
-        running_app = None
-
-    user_data_dir = str(getattr(running_app, "user_data_dir", "") or "").strip()
-    candidates = []
-    if user_data_dir:
-        candidates.extend([
-            os.path.join(user_data_dir, "private_storage", folder_name),
-            os.path.join(user_data_dir, folder_name),
-        ])
-
-    home = os.path.expanduser("~")
-    candidates.extend([
-        os.path.join(home, f".{folder_name}"),
-        os.path.join(tempfile.gettempdir(), folder_name),
-    ])
-
-    last_error = None
-    for candidate in candidates:
-        try:
-            return _ensure_writable_directory(candidate)
-        except Exception as exc:
-            last_error = exc
-            continue
-
-    if last_error:
-        raise last_error
-    raise RuntimeError("Could not resolve a private storage directory.")
+        final_fallback = os.path.join(tempfile.gettempdir(), _safe_slug(app_name))
+        os.makedirs(final_fallback, exist_ok=True)
+        return final_fallback
 
 
 class LearningStorage:
-    """App-private storage for learned profiles, revisions, cache, and session state."""
+    """App-private storage for learned profiles, revisions, and session state."""
 
     def __init__(self, base_dir=None, app_name="form_alchemist"):
-        canonical_root = get_form_alchemist_private_storage_root(app_name or CANONICAL_SHARED_FOLDER_NAME)
-        self.base_dir = str(base_dir or canonical_root)
+        self.base_dir = str(base_dir or get_form_alchemist_private_storage_root(app_name))
         self.learning_dir = os.path.join(self.base_dir, "learning")
         self.revisions_dir = os.path.join(self.base_dir, "revisions")
         self.projects_dir = os.path.join(self.base_dir, "projects")
         self.cache_dir = os.path.join(self.base_dir, "cache")
         self._ensure_tree()
-        self._migrate_legacy_shared_jsons()
-
-    def _migrate_legacy_shared_jsons(self):
-        """Best-effort one-time copy of old shared-storage learning/session JSONs into private storage."""
-        try:
-            legacy_root = get_form_alchemist_download_root(CANONICAL_SHARED_FOLDER_NAME)
-        except Exception:
-            legacy_root = ""
-        legacy_root = str(legacy_root or "").strip()
-        if not legacy_root or os.path.abspath(legacy_root) == os.path.abspath(self.base_dir):
-            return
-        for subfolder in ("learning", "revisions", "projects", "cache"):
-            src_dir = os.path.join(legacy_root, subfolder)
-            dst_dir = os.path.join(self.base_dir, subfolder)
-            if not os.path.isdir(src_dir):
-                continue
-            os.makedirs(dst_dir, exist_ok=True)
-            try:
-                names = os.listdir(src_dir)
-            except Exception:
-                continue
-            for name in names:
-                src_path = os.path.join(src_dir, name)
-                dst_path = os.path.join(dst_dir, name)
-                if os.path.exists(dst_path) or not os.path.isfile(src_path):
-                    continue
-                try:
-                    shutil.copy2(src_path, dst_path)
-                except Exception:
-                    continue
 
     def _ensure_tree(self):
         for folder in [self.base_dir, self.learning_dir, self.revisions_dir, self.projects_dir, self.cache_dir]:
@@ -572,22 +456,9 @@ class LearningStorage:
         parent = os.path.dirname(path)
         os.makedirs(parent, exist_ok=True)
         tmp_path = path + ".tmp"
-        try:
-            with open(tmp_path, "w", encoding="utf-8") as fh:
-                json.dump(payload, fh, indent=2, ensure_ascii=False)
-                fh.flush()
-                try:
-                    os.fsync(fh.fileno())
-                except Exception:
-                    pass
-            os.replace(tmp_path, path)
-        except Exception:
-            try:
-                if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
-            except Exception:
-                pass
-            raise
+        with open(tmp_path, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2, ensure_ascii=False)
+        os.replace(tmp_path, path)
 
     def _rel(self, *parts):
         return os.path.join(self.base_dir, *parts)
@@ -1585,6 +1456,72 @@ class AndroidDocumentPickerService:
         except Exception:
             return False
 
+    def write_bytes_to_uri(self, uri, payload, mode="w"):
+        if platform != "android" or not ANDROID_JAVA_AVAILABLE:
+            raise RuntimeError("Android document saver is unavailable.")
+        if uri is None:
+            raise ValueError("Android returned no destination URI.")
+
+        data = self._coerce_binary_payload(payload)
+        if isinstance(uri, str):
+            uri_string = uri.strip()
+        else:
+            try:
+                uri_string = str(uri.toString()).strip()
+            except Exception:
+                uri_string = ""
+
+        if not uri_string:
+            raise ValueError("Android returned an empty destination URI.")
+
+        uri_obj = AndroidUri.parse(uri_string)
+        activity_obj = AndroidPythonActivity.mActivity
+        resolver = activity_obj.getContentResolver()
+
+        pfd = None
+        fd = None
+        try:
+            try:
+                open_mode = "rwt" if "w" in str(mode or "w") and "t" not in str(mode or "w") else (mode or "w")
+                pfd = resolver.openFileDescriptor(uri_obj, open_mode)
+            except Exception:
+                pfd = resolver.openFileDescriptor(uri_obj, mode or "w")
+            if pfd is None:
+                raise IOError("Android could not open the save destination.")
+
+            fd = pfd.detachFd()
+            try:
+                os.ftruncate(fd, 0)
+            except Exception:
+                pass
+
+            total = 0
+            chunk_size = 65536
+            while total < len(data):
+                chunk = data[total:total + chunk_size]
+                written = os.write(fd, chunk)
+                if written is None:
+                    written = 0
+                if written <= 0:
+                    raise IOError("Android write returned 0 bytes.")
+                total += written
+
+            try:
+                os.fsync(fd)
+            except Exception:
+                pass
+            return total
+        finally:
+            try:
+                if fd is not None:
+                    os.close(fd)
+            except Exception:
+                pass
+            try:
+                if pfd is not None:
+                    pfd.close()
+            except Exception:
+                pass
 
     def copy_uri_to_local_file(self, uri, default_name="selected_input", required_suffix=None, allowed_suffixes=None):
         if platform != "android" or not ANDROID_JAVA_AVAILABLE:
@@ -1899,7 +1836,7 @@ class FormAlchemistEngine:
         self.geom_by_page = {}
         self.boxes_settings_signature_by_page = {}
 
-        self.learning_storage = LearningStorage(app_name=CANONICAL_SHARED_FOLDER_NAME)
+        self.learning_storage = LearningStorage(app_name="form_alchemist")
         self.learning_enabled = True
         self.profile_memory = self.learning_storage.load_profile_memory()
         self.template_stats = self.learning_storage.load_template_stats()
@@ -2308,13 +2245,9 @@ class FormAlchemistEngine:
     def supports_export_backend(self):
         """
         Return True when filled-PDF export is available.
-        Backends are tried in this order:
-        1) PyMuPDF (vector-safe when packaged)
-        2) Raster export using the existing page renderer + Pillow
-        3) ReportLab+pypdf fallback
+        Phase 3 export uses reportlab overlays + pypdf merge, so PyMuPDF is optional.
         """
-        raster_ok = bool(PIL_AVAILABLE and self.supports_detection_backend())
-        return bool(FITZ_AVAILABLE or raster_ok or REPORTLAB_AVAILABLE)
+        return bool(REPORTLAB_AVAILABLE)
 
     def supports_processing_backend(self):
         """
@@ -3592,200 +3525,9 @@ class FormAlchemistEngine:
         c.setFont("Helvetica-Bold", fs)
         c.drawString(x, y, "X")
 
-    def _write_check_op_fitz(self, page, rects):
-        rects = sorted([self._coerce_rect(r) for r in rects], key=lambda rr: (round(rr.y0, 3), rr.x0))
-        if not rects:
-            return
-        target = rects[0] if len(rects) == 1 else self._rect_union(rects)
-        fs = max(float(target.height) * 0.95, 8.0)
-        p = fitz.Point(
-            float(target.x0) + (float(target.width) * 0.15),
-            float(target.y1) - (float(target.height) * 0.15),
-        )
-        page.insert_text(p, "X", fontsize=fs, fontname="helv")
-
-    def _get_pdf_page_size_points(self, page_idx=0):
-        if not self.pdf_path or not os.path.exists(self.pdf_path):
-            raise FileNotFoundError("PDF path is missing or invalid.")
-        with open(self.pdf_path, "rb") as fh:
-            reader = PdfReader(fh)
-            total_pages = len(reader.pages)
-            if total_pages <= 0:
-                raise ValueError("PDF has no pages.")
-            page_idx = max(0, min(int(page_idx), total_pages - 1))
-            page = reader.pages[page_idx]
-            return float(page.mediabox.width), float(page.mediabox.height)
-
-    def _rect_to_raster_px(self, rect, sx, sy):
-        r = self._coerce_rect(rect)
-        x0 = int(round(float(r.x0) * float(sx)))
-        y0 = int(round(float(r.y0) * float(sy)))
-        x1 = int(round(float(r.x1) * float(sx)))
-        y1 = int(round(float(r.y1) * float(sy)))
-        if x1 < x0:
-            x0, x1 = x1, x0
-        if y1 < y0:
-            y0, y1 = y1, y0
-        return x0, y0, x1, y1
-
-    def _fit_raster_text(self, text, max_w, max_h, bold=False):
-        font_face = cv2.FONT_HERSHEY_SIMPLEX
-        base_scale = max(float(max_h) / 26.0, 0.35)
-        scale = min(base_scale, 3.0)
-        thickness = max(1, int(round(scale * (2.2 if bold else 1.6))))
-        safe_text = str(text or "")
-        while scale > 0.20:
-            (tw, th), _ = cv2.getTextSize(safe_text, font_face, scale, thickness)
-            if tw <= max(max_w - 4, 4) and th <= max(max_h - 2, 2):
-                return font_face, scale, thickness, tw, th
-            scale *= 0.90
-            thickness = max(1, int(round(scale * (2.2 if bold else 1.6))))
-        (tw, th), _ = cv2.getTextSize(safe_text, font_face, scale, thickness)
-        return font_face, scale, thickness, tw, th
-
-    def _write_text_op_raster(self, img_bgr, text, rects, is_grid=False, grid_n=1, sx=1.0, sy=1.0):
-        val = str(text or "").strip()
-        if not val or val.lower() in ["nan", "none"]:
-            return
-        if val.endswith('.0'):
-            val = val[:-2]
-        val = val.upper()
-
-        rects = sorted([self._coerce_rect(r) for r in rects], key=lambda rr: (round(rr.y0, 3), rr.x0))
-        if not rects:
-            return
-
-        color = (0, 0, 0)
-
-        def draw_single(single_val, rect):
-            x0, y0, x1, y1 = self._rect_to_raster_px(rect, sx, sy)
-            w = max(x1 - x0, 6)
-            h = max(y1 - y0, 6)
-            font_face, scale, thickness, tw, th = self._fit_raster_text(single_val, w, h, bold=False)
-            x = int(x0 + max((w - tw) / 2.0, 1.0))
-            baseline = int(y1 - max(h * 0.18, 2.0))
-            cv2.putText(img_bgr, single_val, (x, baseline), font_face, scale, color, thickness, cv2.LINE_AA)
-
-        def draw_grid(grid_val, rect, cells):
-            cells = max(int(cells), 1)
-            x0, y0, x1, y1 = self._rect_to_raster_px(rect, sx, sy)
-            w = max(x1 - x0, 6)
-            h = max(y1 - y0, 6)
-            cell_w = max(float(w) / cells, 4.0)
-            for i, ch in enumerate(grid_val[:cells]):
-                cx0 = int(round(x0 + i * cell_w))
-                cx1 = int(round(x0 + (i + 1) * cell_w))
-                cw = max(cx1 - cx0, 4)
-                font_face, scale, thickness, tw, th = self._fit_raster_text(ch, cw, h, bold=False)
-                x = int(cx0 + max((cw - tw) / 2.0, 0.0))
-                baseline = int(y1 - max(h * 0.18, 2.0))
-                cv2.putText(img_bgr, ch, (x, baseline), font_face, scale, color, thickness, cv2.LINE_AA)
-
-        if is_grid and len(rects) > 1:
-            counts = self._allocate_cells_by_width(rects, grid_n)
-            pos = 0
-            for rect, n_cells in zip(rects, counts):
-                seg = val[pos:pos + n_cells]
-                if seg:
-                    draw_grid(seg, rect, n_cells)
-                pos += n_cells
-            return
-
-        target = rects[0] if len(rects) == 1 else self._rect_union(rects)
-        if is_grid:
-            draw_grid(val, target, grid_n)
-        else:
-            draw_single(val, target)
-
-    def _write_check_op_raster(self, img_bgr, rects, sx=1.0, sy=1.0):
-        rects = sorted([self._coerce_rect(r) for r in rects], key=lambda rr: (round(rr.y0, 3), rr.x0))
-        if not rects:
-            return
-        target = rects[0] if len(rects) == 1 else self._rect_union(rects)
-        x0, y0, x1, y1 = self._rect_to_raster_px(target, sx, sy)
-        w = max(x1 - x0, 6)
-        h = max(y1 - y0, 6)
-        font_face, scale, thickness, tw, th = self._fit_raster_text('X', w, h, bold=True)
-        x = int(x0 + max((w - tw) / 2.0, 0.0))
-        baseline = int(y1 - max(h * 0.10, 1.0))
-        cv2.putText(img_bgr, 'X', (x, baseline), font_face, scale, (0, 0, 0), thickness, cv2.LINE_AA)
-
-    def _build_filled_pdf_bytes_raster(self, patient_name, page_idx=0, record_key=None):
-        if not PIL_AVAILABLE:
-            raise RuntimeError('Raster PDF export backend is unavailable in this build.')
-        if not self.pdf_path or not os.path.exists(self.pdf_path):
-            raise FileNotFoundError('PDF path is missing or invalid.')
-
-        ops = self._collect_overlay_ops(patient_name, page_idx=page_idx, record_key=record_key)
-        page_w, page_h = self._get_pdf_page_size_points(page_idx=page_idx)
-        render_zoom = 2.4
-        img_bgr = self.pdf_source.render_page_bgr(self.pdf_path, page_idx=page_idx, preview_zoom=render_zoom)
-        if img_bgr is None:
-            raise RuntimeError('Raster renderer returned no page image.')
-        if len(img_bgr.shape) == 2:
-            img_bgr = cv2.cvtColor(img_bgr, cv2.COLOR_GRAY2BGR)
-        elif img_bgr.shape[2] == 4:
-            img_bgr = cv2.cvtColor(img_bgr, cv2.COLOR_BGRA2BGR)
-        else:
-            img_bgr = img_bgr.copy()
-
-        sx = float(img_bgr.shape[1]) / max(float(page_w), 1.0)
-        sy = float(img_bgr.shape[0]) / max(float(page_h), 1.0)
-
-        for op in ops:
-            if op.get('kind') == 'check':
-                self._write_check_op_raster(img_bgr, op.get('rects', []), sx=sx, sy=sy)
-            else:
-                self._write_text_op_raster(
-                    img_bgr,
-                    op.get('text', ''),
-                    op.get('rects', []),
-                    is_grid=bool(op.get('grid', False)),
-                    grid_n=int(op.get('grid_n', 1)),
-                    sx=sx,
-                    sy=sy,
-                )
-
-        img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-        out_buf = io.BytesIO()
-        Image.fromarray(img_rgb).save(out_buf, format='PDF', resolution=150.0)
-        return out_buf.getvalue()
-
-    def _build_filled_pdf_bytes_fitz(self, patient_name, page_idx=0, record_key=None):
-        if not FITZ_AVAILABLE:
-            raise RuntimeError("PyMuPDF export backend is unavailable in this build.")
-        if not self.pdf_path or not os.path.exists(self.pdf_path):
-            raise FileNotFoundError("PDF path is missing or invalid.")
-
-        ops = self._collect_overlay_ops(patient_name, page_idx=page_idx, record_key=record_key)
-        doc = fitz.open(self.pdf_path)
-        try:
-            total_pages = len(doc)
-            if total_pages <= 0:
-                raise ValueError("PDF has no pages.")
-            if int(page_idx) < 0 or int(page_idx) >= total_pages:
-                raise IndexError(f"Page index out of range: {page_idx}")
-
-            page = doc[int(page_idx)]
-            for op in ops:
-                if op.get("kind") == "check":
-                    self._write_check_op_fitz(page, op.get("rects", []))
-                else:
-                    self.draw_logic(
-                        page,
-                        op.get("text", ""),
-                        op.get("rects", []),
-                        is_grid=bool(op.get("grid", False)),
-                        grid_n=int(op.get("grid_n", 1)),
-                        fs_scale=0.65,
-                    )
-            return doc.tobytes(garbage=3, deflate=True)
-        finally:
-            doc.close()
-
-    def _build_filled_pdf_bytes_reportlab(self, patient_name, page_idx=0, record_key=None):
-        if not REPORTLAB_AVAILABLE:
-            raise RuntimeError("ReportLab export backend is unavailable in this build.")
+    def _build_filled_pdf_bytes(self, patient_name, page_idx=0, record_key=None):
+        if not self.supports_export_backend():
+            raise RuntimeError("PDF export backend is unavailable in this build.")
         if not self.pdf_path or not os.path.exists(self.pdf_path):
             raise FileNotFoundError("PDF path is missing or invalid.")
 
@@ -3835,47 +3577,6 @@ class FormAlchemistEngine:
             out_buf = io.BytesIO()
             writer.write(out_buf)
             return out_buf.getvalue()
-
-    def _build_filled_pdf_bytes(self, patient_name, page_idx=0, record_key=None):
-        if not self.supports_export_backend():
-            raise RuntimeError("PDF export backend is unavailable in this build.")
-
-        fitz_err = None
-        if FITZ_AVAILABLE:
-            try:
-                return self._build_filled_pdf_bytes_fitz(patient_name, page_idx=page_idx, record_key=record_key)
-            except Exception as e:
-                fitz_err = e
-                traceback.print_exc()
-
-        raster_err = None
-        if PIL_AVAILABLE and self.supports_detection_backend():
-            try:
-                return self._build_filled_pdf_bytes_raster(patient_name, page_idx=page_idx, record_key=record_key)
-            except Exception as e:
-                raster_err = e
-                traceback.print_exc()
-
-        if REPORTLAB_AVAILABLE:
-            try:
-                return self._build_filled_pdf_bytes_reportlab(patient_name, page_idx=page_idx, record_key=record_key)
-            except Exception as reportlab_err:
-                details = []
-                if fitz_err is not None:
-                    details.append(f"PyMuPDF: {fitz_err}")
-                if raster_err is not None:
-                    details.append(f"Raster: {raster_err}")
-                details.append(f"ReportLab: {reportlab_err}")
-                raise RuntimeError("Export failed. " + " | ".join(details))
-
-        details = []
-        if fitz_err is not None:
-            details.append(f"PyMuPDF: {fitz_err}")
-        if raster_err is not None:
-            details.append(f"Raster: {raster_err}")
-        if details:
-            raise RuntimeError("Export failed. " + " | ".join(details))
-        raise RuntimeError("No usable PDF export backend is available.")
 
     def export_filled_pdf(self, patient_name, out_path, page_idx=0, record_key=None):
         pdf_bytes = self._build_filled_pdf_bytes(patient_name, page_idx=page_idx, record_key=record_key)
@@ -8560,11 +8261,19 @@ class FormAlchemistApp(MDApp):
             raise ValueError(f"Invalid settings input: {e}")
 
     def get_app_output_dir(self):
-        """Return the shared Download/FormAlchemist directory when writable."""
-        return get_form_alchemist_download_root(CANONICAL_SHARED_FOLDER_NAME)
+        """Return a writable app-controlled directory for generated files/configs."""
+        base_dir = getattr(self, "user_data_dir", None)
+        if not base_dir:
+            base_dir = os.path.join(os.path.expanduser("~"), "FormAlchemist")
+
+        out_dir = os.path.join(base_dir, "output")
+        os.makedirs(out_dir, exist_ok=True)
+        return out_dir
 
     def get_default_file_path(self):
-        return self.get_app_output_dir()
+        if platform == "android":
+            return self.get_app_output_dir()
+        return os.path.expanduser("~")
         
     def push_engine_settings_to_ui(self):
         s = self.engine.settings
@@ -10088,22 +9797,6 @@ class FormAlchemistApp(MDApp):
 
         self._bind_popup_background_softening(popup)
 
-        _detect_after_dismiss = {"armed": False}
-
-        def _after_popup_dismiss(*_):
-            if not _detect_after_dismiss["armed"]:
-                return
-            _detect_after_dismiss["armed"] = False
-            if not self.engine.pdf_path:
-                self.set_status("Detection tuning applied. Load a PDF to see the updated field finding.", kind="action", hold_seconds=2.0, force=True)
-                return
-            page_idx = self.current_page_idx()
-            self.engine.invalidate_detection_cache(page_idx=page_idx, clear_current=True)
-            self.set_status("Detection tuning applied. Refreshing field finding on the current page...", kind="action", hold_seconds=2.5, force=True)
-            Clock.schedule_once(lambda dt: self.on_run_detect(None, preserve_selection=True), 0)
-
-        popup.bind(on_dismiss=_after_popup_dismiss)
-
         def _apply_settings(*_):
             try:
                 for key, payload in controls.items():
@@ -10114,8 +9807,14 @@ class FormAlchemistApp(MDApp):
                     getattr(self, key).text = new_text
                 self.use_extent_chk.active = bool(extent_toggle.active)
                 self.apply_ui_settings_to_engine()
-                _detect_after_dismiss["armed"] = True
                 popup.dismiss()
+                if not self.engine.pdf_path:
+                    self.set_status("Detection tuning applied. Load a PDF to see the updated field finding.", kind="action", hold_seconds=2.0, force=True)
+                    return
+                page_idx = self.current_page_idx()
+                self.engine.invalidate_detection_cache(page_idx=page_idx, clear_current=True)
+                self.set_status("Detection tuning applied. Refreshing field finding on the current page...", kind="action", hold_seconds=2.5, force=True)
+                Clock.schedule_once(lambda dt: self.on_run_detect(None), 0)
             except Exception as e:
                 self.set_status(f"Detection tuning error:\n{e}", kind="error", force=True)
 
@@ -10977,8 +10676,51 @@ class FormAlchemistApp(MDApp):
         except Exception:
             pass
 
+    def _build_config_json_payload(self):
+        self.apply_ui_settings_to_engine()
+        self.engine._config_ui_state = self._collect_runtime_config_state()
+        cfg = self.engine.collect_config()
+        payload = json.dumps(cfg, indent=2, ensure_ascii=False).encode("utf-8")
+        if not payload:
+            raise ValueError("Config payload is empty.")
+        return cfg, payload
+
+    def _save_android_config_via_picker(self, suggested_name=CONFIG_FILENAME, request_code=42443):
+        cfg, payload = self._build_config_json_payload()
+
+        def _handle_uri(uri):
+            try:
+                written = self.android_picker.write_bytes_to_uri(uri, payload)
+                uri_text = str(uri) if uri is not None else ""
+                self.engine.save_learning_revision(
+                    reason="save_config",
+                    approved=False,
+                    learning_weight=0.35,
+                    source_path=uri_text or str(suggested_name or CONFIG_FILENAME),
+                )
+                self.engine.persist_learning_session(current_page_idx=self.current_page_idx())
+                lines = ["Config saved:", str(suggested_name or CONFIG_FILENAME), f"Bytes: {written}"]
+                if uri_text:
+                    lines.append(uri_text)
+                self.set_status("\n".join(lines))
+            except Exception as e:
+                traceback.print_exc()
+                self.set_status(f"Save config error:\n{e}")
+
+        self.set_status(f"Choose save location:\n{suggested_name}")
+        return self._open_android_create_document(
+            request_code=request_code,
+            suggested_name=str(suggested_name or CONFIG_FILENAME),
+            mime_type="application/json",
+            on_picked=_handle_uri,
+            cancel_message="Config save cancelled.",
+        )
+
     def on_save_config(self, instance):
         try:
+            if platform == "android":
+                return self._save_android_config_via_picker(suggested_name=CONFIG_FILENAME, request_code=42443)
+
             self.apply_ui_settings_to_engine()
             self.engine._config_ui_state = self._collect_runtime_config_state()
             out_path = os.path.join(self.get_app_output_dir(), CONFIG_FILENAME)
@@ -11036,7 +10778,7 @@ class FormAlchemistApp(MDApp):
     # Detection / preview    # --------------------------------------------------------
     # Detection / preview
     # --------------------------------------------------------
-    def on_run_detect(self, instance, preserve_selection=False):
+    def on_run_detect(self, instance):
         try:
             if not self.engine.pdf_path:
                 self.set_status("Load PDF first.")
@@ -11045,17 +10787,13 @@ class FormAlchemistApp(MDApp):
             self.apply_ui_settings_to_engine()
             page_idx = self.current_page_idx()
             prev_count = len(getattr(self.engine, "all_boxes", []) or []) if getattr(self.engine, "detected_page_idx", None) == page_idx else 0
-            prev_selected = list(getattr(self.engine, "selected_box_ids", []) or [])
             ctx = self.engine.prepare_learning_for_detection(page_idx=page_idx, allow_profile_apply=False)
             profile_applied = bool((ctx or {}).get("profile_applied", False))
             profile_matched = bool((ctx or {}).get("matched_profile"))
             self.engine.invalidate_detection_cache(page_idx=page_idx, clear_current=True)
             self.engine.run_detection(page_idx=page_idx)
             self.engine.finalize_learning_after_detection(page_idx=page_idx)
-            if preserve_selection:
-                self.engine.selected_box_ids = self._sanitize_box_id_list(prev_selected)
-            else:
-                self.engine.selected_box_ids = []
+            self.engine.selected_box_ids = []
             self._stash_page_selection(page_idx)
             counts = self._box_type_counts()
             if profile_applied:
@@ -11074,22 +10812,15 @@ class FormAlchemistApp(MDApp):
                 f"\nCache: refreshed{profile_msg}"
             )
             self._persist_runtime_session_state(current_page_idx=page_idx)
-            self.on_preview(None, preserve_anchor=True)
+            Clock.schedule_once(lambda dt: self.on_preview(None), 0)
+            Clock.schedule_once(lambda dt: self.on_preview(None), 0.05)
             self.set_status(summary, kind="detect", hold_seconds=3.5, force=True)
         except Exception as e:
             traceback.print_exc()
             self.set_status(f"Detect error:\n{e}", kind="error", force=True)
 
-    def on_preview(self, instance, preserve_anchor=False):
+    def on_preview(self, instance):
         try:
-            if preserve_anchor:
-                anchor = self._capture_preview_anchor()
-                result = self._render_session_page(page_idx=self.current_page_idx(), reason="Preview refreshed")
-                try:
-                    self._restore_preview_anchor(anchor)
-                except Exception:
-                    pass
-                return result
             return self._render_session_page(page_idx=self.current_page_idx(), reason="Preview refreshed")
         except Exception as e:
             traceback.print_exc()
@@ -11129,6 +10860,84 @@ class FormAlchemistApp(MDApp):
         except Exception as e:
             self.set_status(f"Assign mapping error:\n{e}", kind="error", force=True)
 
+    def _open_android_create_document(self, request_code, suggested_name, mime_type="application/pdf", on_picked=None, cancel_message="Save cancelled."):
+        if platform != "android" or not ANDROID_JAVA_AVAILABLE:
+            raise RuntimeError("Android save picker is unavailable.")
+
+        result_ok = getattr(activity, "result_ok", -1)
+
+        def _on_activity_result(request_code_result, result_code, intent):
+            if request_code_result != request_code:
+                return
+
+            activity.unbind(on_activity_result=_on_activity_result)
+
+            if result_code != result_ok or intent is None:
+                Clock.schedule_once(lambda dt, m=cancel_message: self.set_status(m), 0)
+                return
+
+            try:
+                uri = intent.getData()
+            except Exception:
+                uri = None
+
+            if uri is None:
+                Clock.schedule_once(lambda dt, m=cancel_message: self.set_status(m), 0)
+                return
+
+            if callable(on_picked):
+                def _dispatch(dt, picked_uri=uri):
+                    try:
+                        on_picked(picked_uri)
+                    except Exception as e:
+                        traceback.print_exc()
+                        self.set_status(f"Save error:\n{e}")
+                Clock.schedule_once(_dispatch, 0)
+
+        activity.bind(on_activity_result=_on_activity_result)
+        try:
+            intent = AndroidIntent(AndroidIntent.ACTION_CREATE_DOCUMENT)
+            intent.addCategory(AndroidIntent.CATEGORY_OPENABLE)
+            intent.addFlags(AndroidIntent.FLAG_GRANT_READ_URI_PERMISSION)
+            intent.addFlags(AndroidIntent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            intent.setType(mime_type or "*/*")
+            try:
+                intent.putExtra(AndroidIntent.EXTRA_TITLE, str(suggested_name or "output"))
+            except Exception:
+                pass
+            AndroidPythonActivity.mActivity.startActivityForResult(intent, request_code)
+        except Exception:
+            try:
+                activity.unbind(on_activity_result=_on_activity_result)
+            except Exception:
+                pass
+            raise
+    def _save_android_bytes_via_picker(self, payload, suggested_name, mime_type="application/pdf", request_code=42441, success_message="Saved", extra_status_lines=None):
+        data = bytes(payload or b"")
+        if not data:
+            raise ValueError("Generated file is empty.")
+
+        def _handle_uri(uri):
+            try:
+                written = self.android_picker.write_bytes_to_uri(uri, data)
+                lines = [f"{success_message}:", str(suggested_name)]
+                if extra_status_lines:
+                    lines.extend([str(line) for line in extra_status_lines if str(line or "").strip()])
+                lines.append(f"Bytes: {written}")
+                self.set_status("\n".join(lines))
+            except Exception as e:
+                traceback.print_exc()
+                self.set_status(f"Save error:\n{e}")
+
+        self.set_status(f"Choose save location:\n{suggested_name}")
+        return self._open_android_create_document(
+            request_code=request_code,
+            suggested_name=suggested_name,
+            mime_type=mime_type,
+            on_picked=_handle_uri,
+            cancel_message="Save cancelled.",
+        )
+
     # --------------------------------------------------------
     # Output generation
     # --------------------------------------------------------
@@ -11148,12 +10957,21 @@ class FormAlchemistApp(MDApp):
                 return
 
             page_idx = self.current_page_idx()
-            out_dir = self.get_app_output_dir()
-            out_path = os.path.join(
-                out_dir,
-                f"Filled_{safe_name(patient)}_page_{page_idx + 1}.pdf"
-            )
+            filename = f"Filled_{safe_name(patient)}_page_{page_idx + 1}.pdf"
 
+            if platform == "android":
+                pdf_bytes = self.engine._build_filled_pdf_bytes(patient, page_idx=page_idx, record_key=record_key)
+                return self._save_android_bytes_via_picker(
+                    pdf_bytes,
+                    filename,
+                    mime_type="application/pdf",
+                    request_code=42441,
+                    success_message="Export saved",
+                    extra_status_lines=[f"Record: {patient}", f"Page: {page_idx + 1}"],
+                )
+
+            out_dir = self.get_app_output_dir()
+            out_path = os.path.join(out_dir, filename)
             self.engine.export_filled_pdf(patient, out_path, page_idx=page_idx, record_key=record_key)
             self.set_status("Generated:\n" + out_path)
         except Exception as e:
@@ -11379,12 +11197,39 @@ class FormAlchemistApp(MDApp):
                 return
 
             names = sorted(self.engine.df["_DISPLAY_NAME"].dropna().astype(str).unique())
-            out_dir = os.path.join(self.get_app_output_dir(), "batch_output")
-            os.makedirs(out_dir, exist_ok=True)
-
             success = 0
             skipped = 0
             page_idx = self.current_page_idx()
+
+            if platform == "android":
+                zip_buffer = io.BytesIO()
+                with zipfile.ZipFile(zip_buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                    for patient_name in names:
+                        try:
+                            safe_p_name = "".join(c if c.isalnum() or c in (" ", "-", "_") else "_" for c in patient_name).strip()
+                            pdf_name = f"Filled_{safe_p_name or 'Unknown'}.pdf"
+                            pdf_bytes = self.engine._build_filled_pdf_bytes(patient_name, page_idx=page_idx)
+                            zf.writestr(pdf_name, pdf_bytes)
+                            success += 1
+                        except Exception:
+                            traceback.print_exc()
+                            skipped += 1
+
+                if success <= 0:
+                    self.set_status(f"Batch error:\nNo PDFs were generated. Skipped: {skipped}")
+                    return
+                batch_name = f"FormAlchemist_Batch_page_{page_idx + 1}.zip"
+                return self._save_android_bytes_via_picker(
+                    zip_buffer.getvalue(),
+                    batch_name,
+                    mime_type="application/zip",
+                    request_code=42442,
+                    success_message="Batch ZIP saved",
+                    extra_status_lines=[f"Success: {success}", f"Skipped: {skipped}", f"Page: {page_idx + 1}"],
+                )
+
+            out_dir = os.path.join(self.get_app_output_dir(), "batch_output")
+            os.makedirs(out_dir, exist_ok=True)
 
             for patient_name in names:
                 try:
@@ -11393,6 +11238,7 @@ class FormAlchemistApp(MDApp):
                     self.engine.export_filled_pdf(patient_name, out_path, page_idx=page_idx)
                     success += 1
                 except Exception:
+                    traceback.print_exc()
                     skipped += 1
 
             self.set_status(f"Batch done.\nFolder: {out_dir}\nSuccess: {success} | Skipped: {skipped}")
