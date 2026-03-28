@@ -1057,6 +1057,7 @@ SEMANTIC_TARGET_LABELS = {
 }
 
 SEMANTIC_TARGET_PLACEHOLDER = "No special form target"
+SEMANTIC_TARGETS_ENABLED = False
 
 def semantic_target_label(key, fallback=None):
     key = str(key or "").strip()
@@ -1860,6 +1861,8 @@ class FormAlchemistEngine:
         return self._normalize_semantic_targets(merged)
 
     def _current_semantic_targets_for_page(self, page_idx):
+        if not SEMANTIC_TARGETS_ENABLED:
+            return self._empty_semantic_targets()
         page_idx = int(page_idx or 0)
         if self.detected_page_idx == page_idx and any(self.semantic_targets.values()):
             base = self.semantic_targets
@@ -1868,7 +1871,7 @@ class FormAlchemistEngine:
         return self._apply_semantic_target_overrides(page_idx, base)
 
     def get_box_semantic_target_payload(self, box_id, page_idx):
-        if box_id < 0 or box_id >= len(self.all_boxes):
+        if (not SEMANTIC_TARGETS_ENABLED) or box_id < 0 or box_id >= len(self.all_boxes):
             return {"box_id": box_id, "page": page_idx, "status": "EMPTY", "target_key": ""}
         target_rect = self.all_boxes[box_id]
         best_key = ""
@@ -1891,6 +1894,8 @@ class FormAlchemistEngine:
         return {"box_id": box_id, "page": page_idx, "status": "EMPTY", "target_key": ""}
 
     def assign_semantic_target(self, box_ids, target_key, page_idx):
+        if not SEMANTIC_TARGETS_ENABLED:
+            return False
         target_key = str(target_key or "").strip()
         if target_key not in SEMANTIC_TARGET_KEYS:
             raise ValueError("Please choose a valid special form target.")
@@ -1918,6 +1923,8 @@ class FormAlchemistEngine:
             self._set_semantic_targets(merged_targets)
 
     def clear_semantic_target_for_box_ids(self, box_ids, page_idx, target_key=None):
+        if not SEMANTIC_TARGETS_ENABLED:
+            return False
         page_idx = int(page_idx or 0)
         selected_rects = []
         for b_id in box_ids:
@@ -1948,6 +1955,8 @@ class FormAlchemistEngine:
             self._set_semantic_targets(merged_targets)
 
     def _semantic_rects(self, *keys):
+        if not SEMANTIC_TARGETS_ENABLED:
+            return []
         out = []
         for key in keys:
             out.extend([fitz.Rect(r) for r in self.semantic_targets.get(key, [])])
@@ -2743,6 +2752,8 @@ class FormAlchemistEngine:
         return out
 
     def _infer_semantic_targets_from_dem_roi(self, img, field_area_thresh=500, field_min_h_val=20):
+        if not SEMANTIC_TARGETS_ENABLED:
+            return self._empty_semantic_targets()
         h_img, _ = img.shape[:2]
         y0_roi, y1_roi = int(0.22 * h_img), int(0.82 * h_img)
         gray_roi = cv2.cvtColor(img[y0_roi:y1_roi, :], cv2.COLOR_BGR2GRAY)
@@ -2886,18 +2897,10 @@ class FormAlchemistEngine:
         red_eps_val = float(self.settings["C_Eps"])
         red_use_extent_val = bool(self.settings["Use_Extent"])
 
-        # --- Page 0 semantic target detection
+        # --- Semantic auto-targeting disabled (manual mapping only)
         self.geom = self._empty_geom()
         self.semantic_targets = self._empty_semantic_targets()
-        if page_idx == 0:
-            self._set_semantic_targets(
-                self._infer_semantic_targets_from_dem_roi(
-                    img,
-                    field_area_thresh=field_area_thresh,
-                    field_min_h_val=field_min_h_val,
-                )
-            )
-        self._set_semantic_targets(self._apply_semantic_target_overrides(page_idx, self.semantic_targets))
+        self.semantic_targets_by_page[page_idx] = self._empty_semantic_targets()
 
         # --- General detection
         full_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -3125,7 +3128,6 @@ class FormAlchemistEngine:
         if box_idx < 0 or box_idx >= len(self.all_boxes):
             return "EMPTY"
 
-        semantic_hit = self.get_box_semantic_target_payload(box_idx, page_idx)
         target_rect = self.all_boxes[box_idx]
         best_hit = None
         best_score = -1.0
@@ -3146,9 +3148,6 @@ class FormAlchemistEngine:
                         best_hit = c
 
         parts = []
-        if semantic_hit.get("status") == "TARGETED":
-            parts.append("Target: " + str(semantic_hit.get("target_label", semantic_target_label(semantic_hit.get("target_key", ""), ""))))
-
         if best_hit is not None and best_score >= 1.0:
             col = str(best_hit.get("column", "")).strip()
             trig = str(best_hit.get("trigger", "")).strip()
@@ -3186,13 +3185,12 @@ class FormAlchemistEngine:
                         best_score = score
                         best_hit = c
 
-        semantic_hit = self.get_box_semantic_target_payload(box_id, page_idx)
         if best_hit is not None and best_score >= 1.0:
             return {
                 "box_id": box_id,
                 "page": page_idx,
                 "status": "MAPPED",
-                "semantic_target": semantic_hit if semantic_hit.get("status") == "TARGETED" else None,
+                "semantic_target": None,
                 "entries": [
                     {
                         "column": str(best_hit.get("column", "")),
@@ -3206,8 +3204,8 @@ class FormAlchemistEngine:
         return {
             "box_id": box_id,
             "page": page_idx,
-            "status": ("TARGETED" if semantic_hit.get("status") == "TARGETED" else "EMPTY"),
-            "semantic_target": semantic_hit if semantic_hit.get("status") == "TARGETED" else None,
+            "status": "EMPTY",
+            "semantic_target": None,
             "entries": []
         }
 
@@ -3371,63 +3369,6 @@ class FormAlchemistEngine:
         self._ensure_detection_for_page(page_idx=page_idx)
         row = self._get_patient_row(patient_name, record_key=record_key)
         ops = []
-
-        if page_idx == 0:
-            name_values = {
-                "record_identity.first_name": row.get(self.first_col, ""),
-                "record_identity.middle_name": row.get(self.mid_col, ""),
-                "record_identity.last_name": row.get(self.last_col, ""),
-                "record_identity.suffix": row.get(self.suf_col, ""),
-            }
-            has_specific_name_targets = any(self.semantic_targets.get(key) for key in NAME_TARGET_KEYS)
-            if has_specific_name_targets:
-                for key in NAME_TARGET_KEYS:
-                    val = str(name_values.get(key, "") or "").strip()
-                    rects = self.semantic_targets.get(key, [])
-                    if val and rects:
-                        ops.append({
-                            "kind": "text",
-                            "text": val,
-                            "rects": [self._coerce_rect(rects[0])],
-                            "grid": False,
-                            "grid_n": 1,
-                        })
-            else:
-                full_name = " ".join([str(v).strip() for v in name_values.values() if str(v or "").strip()])
-                for rect in self.semantic_targets.get("record_identity.full_name", []):
-                    if full_name:
-                        ops.append({
-                            "kind": "text",
-                            "text": full_name,
-                            "rects": [self._coerce_rect(rect)],
-                            "grid": False,
-                            "grid_n": 1,
-                        })
-
-            dt = pd.to_datetime(row.get(self.dob_col, ""), errors="coerce")
-            if not pd.isna(dt):
-                dob_values = [dt.strftime("%m"), dt.strftime("%d"), dt.strftime("%Y")]
-                dob_grid_n = [2, 2, 4]
-                dob_rects = self._semantic_rects(*DOB_TARGET_KEYS)
-                for val, n, rect in zip(dob_values, dob_grid_n, dob_rects[:3]):
-                    ops.append({
-                        "kind": "text",
-                        "text": str(val),
-                        "rects": [self._coerce_rect(rect)],
-                        "grid": True,
-                        "grid_n": int(n),
-                    })
-
-            membership_val = str(row.get(self.phil_col, "") or "").strip() if self.phil_col else ""
-            if membership_val:
-                for rect in self.semantic_targets.get("record_identity.membership_number", []):
-                    ops.append({
-                        "kind": "text",
-                        "text": membership_val,
-                        "rects": [self._coerce_rect(rect)],
-                        "grid": False,
-                        "grid_n": 1,
-                    })
 
         for configs in self.custom_mappings.values():
             for c in configs:
@@ -4430,14 +4371,6 @@ class FormAlchemistEngine:
                 })
 
         semantic_overrides_serial = {}
-        for page_idx, target_map in (self.semantic_target_overrides or {}).items():
-            page_payload = {}
-            for key in SEMANTIC_TARGET_KEYS:
-                rects = [fitz.Rect(r) for r in (target_map.get(key, []) or [])]
-                if rects:
-                    page_payload[key] = [[r.x0, r.y0, r.x1, r.y1] for r in rects]
-            if page_payload:
-                semantic_overrides_serial[str(int(page_idx))] = page_payload
 
         ui_state = getattr(self, "_config_ui_state", {}) or {}
         if not isinstance(ui_state, dict):
@@ -4445,7 +4378,6 @@ class FormAlchemistEngine:
 
         return {
             "version": 7,
-            "semantic_target_schema": 1,
             "record_label_column": str(self._record_label_column()),
             "record_key_column": str(self._record_key_column()),
             "pdf_path": self.pdf_path,
@@ -4488,7 +4420,6 @@ class FormAlchemistEngine:
             "Grid_N": int(self.settings["Grid_N"]),
 
             "custom_mappings": mappings_serial,
-            "semantic_target_overrides": semantic_overrides_serial,
         }
 
     def apply_config(self, cfg):
@@ -4529,7 +4460,7 @@ class FormAlchemistEngine:
         self.last_saved_revision_id = str(cfg.get("last_saved_revision_id", self.last_saved_revision_id or "") or self.last_saved_revision_id or "")
 
         self.custom_mappings.clear()
-        self.semantic_target_overrides = self._normalize_semantic_target_overrides(cfg.get("semantic_target_overrides", {}) or {})
+        self.semantic_target_overrides = {}
         loaded_mappings = cfg.get("custom_mappings", {}) or {}
         for k, lst in loaded_mappings.items():
             if isinstance(lst, dict):
@@ -4580,28 +4511,14 @@ class FormAlchemistEngine:
             current_ui = dict(merged_cfg.get("ui_state", {}) or {})
             merged_cfg["ui_state"] = current_ui
             if isinstance(incoming_cfg, dict):
-                for meta_key in ("semantic_target_schema", "record_label_column", "record_key_column"):
+                for meta_key in ("record_label_column", "record_key_column"):
                     if meta_key in incoming_cfg:
                         merged_cfg[meta_key] = incoming_cfg.get(meta_key)
-                current_semantic = dict(merged_cfg.get("semantic_target_overrides", {}) or {})
-                incoming_semantic = dict(incoming_cfg.get("semantic_target_overrides", {}) or {})
-                for page_key, payload in incoming_semantic.items():
-                    if prefer == "incoming" or str(page_key) not in current_semantic:
-                        current_semantic[str(page_key)] = payload
-                if current_semantic:
-                    merged_cfg["semantic_target_overrides"] = current_semantic
         else:
             merged_cfg = dict(current_cfg)
             for k, v in incoming_cfg.items():
-                if k != "custom_mappings":
+                if k not in ("custom_mappings", "semantic_target_overrides", "semantic_target_schema"):
                     merged_cfg[k] = v
-            current_semantic = dict(current_cfg.get("semantic_target_overrides", {}) or {})
-            incoming_semantic = dict(incoming_cfg.get("semantic_target_overrides", {}) or {}) if isinstance(incoming_cfg, dict) else {}
-            for page_key, payload in incoming_semantic.items():
-                if prefer == "incoming" or str(page_key) not in current_semantic:
-                    current_semantic[str(page_key)] = payload
-            if current_semantic:
-                merged_cfg["semantic_target_overrides"] = current_semantic
 
         current_entries = self._extract_current_mapping_entries(self.custom_mappings)
         incoming_entries = self._extract_cfg_mapping_entries(incoming_cfg)
@@ -4670,43 +4587,47 @@ class FormAlchemistEngine:
         if not rects:
             return
 
-        def fit_scale_for_width(single_val, max_text_w, base_scale, thickness, min_scale=0.16):
-            scale = max(float(base_scale), min_scale)
+        def fit_value_to_width(single_val, font_scale, thickness, max_text_w):
+            candidate = str(single_val)
             max_text_w = max(int(max_text_w), 1)
-            for _ in range(18):
-                (tw, th), _ = cv2.getTextSize(single_val, cv2.FONT_HERSHEY_SIMPLEX, scale, thickness)
+            (tw, th), _ = cv2.getTextSize(candidate, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
+            if tw <= max_text_w:
+                return candidate, tw, th
+            ellipsis = '…'
+            while len(candidate) > 1:
+                shortened = candidate[:-1].rstrip()
+                probe = (shortened + ellipsis) if shortened else ellipsis
+                (tw, th), _ = cv2.getTextSize(probe, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
                 if tw <= max_text_w:
-                    return scale, tw, th
-                ratio = max_text_w / float(max(tw, 1))
-                next_scale = max(min_scale, scale * max(0.55, min(ratio * 0.98, 0.92)))
-                if abs(next_scale - scale) < 0.01:
-                    scale = next_scale
-                    break
-                scale = next_scale
-            (tw, th), _ = cv2.getTextSize(single_val, cv2.FONT_HERSHEY_SIMPLEX, scale, thickness)
-            return scale, tw, th
+                    return probe, tw, th
+                candidate = shortened
+            return '', 0, 0
 
         def draw_single(single_val, rect):
             target_w = max(int(rect.width * preview_zoom), 1)
             target_h = max(int(rect.height * preview_zoom), 1)
-            base_scale = max((target_h * fs_scale) / 30.0, 0.28)
+            font_scale = min(max((target_h * fs_scale) / 30.0, 0.28), 0.55)
             thickness = 1 if target_h < 40 else 2
-            font_scale, tw, th = fit_scale_for_width(single_val, target_w - 6, base_scale, thickness)
-            x_left = int((rect.x0 * preview_zoom) + (ox * preview_zoom))
-            x = int(x_left + max((target_w - tw) / 2.0, 1.0))
+            display_val, tw, _ = fit_value_to_width(single_val, font_scale, thickness, target_w - 6)
+            if not display_val:
+                return
+            x = int((rect.x0 * preview_zoom) + max((target_w - tw) / 2.0, 1.0) + (ox * preview_zoom))
             y = int((rect.y1 * preview_zoom) - (target_h * 0.2) + (oy * preview_zoom))
-            cv2.putText(img, single_val, (x, y), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), thickness, cv2.LINE_AA)
+            cv2.putText(img, display_val, (x, y), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), thickness, cv2.LINE_AA)
 
         def draw_grid(grid_val, rect, cells):
             cells = max(int(cells), 1)
             target_h = max(int(rect.height * preview_zoom), 1)
+            font_scale = min(max((target_h * 0.60) / 30.0, 0.28), 0.50)
             thickness = 1 if target_h < 40 else 2
-            cell_w = max((rect.width * preview_zoom) / cells, 1.0)
+            cell_w = (rect.width * preview_zoom) / cells
             y = int((rect.y1 * preview_zoom) - (target_h * 0.2) + (oy * preview_zoom))
             for i, ch in enumerate(grid_val[:cells]):
-                font_scale, tw, _ = fit_scale_for_width(str(ch), int(cell_w - 2), max((target_h * 0.60) / 30.0, 0.20), thickness)
+                display_val, tw, _ = fit_value_to_width(str(ch), font_scale, thickness, cell_w - 2)
+                if not display_val:
+                    continue
                 x = int((rect.x0 * preview_zoom) + (i * cell_w) + max((cell_w - tw) / 2.0, 1.0) + (ox * preview_zoom))
-                cv2.putText(img, str(ch), (x, y), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), thickness, cv2.LINE_AA)
+                cv2.putText(img, display_val, (x, y), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), thickness, cv2.LINE_AA)
 
         if is_grid and len(rects) > 1:
             counts = self._allocate_cells_by_width(rects, grid_n)
@@ -6629,14 +6550,15 @@ class FormAlchemistApp(MDApp):
             self.preview_shell.bind(size=self._on_preview_viewport_change, pos=self._on_preview_viewport_change)
             self.preview.bind(size=self._sync_preview_stack_size)
             self.preview_info = Label(
-                text=("No form loaded yet. Quick start: Open PDF Form → Load Data File → Choose record and page → Find Fields → Save links." if is_mobile else "No form loaded yet. Quick start: Open PDF Form → Load Data File or Google Sheet → Choose a record and page → Find Fields → Save links."),
+                text="",
                 color=palette["muted"],
                 size_hint_y=None,
-                height=(dp(18) if is_mobile else dp(18)),
+                height=0,
                 halign="left",
                 valign="middle",
-                font_size=(dp(8.8) if is_mobile else dp(10)),
-                opacity=(0.92 if is_mobile else 1),
+                font_size=dp(8.8),
+                opacity=0,
+                disabled=True,
             )
             self.preview_info.bind(size=self._sync_label_text_size)
             preview_stack.add_widget(self.preview_info)
@@ -6966,9 +6888,8 @@ class FormAlchemistApp(MDApp):
             preview_wrap.bind(size=self._on_preview_viewport_change, pos=self._on_preview_viewport_change)
             self.preview_shell.bind(size=self._on_preview_viewport_change, pos=self._on_preview_viewport_change)
             self.preview.bind(size=self._sync_preview_stack_size)
-            self.preview_info = Label(text="No form loaded yet. Quick start: Open PDF Form → Load Data File or Google Sheet → Choose a record and page → Find Fields → Save links.", color=palette["text"], size_hint_y=None, height=dp(32), halign="left", valign="middle", font_size=dp(11))
+            self.preview_info = Label(text="", color=palette["text"], size_hint_y=None, height=0, halign="left", valign="middle", font_size=dp(11), opacity=0, disabled=True)
             self.preview_info.bind(size=self._sync_label_text_size)
-            style_card(self.preview_info, palette["chip"], radius=dp(16))
             preview_stack.add_widget(self.preview_info)
             self.preview_empty_hint = self._make_preview_empty_hint(palette, is_mobile=False)
             preview_stack.add_widget(self.preview_empty_hint)
@@ -7042,20 +6963,28 @@ class FormAlchemistApp(MDApp):
         return app_shell
 
     def _make_preview_empty_hint(self, palette, is_mobile=False):
-        card = BoxLayout(
+        outer = BoxLayout(
             orientation="vertical",
-            spacing=dp(8 if is_mobile else 10),
-            padding=[dp(14 if is_mobile else 16), dp(14 if is_mobile else 16), dp(14 if is_mobile else 16), dp(14 if is_mobile else 16)],
+            spacing=dp(10 if is_mobile else 12),
+            padding=[dp(12 if is_mobile else 16), dp(12 if is_mobile else 16), dp(12 if is_mobile else 16), dp(12 if is_mobile else 16)],
             size_hint_y=None,
         )
-        card.bind(minimum_height=card.setter("height"))
-        self._style_popup_card(card, palette.get("surface_alt", (0.11, 0.135, 0.185, 1)), radius=dp(18 if is_mobile else 20))
+        outer.bind(minimum_height=outer.setter("height"))
+        self._style_popup_card(outer, palette.get("surface_alt", (0.11, 0.135, 0.185, 1)), radius=dp(18 if is_mobile else 20))
+
+        hero = BoxLayout(
+            orientation="vertical",
+            spacing=dp(6),
+            padding=[dp(14 if is_mobile else 16), dp(12 if is_mobile else 14), dp(14 if is_mobile else 16), dp(12 if is_mobile else 14)],
+            size_hint_y=None,
+        )
+        hero.bind(minimum_height=hero.setter("height"))
+        self._style_popup_card(hero, palette.get("surface", (0.08, 0.11, 0.16, 1)), radius=dp(16 if is_mobile else 18))
 
         title = Label(
-            text="Welcome to the preview area",
+            text="Open a PDF to begin",
             color=palette.get("text", (0.93, 0.96, 1.0, 1)),
             size_hint_y=None,
-            height=dp(24),
             halign="left",
             valign="middle",
             font_size=dp(15 if is_mobile else 17),
@@ -7064,46 +6993,62 @@ class FormAlchemistApp(MDApp):
         title.bind(size=self._sync_label_text_size)
         self._bind_auto_height_label(title, min_height=dp(24), extra_pad=dp(4))
 
-        body = Label(
+        subtitle = Label(
             text=(
-                "Your loaded PDF form will appear below this guide.\n\n"
-                "Quick start:\n"
-                "1. Open PDF Form\n"
-                "2. Load Data File or Google Sheet\n"
-                "3. Choose a record and page\n"
-                "4. Tap Find Fields\n"
-                "5. Tap a box, then save the link"
+                "Your live form preview will appear here."
+                if is_mobile else
+                "Your live form preview, detected boxes, and mapping guides will appear here."
             ),
             color=palette.get("muted", (0.60, 0.68, 0.80, 1)),
             size_hint_y=None,
-            height=dp(112 if is_mobile else 106),
             halign="left",
             valign="top",
             font_size=dp(10.8 if is_mobile else 11.5),
         )
-        body.bind(size=self._sync_label_text_size)
-        self._bind_auto_height_label(body, min_height=dp(102 if is_mobile else 96), extra_pad=dp(8))
+        subtitle.bind(size=self._sync_label_text_size)
+        self._bind_auto_height_label(subtitle, min_height=dp(34 if is_mobile else 28), extra_pad=dp(6))
 
-        tip = Label(
+        hero.add_widget(title)
+        hero.add_widget(subtitle)
+
+        steps = Label(
             text=(
-                "Tip: page 0 means the first page." if is_mobile else
-                "Tip: page 0 means the first page, and double-tap a box to jump into linking."
+                "Quick start\n"
+                "1. Open PDF Form\n"
+                "2. Load data or Google Sheet\n"
+                "3. Choose a record and page\n"
+                "4. Tap Find Fields\n"
+                "5. Tap a box, then save the link"
+            ),
+            color=palette.get("text", (0.93, 0.96, 1.0, 1)),
+            size_hint_y=None,
+            halign="left",
+            valign="top",
+            font_size=dp(11.0 if is_mobile else 11.6),
+        )
+        steps.bind(size=self._sync_label_text_size)
+        self._bind_auto_height_label(steps, min_height=dp(116 if is_mobile else 108), extra_pad=dp(8))
+
+        helper = Label(
+            text=(
+                "Load a PDF first. The extra status line above this area is now hidden to keep the preview cleaner."
+                if is_mobile else
+                "Load a PDF to replace this guide with the live page preview."
             ),
             color=palette.get("accent", (0.96, 0.71, 0.30, 1)),
             size_hint_y=None,
-            height=dp(18),
             halign="left",
             valign="middle",
-            font_size=dp(10.2 if is_mobile else 10.8),
+            font_size=dp(10.0 if is_mobile else 10.6),
         )
-        tip.bind(size=self._sync_label_text_size)
-        self._bind_auto_height_label(tip, min_height=dp(18), extra_pad=dp(4))
+        helper.bind(size=self._sync_label_text_size)
+        self._bind_auto_height_label(helper, min_height=dp(20), extra_pad=dp(4))
 
-        card.add_widget(title)
-        card.add_widget(body)
-        card.add_widget(tip)
-        card._expanded_height = max(card.height, dp(170 if is_mobile else 162))
-        return card
+        outer.add_widget(hero)
+        outer.add_widget(steps)
+        outer.add_widget(helper)
+        outer._expanded_height = max(outer.height, dp(168 if is_mobile else 156))
+        return outer
 
     def _refresh_preview_empty_hint(self, *_):
         hint = getattr(self, "preview_empty_hint", None)
@@ -7120,8 +7065,12 @@ class FormAlchemistApp(MDApp):
             hint.opacity = 0
             hint.disabled = True
             hint.height = 0
-        if show and getattr(self, "preview_info", None) is not None:
-            self.preview_info.text = "No form loaded yet. Quick start: Open PDF Form → Load Data File or Google Sheet → Choose a record and page → Find Fields → Save links."
+        info = getattr(self, "preview_info", None)
+        if info is not None:
+            info.text = ""
+            info.opacity = 0
+            info.disabled = True
+            info.height = 0
 
     def _build_startup_presplash(self):
         # Route B startup: disable the in-app splash completely so the app never falls back
@@ -9877,11 +9826,6 @@ class FormAlchemistApp(MDApp):
         current_grid_flag = "1" if getattr(self, "grid_flag_chk", None).active else "0" if hasattr(self, "grid_flag_chk") else (self.grid_flag_input.text.strip() or "0")
         current_grid_n = self.grid_n_input.text.strip() or "1"
 
-        current_semantic_label = SEMANTIC_TARGET_PLACEHOLDER
-        existing_semantic = self.engine.get_box_semantic_target_payload(focus_id, page_idx)
-        if existing_semantic.get("status") == "TARGETED":
-            current_semantic_label = semantic_target_label(existing_semantic.get("target_key", ""), existing_semantic.get("target_key", "")) or SEMANTIC_TARGET_PLACEHOLDER
-
         if existing:
             current_col = str(existing.get("column", "")).strip() or current_col
             current_trigger = str(existing.get("trigger", "")).strip()
@@ -9929,15 +9873,13 @@ class FormAlchemistApp(MDApp):
             head.add_widget(chip_row)
         outer.add_widget(head)
 
-        if existing or existing_semantic.get("status") == "TARGETED":
+        if existing:
             parts = []
-            if existing_semantic.get("status") == "TARGETED":
-                parts.append(semantic_target_label(existing_semantic.get("target_key", ""), existing_semantic.get("target_key", "")))
             if existing:
                 parts.append(existing.get("column", "") or "—")
             summary_text = "Current: " + " • ".join(parts)
         else:
-            summary_text = ("Choose a data column or a special form target for these selected boxes." if getattr(self, "ui_mobile", False) else "Choose a data column, or choose a special form target for identity fields on the form.")
+            summary_text = ("Choose a data column for these selected boxes." if getattr(self, "ui_mobile", False) else "Choose a data column for the selected boxes.")
         summary_lbl = Label(
             text=summary_text,
             color=palette.get("text", (0.93, 0.96, 1.0, 1)),
@@ -9986,20 +9928,6 @@ class FormAlchemistApp(MDApp):
 
         form = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
         form.bind(minimum_height=form.setter("height"))
-
-        semantic_spinner = SearchableSelectField(
-            text=current_semantic_label if current_semantic_label else SEMANTIC_TARGET_PLACEHOLDER,
-            values=[SEMANTIC_TARGET_PLACEHOLDER] + [semantic_target_label(key, key) for key in SEMANTIC_TARGET_KEYS],
-            placeholder=SEMANTIC_TARGET_PLACEHOLDER,
-            picker_title="Choose a special form target",
-            search_hint="Type to find a form target",
-            size_hint_y=None,
-            height=dp(46),
-            background_normal="",
-            background_color=palette.get("surface_soft", (0.135, 0.16, 0.215, 1)),
-            color=palette.get("text", (0.93, 0.96, 1.0, 1)),
-        )
-        form.add_widget(_popup_field_block("Special Form Target", semantic_spinner, "Use this when the selected boxes should act as identity fields like first name, birth date, or membership number"))
 
         column_spinner = SearchableSelectField(
             text=current_col if current_col else COLUMN_SELECT_TEXT,
@@ -10065,22 +9993,14 @@ class FormAlchemistApp(MDApp):
         outer.add_widget(body_scroll)
 
         def _refresh_live_preview(*_):
-            semantic_key = self._semantic_target_key_from_label(semantic_spinner.text)
-            semantic_preview = self._get_selected_semantic_target_preview(semantic_key) if semantic_key else "—"
             column_preview = self._get_selected_column_preview(
                 column_spinner.text,
                 trigger=trigger_input.text.strip(),
                 is_grid=bool(getattr(popup_grid_chk, "active", False)),
                 grid_n=int(grid_n_input.text.strip() or "1"),
             )
-            if semantic_key and column_spinner.text and column_spinner.text != COLUMN_SELECT_TEXT:
-                live_preview_lbl.text = f"Sample Output: Target → {semantic_preview} | Column → {column_preview}"
-            elif semantic_key:
-                live_preview_lbl.text = f"Sample Output: Target → {semantic_preview}"
-            else:
-                live_preview_lbl.text = "Sample Output: " + column_preview
+            live_preview_lbl.text = "Sample Output: " + column_preview
 
-        semantic_spinner.bind(text=_refresh_live_preview)
         column_spinner.bind(text=_refresh_live_preview)
         trigger_input.bind(text=_refresh_live_preview)
         popup_grid_chk.bind(active=lambda *_: _refresh_live_preview())
@@ -10127,18 +10047,13 @@ class FormAlchemistApp(MDApp):
         def _assign(*_):
             try:
                 column = column_spinner.text.strip()
-                semantic_key = self._semantic_target_key_from_label(semantic_spinner.text)
-                if (not column or column == COLUMN_SELECT_TEXT) and not semantic_key:
-                    raise ValueError("Please choose a data column or a special form target.")
+                if not column or column == COLUMN_SELECT_TEXT:
+                    raise ValueError("Please choose a data column.")
                 trigger = trigger_input.text.strip()
                 is_grid = bool(getattr(popup_grid_chk, "active", False))
                 grid_n = int(grid_n_input.text.strip() or "1")
 
                 did_mapping = False
-                did_target = False
-                if semantic_key:
-                    self.engine.assign_semantic_target(ids, semantic_key, page_idx)
-                    did_target = True
                 if column and column != COLUMN_SELECT_TEXT:
                     self.engine.assign_mapping(ids, column, trigger, is_grid, grid_n, page_idx)
                     did_mapping = True
@@ -10155,8 +10070,6 @@ class FormAlchemistApp(MDApp):
                 self.engine.selected_box_ids = ids
                 self._sync_box_selection_ui()
                 saved_parts = []
-                if did_target:
-                    saved_parts.append(f"Target: {semantic_target_label(semantic_key, semantic_key)}")
                 if did_mapping:
                     saved_parts.append(f"Column: {column}")
                 self.set_status(
@@ -10170,7 +10083,6 @@ class FormAlchemistApp(MDApp):
         def _clear(*_):
             try:
                 self.clear_mapping_for_box_ids(ids, page_idx)
-                self.engine.clear_semantic_target_for_box_ids(ids, page_idx)
                 self.engine.selected_box_ids = ids
                 self._sync_box_selection_ui()
                 self.set_status(f"Cleared mapping for boxes: {ids} on page {page_idx}")
@@ -10220,7 +10132,6 @@ class FormAlchemistApp(MDApp):
             self.set_status("Select at least one box first.")
             return
         self.clear_mapping_for_box_ids(ids, self.current_page_idx())
-        self.engine.clear_semantic_target_for_box_ids(ids, self.current_page_idx())
         if ids:
             self._load_mapping_into_editor(ids[0])
         else:
