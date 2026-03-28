@@ -50,6 +50,24 @@ try:
     from reportlab.pdfgen import canvas as rl_canvas
     from reportlab.pdfbase.pdfmetrics import stringWidth as rl_string_width
     REPORTLAB_AVAILABLE = True
+
+    # Android-safe patch: force ReportLab to use the pure-Python PDF escaping path.
+    # Some compiled accelerator builds can crash at drawString()/canvas._escape with:
+    # "PY_SSIZE_T_CLEAN macro must be defined for '#' formats".
+    try:
+        from reportlab.lib import rl_accel as _rl_accel
+        _py_escape_pdf = getattr(_rl_accel, "_py_escapePDF", None)
+        if callable(_py_escape_pdf):
+            try:
+                _rl_accel.escapePDF = _py_escape_pdf
+            except Exception:
+                pass
+            try:
+                rl_canvas.escapePDF = _py_escape_pdf
+            except Exception:
+                pass
+    except Exception:
+        pass
 except Exception:
     rl_canvas = None
     REPORTLAB_AVAILABLE = False
@@ -1579,7 +1597,11 @@ class AndroidDocumentPickerService:
         if allowed_suffixes:
             normalized = [str(s).lower() for s in allowed_suffixes if s]
             if normalized and not any(lower_name.endswith(s) for s in normalized):
-                raise ValueError(f"Selected file must end with one of: {', '.join(normalized)}")
+                # SAF providers sometimes omit or rewrite the visible filename extension.
+                # Do not reject the document purely by its display name; instead, keep the
+                # required suffix on the local cached copy and let the downstream parser
+                # validate the actual file contents.
+                pass
 
         target_path = self.import_store.build_local_path(
             display_name=display_name,
