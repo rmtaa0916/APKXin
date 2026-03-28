@@ -2267,9 +2267,10 @@ class FormAlchemistEngine:
     def supports_export_backend(self):
         """
         Return True when filled-PDF export is available.
-        Phase 3 export uses reportlab overlays + pypdf merge, so PyMuPDF is optional.
+        This variant prefers a native PyMuPDF export path and only falls back to
+        ReportLab when PyMuPDF is unavailable.
         """
-        return bool(REPORTLAB_AVAILABLE)
+        return bool(FITZ_AVAILABLE or REPORTLAB_AVAILABLE)
 
     def supports_processing_backend(self):
         """
@@ -3547,7 +3548,58 @@ class FormAlchemistEngine:
         c.setFont("Helvetica-Bold", fs)
         c.drawString(x, y, "X")
 
+    def _write_check_op_fitz(self, page, rects):
+        rects = sorted([self._coerce_rect(r) for r in rects], key=lambda rr: (round(rr.y0, 3), rr.x0))
+        if not rects:
+            return
+        target = rects[0] if len(rects) == 1 else self._rect_union(rects)
+        fs = max(float(target.height) * 0.95, 8.0)
+        p = fitz.Point(
+            float(target.x0) + (float(target.width) * 0.15),
+            float(target.y1) - (float(target.height) * 0.15)
+        )
+        page.insert_text(p, "X", fontsize=fs, fontname="helv")
+
+    def _build_filled_pdf_bytes_fitz(self, patient_name, page_idx=0, record_key=None):
+        if not FITZ_AVAILABLE:
+            raise RuntimeError("PyMuPDF export backend is unavailable in this build.")
+        if not self.pdf_path or not os.path.exists(self.pdf_path):
+            raise FileNotFoundError("PDF path is missing or invalid.")
+
+        ops = self._collect_overlay_ops(patient_name, page_idx=page_idx, record_key=record_key)
+        with fitz.open(self.pdf_path) as doc:
+            total_pages = len(doc)
+            if total_pages <= 0:
+                raise ValueError("PDF has no pages.")
+            target_idx = min(max(int(page_idx), 0), total_pages - 1)
+            page = doc[target_idx]
+            for op in ops:
+                if op.get("kind") == "check":
+                    self._write_check_op_fitz(page, op.get("rects", []))
+                else:
+                    self.draw_logic(
+                        page,
+                        op.get("text", ""),
+                        op.get("rects", []),
+                        is_grid=bool(op.get("grid", False)),
+                        grid_n=int(op.get("grid_n", 1)),
+                    )
+            if hasattr(doc, "subset_fonts"):
+                try:
+                    doc.subset_fonts()
+                except Exception:
+                    pass
+            if hasattr(doc, "tobytes"):
+                return bytes(doc.tobytes())
+            if hasattr(doc, "write"):
+                return bytes(doc.write())
+            out_buf = io.BytesIO()
+            doc.save(out_buf)
+            return out_buf.getvalue()
+
     def _build_filled_pdf_bytes(self, patient_name, page_idx=0, record_key=None):
+        if FITZ_AVAILABLE:
+            return self._build_filled_pdf_bytes_fitz(patient_name, page_idx=page_idx, record_key=record_key)
         if not self.supports_export_backend():
             raise RuntimeError("PDF export backend is unavailable in this build.")
         if not self.pdf_path or not os.path.exists(self.pdf_path):
