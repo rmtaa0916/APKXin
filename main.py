@@ -392,7 +392,63 @@ def _sha1_json(value):
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
 
-def get_form_alchemist_private_storage_root(app_name="form_alchemist"):
+def _ensure_writable_directory(path):
+    path = str(path or "").strip()
+    if not path:
+        raise ValueError("Directory path is empty.")
+    os.makedirs(path, exist_ok=True)
+    probe_name = f".fa_write_test_{uuid.uuid4().hex}"
+    probe_path = os.path.join(path, probe_name)
+    with open(probe_path, "wb") as fh:
+        fh.write(b"ok")
+    try:
+        os.remove(probe_path)
+    except Exception:
+        pass
+    return path
+
+
+CANONICAL_SHARED_FOLDER_NAME = "FormAlchemist"
+
+
+def get_form_alchemist_download_root(app_name="FormAlchemist"):
+    # Keep all user-visible saves under one stable shared folder.
+    # We intentionally ignore alternate app_name values here so learning,
+    # config, imports, and exports do not drift into separate directories
+    # like Download/form_alchemist vs Download/FormAlchemist.
+    folder_name = CANONICAL_SHARED_FOLDER_NAME
+    candidates = []
+
+    if platform == "android":
+        try:
+            from android.storage import primary_external_storage_path
+            primary = str(primary_external_storage_path() or "").strip()
+            if primary:
+                candidates.extend([
+                    os.path.join(primary, "Download", folder_name),
+                    os.path.join(primary, "Downloads", folder_name),
+                ])
+        except Exception:
+            pass
+
+        candidates.extend([
+            os.path.join("/storage/emulated/0", "Download", folder_name),
+            os.path.join("/storage/self/primary", "Download", folder_name),
+            os.path.join("/sdcard", "Download", folder_name),
+        ])
+    else:
+        home = os.path.expanduser("~")
+        candidates.extend([
+            os.path.join(home, "Downloads", folder_name),
+            os.path.join(home, "Download", folder_name),
+        ])
+
+    for candidate in candidates:
+        try:
+            return _ensure_writable_directory(candidate)
+        except Exception:
+            continue
+
     try:
         running_app = App.get_running_app()
     except Exception:
@@ -401,36 +457,30 @@ def get_form_alchemist_private_storage_root(app_name="form_alchemist"):
     user_data_dir = str(getattr(running_app, "user_data_dir", "") or "").strip()
     if user_data_dir:
         try:
-            os.makedirs(user_data_dir, exist_ok=True)
-            return user_data_dir
+            return _ensure_writable_directory(os.path.join(user_data_dir, folder_name))
         except Exception:
             pass
 
-    if platform == "android":
-        try:
-            from android.storage import app_storage_path
-            base = str(app_storage_path() or "").strip()
-            if base:
-                os.makedirs(base, exist_ok=True)
-                return base
-        except Exception:
-            pass
-
-    fallback = os.path.join(os.path.expanduser("~"), f".{_safe_slug(app_name)}")
+    fallback = os.path.join(os.path.expanduser("~"), f".{_safe_slug(folder_name)}")
     try:
-        os.makedirs(fallback, exist_ok=True)
-        return fallback
+        return _ensure_writable_directory(fallback)
     except Exception:
-        final_fallback = os.path.join(tempfile.gettempdir(), _safe_slug(app_name))
-        os.makedirs(final_fallback, exist_ok=True)
-        return final_fallback
+        final_fallback = os.path.join(tempfile.gettempdir(), _safe_slug(folder_name))
+        return _ensure_writable_directory(final_fallback)
+
+
+def get_form_alchemist_private_storage_root(app_name="form_alchemist"):
+    # Backward-compatible helper name, but storage now points to the shared
+    # Download/FormAlchemist root so learning artifacts land beside exports.
+    return get_form_alchemist_download_root(CANONICAL_SHARED_FOLDER_NAME)
 
 
 class LearningStorage:
-    """App-private storage for learned profiles, revisions, and session state."""
+    """Shared Download/FormAlchemist storage for learned profiles, revisions, and session state."""
 
     def __init__(self, base_dir=None, app_name="form_alchemist"):
-        self.base_dir = str(base_dir or get_form_alchemist_private_storage_root(app_name))
+        canonical_root = get_form_alchemist_private_storage_root(CANONICAL_SHARED_FOLDER_NAME)
+        self.base_dir = str(base_dir or canonical_root)
         self.learning_dir = os.path.join(self.base_dir, "learning")
         self.revisions_dir = os.path.join(self.base_dir, "revisions")
         self.projects_dir = os.path.join(self.base_dir, "projects")
@@ -1769,7 +1819,7 @@ class FormAlchemistEngine:
         self.geom_by_page = {}
         self.boxes_settings_signature_by_page = {}
 
-        self.learning_storage = LearningStorage(app_name="form_alchemist")
+        self.learning_storage = LearningStorage(app_name=CANONICAL_SHARED_FOLDER_NAME)
         self.learning_enabled = True
         self.profile_memory = self.learning_storage.load_profile_memory()
         self.template_stats = self.learning_storage.load_template_stats()
@@ -2178,9 +2228,10 @@ class FormAlchemistEngine:
     def supports_export_backend(self):
         """
         Return True when filled-PDF export is available.
-        Phase 3 export uses reportlab overlays + pypdf merge, so PyMuPDF is optional.
+        Prefer PyMuPDF when available because it avoids Android/runtime issues seen
+        with some ReportLab builds. ReportLab+pypdf remains as a fallback.
         """
-        return bool(REPORTLAB_AVAILABLE)
+        return bool(FITZ_AVAILABLE or REPORTLAB_AVAILABLE)
 
     def supports_processing_backend(self):
         """
@@ -3458,9 +3509,53 @@ class FormAlchemistEngine:
         c.setFont("Helvetica-Bold", fs)
         c.drawString(x, y, "X")
 
-    def _build_filled_pdf_bytes(self, patient_name, page_idx=0, record_key=None):
-        if not self.supports_export_backend():
-            raise RuntimeError("PDF export backend is unavailable in this build.")
+    def _write_check_op_fitz(self, page, rects):
+        rects = sorted([self._coerce_rect(r) for r in rects], key=lambda rr: (round(rr.y0, 3), rr.x0))
+        if not rects:
+            return
+        target = rects[0] if len(rects) == 1 else self._rect_union(rects)
+        fs = max(float(target.height) * 0.95, 8.0)
+        p = fitz.Point(
+            float(target.x0) + (float(target.width) * 0.15),
+            float(target.y1) - (float(target.height) * 0.15),
+        )
+        page.insert_text(p, "X", fontsize=fs, fontname="helv")
+
+    def _build_filled_pdf_bytes_fitz(self, patient_name, page_idx=0, record_key=None):
+        if not FITZ_AVAILABLE:
+            raise RuntimeError("PyMuPDF export backend is unavailable in this build.")
+        if not self.pdf_path or not os.path.exists(self.pdf_path):
+            raise FileNotFoundError("PDF path is missing or invalid.")
+
+        ops = self._collect_overlay_ops(patient_name, page_idx=page_idx, record_key=record_key)
+        doc = fitz.open(self.pdf_path)
+        try:
+            total_pages = len(doc)
+            if total_pages <= 0:
+                raise ValueError("PDF has no pages.")
+            if int(page_idx) < 0 or int(page_idx) >= total_pages:
+                raise IndexError(f"Page index out of range: {page_idx}")
+
+            page = doc[int(page_idx)]
+            for op in ops:
+                if op.get("kind") == "check":
+                    self._write_check_op_fitz(page, op.get("rects", []))
+                else:
+                    self.draw_logic(
+                        page,
+                        op.get("text", ""),
+                        op.get("rects", []),
+                        is_grid=bool(op.get("grid", False)),
+                        grid_n=int(op.get("grid_n", 1)),
+                        fs_scale=0.65,
+                    )
+            return doc.tobytes(garbage=3, deflate=True)
+        finally:
+            doc.close()
+
+    def _build_filled_pdf_bytes_reportlab(self, patient_name, page_idx=0, record_key=None):
+        if not REPORTLAB_AVAILABLE:
+            raise RuntimeError("ReportLab export backend is unavailable in this build.")
         if not self.pdf_path or not os.path.exists(self.pdf_path):
             raise FileNotFoundError("PDF path is missing or invalid.")
 
@@ -3510,6 +3605,30 @@ class FormAlchemistEngine:
             out_buf = io.BytesIO()
             writer.write(out_buf)
             return out_buf.getvalue()
+
+    def _build_filled_pdf_bytes(self, patient_name, page_idx=0, record_key=None):
+        if not self.supports_export_backend():
+            raise RuntimeError("PDF export backend is unavailable in this build.")
+
+        fitz_err = None
+        if FITZ_AVAILABLE:
+            try:
+                return self._build_filled_pdf_bytes_fitz(patient_name, page_idx=page_idx, record_key=record_key)
+            except Exception as e:
+                fitz_err = e
+                traceback.print_exc()
+
+        if REPORTLAB_AVAILABLE:
+            try:
+                return self._build_filled_pdf_bytes_reportlab(patient_name, page_idx=page_idx, record_key=record_key)
+            except Exception as reportlab_err:
+                if fitz_err is not None:
+                    raise RuntimeError(f"Export failed. PyMuPDF: {fitz_err} | ReportLab: {reportlab_err}")
+                raise
+
+        if fitz_err is not None:
+            raise fitz_err
+        raise RuntimeError("No usable PDF export backend is available.")
 
     def export_filled_pdf(self, patient_name, out_path, page_idx=0, record_key=None):
         pdf_bytes = self._build_filled_pdf_bytes(patient_name, page_idx=page_idx, record_key=record_key)
@@ -8194,19 +8313,11 @@ class FormAlchemistApp(MDApp):
             raise ValueError(f"Invalid settings input: {e}")
 
     def get_app_output_dir(self):
-        """Return a writable app-controlled directory for generated files/configs."""
-        base_dir = getattr(self, "user_data_dir", None)
-        if not base_dir:
-            base_dir = os.path.join(os.path.expanduser("~"), "FormAlchemist")
-
-        out_dir = os.path.join(base_dir, "output")
-        os.makedirs(out_dir, exist_ok=True)
-        return out_dir
+        """Return the shared Download/FormAlchemist directory when writable."""
+        return get_form_alchemist_download_root(CANONICAL_SHARED_FOLDER_NAME)
 
     def get_default_file_path(self):
-        if platform == "android":
-            return self.get_app_output_dir()
-        return os.path.expanduser("~")
+        return self.get_app_output_dir()
         
     def push_engine_settings_to_ui(self):
         s = self.engine.settings
