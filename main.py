@@ -4670,47 +4670,43 @@ class FormAlchemistEngine:
         if not rects:
             return
 
-        def fit_value_to_width(single_val, font_scale, thickness, max_text_w):
-            candidate = str(single_val)
+        def fit_scale_for_width(single_val, max_text_w, base_scale, thickness, min_scale=0.16):
+            scale = max(float(base_scale), min_scale)
             max_text_w = max(int(max_text_w), 1)
-            (tw, th), _ = cv2.getTextSize(candidate, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
-            if tw <= max_text_w:
-                return candidate, tw, th
-            ellipsis = '…'
-            while len(candidate) > 1:
-                shortened = candidate[:-1].rstrip()
-                probe = (shortened + ellipsis) if shortened else ellipsis
-                (tw, th), _ = cv2.getTextSize(probe, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
+            for _ in range(18):
+                (tw, th), _ = cv2.getTextSize(single_val, cv2.FONT_HERSHEY_SIMPLEX, scale, thickness)
                 if tw <= max_text_w:
-                    return probe, tw, th
-                candidate = shortened
-            return '', 0, 0
+                    return scale, tw, th
+                ratio = max_text_w / float(max(tw, 1))
+                next_scale = max(min_scale, scale * max(0.55, min(ratio * 0.98, 0.92)))
+                if abs(next_scale - scale) < 0.01:
+                    scale = next_scale
+                    break
+                scale = next_scale
+            (tw, th), _ = cv2.getTextSize(single_val, cv2.FONT_HERSHEY_SIMPLEX, scale, thickness)
+            return scale, tw, th
 
         def draw_single(single_val, rect):
             target_w = max(int(rect.width * preview_zoom), 1)
             target_h = max(int(rect.height * preview_zoom), 1)
-            font_scale = min(max((target_h * fs_scale) / 30.0, 0.28), 0.55)
+            base_scale = max((target_h * fs_scale) / 30.0, 0.28)
             thickness = 1 if target_h < 40 else 2
-            display_val, tw, _ = fit_value_to_width(single_val, font_scale, thickness, target_w - 6)
-            if not display_val:
-                return
-            x = int((rect.x0 * preview_zoom) + max((target_w - tw) / 2.0, 1.0) + (ox * preview_zoom))
+            font_scale, tw, th = fit_scale_for_width(single_val, target_w - 6, base_scale, thickness)
+            x_left = int((rect.x0 * preview_zoom) + (ox * preview_zoom))
+            x = int(x_left + max((target_w - tw) / 2.0, 1.0))
             y = int((rect.y1 * preview_zoom) - (target_h * 0.2) + (oy * preview_zoom))
-            cv2.putText(img, display_val, (x, y), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), thickness, cv2.LINE_AA)
+            cv2.putText(img, single_val, (x, y), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), thickness, cv2.LINE_AA)
 
         def draw_grid(grid_val, rect, cells):
             cells = max(int(cells), 1)
             target_h = max(int(rect.height * preview_zoom), 1)
-            font_scale = min(max((target_h * 0.60) / 30.0, 0.28), 0.50)
             thickness = 1 if target_h < 40 else 2
-            cell_w = (rect.width * preview_zoom) / cells
+            cell_w = max((rect.width * preview_zoom) / cells, 1.0)
             y = int((rect.y1 * preview_zoom) - (target_h * 0.2) + (oy * preview_zoom))
             for i, ch in enumerate(grid_val[:cells]):
-                display_val, tw, _ = fit_value_to_width(str(ch), font_scale, thickness, cell_w - 2)
-                if not display_val:
-                    continue
+                font_scale, tw, _ = fit_scale_for_width(str(ch), int(cell_w - 2), max((target_h * 0.60) / 30.0, 0.20), thickness)
                 x = int((rect.x0 * preview_zoom) + (i * cell_w) + max((cell_w - tw) / 2.0, 1.0) + (ox * preview_zoom))
-                cv2.putText(img, display_val, (x, y), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), thickness, cv2.LINE_AA)
+                cv2.putText(img, str(ch), (x, y), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), thickness, cv2.LINE_AA)
 
         if is_grid and len(rects) > 1:
             counts = self._allocate_cells_by_width(rects, grid_n)
