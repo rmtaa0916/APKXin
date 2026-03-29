@@ -1002,9 +1002,9 @@ TEXT_TUNING_DEFAULTS = {
     "grid_scale": 0.92,
     "content_inset_x": 0.07,
     "content_inset_y": 0.14,
-    "box_vshift": -0.08,
-    "line_vshift": -0.08,
-    "grid_vshift": -0.05,
+    "box_vshift": 0.00,
+    "line_vshift": 0.00,
+    "grid_vshift": 0.00,
     "line_expand_h_mul": 2.10,
     "line_min_effective_h_px": 28,
 }
@@ -4802,6 +4802,7 @@ class FormAlchemistEngine:
         return cfg
 
 
+
     def _draw_text_op_cv(self, img, text, rects, preview_zoom=1.5, is_grid=False, grid_n=1, ox=0, oy=0, fs_scale=0.65):
         import unicodedata
 
@@ -4851,9 +4852,16 @@ class FormAlchemistEngine:
             w = max(float(target.width), 1.0)
             h = max(float(target.height), 1.0)
             aspect = w / h
+            h_px = h * max(float(preview_zoom), 0.001)
             if len(rect_list) > 1:
-                return "line" if aspect >= 3.2 else "box"
-            return "line" if aspect >= 4.6 else "box"
+                return "line" if (h_px <= 16 and aspect >= 3.4) else "box"
+            if h_px <= 12 and aspect >= 2.8:
+                return "line"
+            if h_px <= 15 and aspect >= 5.4:
+                return "line"
+            if h_px <= 22 and aspect >= 11.0:
+                return "line"
+            return "box"
 
         FIELD_PROFILES = {
             "grid": {
@@ -4864,12 +4872,13 @@ class FormAlchemistEngine:
                 "pad_y": 0.26,
                 "stroke_mul": 0.00,
                 "stroke_min_h": 9999,
-                "vshift": -0.04,
+                "vshift": 0.00,
                 "truncate_mul": 0.64,
                 "min_effective_h_px": 0,
                 "expand_h_mul": 1.00,
                 "content_inset_x": 0.04,
                 "content_inset_y": 0.08,
+                "true_center": True,
             },
             "box": {
                 "font_bias": "uniform_bold",
@@ -4879,12 +4888,13 @@ class FormAlchemistEngine:
                 "pad_y": 0.22,
                 "stroke_mul": 0.00,
                 "stroke_min_h": 9999,
-                "vshift": -0.03,
+                "vshift": 0.00,
                 "truncate_mul": 0.72,
                 "min_effective_h_px": 0,
-                "expand_h_mul": 1.08,
+                "expand_h_mul": 1.00,
                 "content_inset_x": 0.05,
                 "content_inset_y": 0.10,
+                "true_center": True,
             },
             "line": {
                 "font_bias": "uniform_bold_condensed",
@@ -4894,12 +4904,13 @@ class FormAlchemistEngine:
                 "pad_y": 0.22,
                 "stroke_mul": 0.00,
                 "stroke_min_h": 9999,
-                "vshift": -0.02,
+                "vshift": 0.00,
                 "truncate_mul": 0.72,
                 "min_effective_h_px": 24,
                 "expand_h_mul": 1.75,
                 "content_inset_x": 0.06,
                 "content_inset_y": 0.10,
+                "true_center": True,
             },
         }
 
@@ -4912,9 +4923,9 @@ class FormAlchemistEngine:
         inset_x = float(tuning.get("content_inset_x", 0.07))
         inset_y = float(tuning.get("content_inset_y", 0.14))
         vshift_map = {
-            "grid": float(tuning.get("grid_vshift", -0.05)),
-            "box": float(tuning.get("box_vshift", -0.08)),
-            "line": float(tuning.get("line_vshift", -0.08)),
+            "grid": float(tuning.get("grid_vshift", 0.00)),
+            "box": float(tuning.get("box_vshift", 0.00)),
+            "line": float(tuning.get("line_vshift", 0.00)),
         }
         for _kind, _profile in FIELD_PROFILES.items():
             scale_mul = max(0.60, min(1.60, overall_scale * profile_scale_map.get(_kind, 1.0)))
@@ -5130,6 +5141,12 @@ class FormAlchemistEngine:
             half_extra = extra_pdf_h / 2.0
             return fitz.Rect(rect.x0, rect.y0 - half_extra, rect.x1, rect.y1 + half_extra)
 
+        def _target_rect(rect, profile, field_kind):
+            rect = self._coerce_rect(rect)
+            if field_kind == "line":
+                return _effective_rect(rect, profile)
+            return rect
+
         def _content_rect(rect, profile):
             rect = self._coerce_rect(rect)
             inset_x = max(0.0, float(rect.width) * float(profile.get("content_inset_x", 0.0)))
@@ -5144,34 +5161,49 @@ class FormAlchemistEngine:
                 y0, y1 = rect.y0, rect.y1
             return fitz.Rect(x0, y0, x1, y1)
 
-        def centered_xy(rect, bbox, text_w, text_h, profile):
-            eff_rect = _effective_rect(rect, profile)
-            content_rect = _content_rect(eff_rect, profile)
-            target_w = max(int(content_rect.width * preview_zoom), 1)
-            target_h = max(int(content_rect.height * preview_zoom), 1)
+        def centered_anchor(rect, profile, field_kind):
+            target_rect = _target_rect(rect, profile, field_kind)
+            content_rect = _content_rect(target_rect, profile)
             left = (content_rect.x0 * preview_zoom) + (ox * preview_zoom)
             top = (content_rect.y0 * preview_zoom) + (oy * preview_zoom)
-            bx0, by0, _, _ = bbox
-            x = left + ((target_w - text_w) / 2.0) - bx0
-            y = top + ((target_h - text_h) / 2.0) - by0
-            y += float(target_h) * float(profile.get("vshift", 0.0))
-            return int(round(x)), int(round(y))
+            target_w = max(float(content_rect.width * preview_zoom), 1.0)
+            target_h = max(float(content_rect.height * preview_zoom), 1.0)
+            cx = left + (target_w / 2.0)
+            cy = top + (target_h / 2.0)
+            cy += target_h * float(profile.get("vshift", 0.0))
+            return cx, cy, content_rect
+
+        def draw_centered_text(cx, cy, display_val, font, stroke, bbox):
+            try:
+                draw.text((cx, cy), display_val, font=font, fill=(0, 0, 0),
+                          stroke_width=stroke, stroke_fill=(0, 0, 0), anchor="mm")
+                return
+            except Exception:
+                pass
+            bx0, by0, bx1, by1 = bbox
+            x = cx - ((bx0 + bx1) / 2.0)
+            y = cy - ((by0 + by1) / 2.0)
+            draw.text((int(round(x)), int(round(y))), display_val, font=font, fill=(0, 0, 0),
+                      stroke_width=stroke, stroke_fill=(0, 0, 0))
 
         field_kind = classify_field(rects, force_grid=bool(is_grid))
 
         def draw_single(single_val, rect):
-            target_w = max(int(rect.width * preview_zoom), 1)
-            target_h = max(int(rect.height * preview_zoom), 1)
+            probe_profile = FIELD_PROFILES.get(field_kind, FIELD_PROFILES["box"])
+            target_rect = _target_rect(rect, probe_profile, field_kind)
+            target_w = max(int(target_rect.width * preview_zoom), 1)
+            target_h = max(int(target_rect.height * preview_zoom), 1)
             display_val, font, bbox, tw, th, stroke, profile = fit_text(single_val, target_w, target_h, field_kind=field_kind)
             if not display_val or font is None or bbox is None:
                 return
-            x, y = centered_xy(rect, bbox, tw, th, profile)
-            draw.text((x, y), display_val, font=font, fill=(0, 0, 0), stroke_width=stroke, stroke_fill=(0, 0, 0))
+            cx, cy, _ = centered_anchor(rect, profile, field_kind)
+            draw_centered_text(cx, cy, display_val, font, stroke, bbox)
 
         def draw_grid(grid_val, rect, cells):
             cells = max(int(cells), 1)
-            target_h = max(int(rect.height * preview_zoom), 1)
-            cell_w = (rect.width * preview_zoom) / cells
+            target_rect = _target_rect(rect, FIELD_PROFILES["grid"], "grid")
+            target_h = max(int(target_rect.height * preview_zoom), 1)
+            cell_w = (target_rect.width * preview_zoom) / cells
             base_cell_w = rect.width / cells
             for i, ch in enumerate(_apply_case(grid_val)[:cells]):
                 display_val, font, bbox, tw, th, stroke, profile = fit_text(str(ch), cell_w - 2, target_h, field_kind="grid")
@@ -5183,8 +5215,8 @@ class FormAlchemistEngine:
                     rect.x0 + ((i + 1) * base_cell_w),
                     rect.y1,
                 )
-                x, y = centered_xy(cell_rect, bbox, tw, th, profile)
-                draw.text((x, y), display_val, font=font, fill=(0, 0, 0), stroke_width=stroke, stroke_fill=(0, 0, 0))
+                cx, cy, _ = centered_anchor(cell_rect, profile, "grid")
+                draw_centered_text(cx, cy, display_val, font, stroke, bbox)
 
         if is_grid and len(rects) > 1:
             counts = self._allocate_cells_by_width(rects, grid_n)
