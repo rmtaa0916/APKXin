@@ -969,7 +969,7 @@ else:
     ZOOM = 4.0
     PREVIEW_SCALE = 2.2
 
-DEFAULTS = {
+DEFAULTS_BASE = {
     "F_Area": 500,
     "F_MinW": 15,
     "F_MinH": 35,
@@ -994,7 +994,7 @@ DEFAULTS = {
     "Grid_N": 1,
 }
 
-TEXT_TUNING_DEFAULTS = {
+TEXT_TUNING_DEFAULTS_BASE = {
     "uppercase": True,
     "overall_scale": 0.92,
     "box_scale": 1.00,
@@ -1008,6 +1008,119 @@ TEXT_TUNING_DEFAULTS = {
     "line_expand_h_mul": 2.10,
     "line_min_effective_h_px": 28,
 }
+
+EMBEDDED_DEFAULT_PROFILE = {
+    "version": 7,
+    "text_tuning": {
+        "uppercase": True,
+        "overall_scale": 0.71,
+        "box_scale": 1.0,
+        "line_scale": 0.6,
+        "grid_scale": 0.92,
+        "content_inset_x": 0.22,
+        "content_inset_y": 0.26,
+        "box_vshift": 0.0,
+        "line_vshift": 0.0,
+        "grid_vshift": 0.0,
+        "line_expand_h_mul": 1.95,
+        "line_min_effective_h_px": 12,
+    },
+    "defaults": {
+        "F_Area": 500,
+        "F_MinW": 15,
+        "F_MinH": 35,
+        "F_Close": 1,
+        "Line_MinW": 100,
+        "Line_MaxW": 1680,
+        "C_Strict": 40,
+        "C_Size": [14, 65],
+        "C_Border": 0.1,
+        "C_Inner": 0.4,
+        "ROI_Max": 200,
+        "C_Open": 1,
+        "C_Close": 0,
+        "C_BandPct": 0.18,
+        "C_AspectTol": 0.1,
+        "Ext_Low": 0.04,
+        "Ext_High": 0.6,
+        "C_FillMin": 0.45,
+        "C_Eps": 0.04,
+        "Use_Extent": False,
+        "Is_Grid": False,
+        "Grid_N": 1,
+    },
+}
+
+
+def _candidate_default_profile_paths():
+    roots = []
+    try:
+        roots.append(os.path.dirname(os.path.abspath(__file__)))
+    except Exception:
+        pass
+    try:
+        roots.append(os.getcwd())
+    except Exception:
+        pass
+    roots.append('/mnt/data')
+
+    seen = set()
+    ordered_roots = []
+    for root in roots:
+        root = str(root or '').strip()
+        if root and root not in seen:
+            seen.add(root)
+            ordered_roots.append(root)
+
+    names = ['default_profile.json', 'TESTMAPPING.json', CONFIG_FILENAME]
+    paths = []
+    for root in ordered_roots:
+        for name in names:
+            candidate = os.path.join(root, name)
+            if candidate not in paths:
+                paths.append(candidate)
+    return paths
+
+
+def _load_builtin_default_profile():
+    for path in _candidate_default_profile_paths():
+        try:
+            if not os.path.exists(path):
+                continue
+            with open(path, 'r', encoding='utf-8') as fh:
+                payload = json.load(fh)
+            if isinstance(payload, dict) and (isinstance(payload.get('text_tuning'), dict) or isinstance(payload.get('defaults'), dict)):
+                payload = dict(payload)
+                payload['_source_path'] = path
+                payload['_source_kind'] = 'file'
+                return payload
+        except Exception:
+            continue
+    payload = dict(EMBEDDED_DEFAULT_PROFILE)
+    payload['_source_path'] = 'embedded:TESTMAPPING'
+    payload['_source_kind'] = 'embedded'
+    return payload
+
+
+def _merge_defaults(base_defaults, override_defaults):
+    merged = dict(base_defaults or {})
+    if not isinstance(override_defaults, dict):
+        return merged
+    for key, value in override_defaults.items():
+        if key not in merged:
+            continue
+        if key == 'C_Size' and isinstance(value, (list, tuple)) and len(value) == 2:
+            merged[key] = (int(value[0]), int(value[1]))
+        else:
+            merged[key] = value
+    return merged
+
+
+BUILTIN_DEFAULT_PROFILE = _load_builtin_default_profile()
+DEFAULT_PROFILE_SOURCE = str(BUILTIN_DEFAULT_PROFILE.get('_source_path', '') or '')
+DEFAULT_PROFILE_SOURCE_KIND = str(BUILTIN_DEFAULT_PROFILE.get('_source_kind', '') or '')
+DEFAULTS = _merge_defaults(DEFAULTS_BASE, BUILTIN_DEFAULT_PROFILE.get('defaults', {}))
+TEXT_TUNING_DEFAULTS = _merge_defaults(TEXT_TUNING_DEFAULTS_BASE, BUILTIN_DEFAULT_PROFILE.get('text_tuning', {}))
 
 
 DETECTION_UI_META = {
@@ -10253,10 +10366,12 @@ class FormAlchemistApp(MDApp):
     def _update_text_tuning_summary(self):
         tuning = self._normalized_text_tuning_ui()
         self.text_tuning_ui = dict(tuning)
+        preset_label = os.path.basename(DEFAULT_PROFILE_SOURCE or '').strip() or 'embedded default'
         summary = (
             f"FIT INSIDE • CENTERED • {'UPPERCASE' if tuning.get('uppercase', True) else 'ORIGINAL CASE'}\n"
             f"Overall {tuning['overall_scale']:.2f} • Box {tuning['box_scale']:.2f} • Line {tuning['line_scale']:.2f} • Grid {tuning['grid_scale']:.2f}\n"
-            f"Inset X {tuning['content_inset_x']:.2f} • Inset Y {tuning['content_inset_y']:.2f} • Line height {tuning['line_expand_h_mul']:.2f}x / min {int(tuning['line_min_effective_h_px'])} px"
+            f"Inset X {tuning['content_inset_x']:.2f} • Inset Y {tuning['content_inset_y']:.2f} • Line height {tuning['line_expand_h_mul']:.2f}x / min {int(tuning['line_min_effective_h_px'])} px\n"
+            f"Preset base: {preset_label}"
         )
         lbl = getattr(self, "text_tuning_summary_lbl", None)
         if lbl is not None:
@@ -10273,7 +10388,8 @@ class FormAlchemistApp(MDApp):
         title_lbl = Label(text="Text Fit & Font Console", color=palette.get("text", (0.93, 0.96, 1.0, 1)), size_hint_y=None, height=dp(28), halign="left", valign="middle", font_size=dp(18), bold=True)
         title_lbl.bind(size=self._sync_label_text_size)
         self._bind_auto_height_label(title_lbl, min_height=dp(28), extra_pad=dp(4))
-        sub_lbl = Label(text="Adjust font fitting, centering, and line height. Apply now refreshes the current preview and also affects export.", color=palette.get("muted", (0.60, 0.68, 0.80, 1)), size_hint_y=None, height=dp(20), halign="left", valign="middle", font_size=dp(11))
+        preset_hint = os.path.basename(DEFAULT_PROFILE_SOURCE or "").strip() or "embedded default"
+        sub_lbl = Label(text=f"Adjust font fitting, centering, and line height. Apply now refreshes the current preview and also affects export. Default base: {preset_hint}", color=palette.get("muted", (0.60, 0.68, 0.80, 1)), size_hint_y=None, height=dp(20), halign="left", valign="middle", font_size=dp(11))
         sub_lbl.bind(size=self._sync_label_text_size)
         self._bind_auto_height_label(sub_lbl, min_height=dp(20), extra_pad=dp(6))
         head.add_widget(title_lbl)
