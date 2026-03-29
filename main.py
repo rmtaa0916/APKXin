@@ -9546,6 +9546,21 @@ class FormAlchemistApp(MDApp):
         except Exception:
             pass
 
+    def _is_mobile_layout(self):
+        try:
+            return bool(platform == "android" or getattr(self, "_mobile_mode", False))
+        except Exception:
+            return bool(platform == "android")
+
+    def _mapping_exists_for_box(self, box_idx, page_idx=0):
+        engine = getattr(self, "engine", None)
+        if engine is None:
+            return False
+        try:
+            return bool(engine._mapping_exists_for_box(box_idx, page_idx=page_idx))
+        except Exception:
+            return False
+
     def _scan_validation_issues(self, page_idx=None):
         report = {
             "page_idx": 0,
@@ -9721,21 +9736,28 @@ class FormAlchemistApp(MDApp):
             auto_dismiss=True,
         )
         def _refresh_and_replace(*_):
-            report2 = self._scan_validation_issues()
-            self.last_validation_report = report2
-            content.text = self._format_validation_report_text(report2)
-            self.refresh_learning_ui()
+            try:
+                report2 = self._scan_validation_issues()
+                self.last_validation_report = report2
+                content.text = self._format_validation_report_text(report2)
+                self.refresh_learning_ui()
+                self.set_status("Validation report refreshed.")
+            except Exception as e:
+                self.set_status(f"Validation refresh failed.\n{e}", kind="error")
         refresh_btn.bind(on_release=_refresh_and_replace)
         close_btn.bind(on_release=lambda *_: popup.dismiss())
         popup.open()
 
     def on_learning_validate_page(self, instance):
-        report = self._scan_validation_issues()
-        self.last_validation_report = report
-        self.refresh_learning_ui()
-        self._open_validation_report_popup(report)
-        issue_count = len(list(report.get("issues", []) or []))
-        self.set_status(f"Validation complete.\nIssues found: {issue_count}")
+        try:
+            report = self._scan_validation_issues()
+            self.last_validation_report = report
+            self.refresh_learning_ui()
+            self._open_validation_report_popup(report)
+            issue_count = len(list(report.get("issues", []) or []))
+            self.set_status(f"Validation complete.\nIssues found: {issue_count}")
+        except Exception as e:
+            self.set_status(f"Validation failed.\n{e}", kind="error")
 
     def on_learning_refresh(self, instance):
         self.refresh_learning_ui()
