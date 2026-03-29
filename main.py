@@ -994,6 +994,22 @@ DEFAULTS = {
     "Grid_N": 1,
 }
 
+TEXT_TUNING_DEFAULTS = {
+    "uppercase": True,
+    "overall_scale": 0.92,
+    "box_scale": 1.00,
+    "line_scale": 0.94,
+    "grid_scale": 0.92,
+    "content_inset_x": 0.07,
+    "content_inset_y": 0.14,
+    "box_vshift": -0.08,
+    "line_vshift": -0.08,
+    "grid_vshift": -0.05,
+    "line_expand_h_mul": 2.10,
+    "line_min_effective_h_px": 28,
+}
+
+
 DETECTION_UI_META = {
     "f_area": {"label": "Minimum Box Area", "helper": "Ignore very tiny shapes. Raise this if the app finds too many tiny false boxes."},
     "f_minw": {"label": "Minimum Box Width", "helper": "Ignore narrow boxes that are too small to be useful."},
@@ -1853,6 +1869,7 @@ class FormAlchemistEngine:
 
         self.settings = dict(DEFAULTS)
         self.settings["C_Size"] = list(DEFAULTS["C_Size"])
+        self.text_tuning = dict(TEXT_TUNING_DEFAULTS)
         self.pdf_source = PdfPageSource()
         self.detected_page_idx = None
         self.detected_settings_signature = None
@@ -1874,6 +1891,59 @@ class FormAlchemistEngine:
         self.semantic_targets = self._empty_semantic_targets()
         self.semantic_targets_by_page = {}
         self.semantic_target_overrides = {}
+
+    def _normalized_text_tuning(self, tuning=None):
+        base = dict(TEXT_TUNING_DEFAULTS)
+        if isinstance(tuning, dict):
+            for key, value in tuning.items():
+                if key in base:
+                    base[key] = value
+
+        def _to_bool(value, default):
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, (int, float)):
+                return bool(value)
+            txt = str(value or "").strip().lower()
+            if txt in ("1", "true", "yes", "on"): return True
+            if txt in ("0", "false", "no", "off"): return False
+            return bool(default)
+
+        def _to_float(value, default, lo=None, hi=None):
+            try:
+                out = float(value)
+            except Exception:
+                out = float(default)
+            if lo is not None:
+                out = max(float(lo), out)
+            if hi is not None:
+                out = min(float(hi), out)
+            return float(out)
+
+        def _to_int(value, default, lo=None, hi=None):
+            try:
+                out = int(round(float(value)))
+            except Exception:
+                out = int(default)
+            if lo is not None:
+                out = max(int(lo), out)
+            if hi is not None:
+                out = min(int(hi), out)
+            return int(out)
+
+        base["uppercase"] = _to_bool(base.get("uppercase", True), True)
+        base["overall_scale"] = _to_float(base.get("overall_scale", 0.92), 0.92, 0.60, 1.50)
+        base["box_scale"] = _to_float(base.get("box_scale", 1.00), 1.00, 0.60, 1.60)
+        base["line_scale"] = _to_float(base.get("line_scale", 0.94), 0.94, 0.60, 1.60)
+        base["grid_scale"] = _to_float(base.get("grid_scale", 0.92), 0.92, 0.60, 1.40)
+        base["content_inset_x"] = _to_float(base.get("content_inset_x", 0.07), 0.07, 0.00, 0.22)
+        base["content_inset_y"] = _to_float(base.get("content_inset_y", 0.14), 0.14, 0.00, 0.28)
+        base["box_vshift"] = _to_float(base.get("box_vshift", -0.08), -0.08, -0.30, 0.20)
+        base["line_vshift"] = _to_float(base.get("line_vshift", -0.08), -0.08, -0.30, 0.20)
+        base["grid_vshift"] = _to_float(base.get("grid_vshift", -0.05), -0.05, -0.30, 0.20)
+        base["line_expand_h_mul"] = _to_float(base.get("line_expand_h_mul", 2.10), 2.10, 1.00, 3.50)
+        base["line_min_effective_h_px"] = _to_int(base.get("line_min_effective_h_px", 28), 28, 0, 80)
+        return base
 
     def _empty_geom(self):
         return {"names": [], "dob": [], "phil": []}
@@ -4535,6 +4605,7 @@ class FormAlchemistEngine:
             "record_key_column": str(self._record_key_column()),
             "pdf_path": self.pdf_path,
             "zoom": float(ZOOM),
+            "text_tuning": self._normalized_text_tuning(getattr(self, "text_tuning", None)),
             "ui_state": ui_state,
             "learning_meta": self.collect_learning_meta(),
             "current_detection_context": dict(self.current_detection_context or {}),
@@ -4606,6 +4677,7 @@ class FormAlchemistEngine:
         self.settings["Grid_N"] = int(cfg.get("Grid_N", self.settings["Grid_N"]))
         self.config_zoom = float(cfg.get("zoom", getattr(self, "config_zoom", ZOOM)))
         self.config_pdf_path = str(cfg.get("pdf_path", getattr(self, "config_pdf_path", "")) or "")
+        self.text_tuning = self._normalized_text_tuning(cfg.get("text_tuning", getattr(self, "text_tuning", None)))
         self.record_label_source_column = str(cfg.get("record_label_source_column", getattr(self, "record_label_source_column", "")) or "").strip()
         self.apply_learning_meta(cfg.get("learning_meta", {}))
         restored_ctx = cfg.get("current_detection_context", {}) or {}
@@ -4733,12 +4805,19 @@ class FormAlchemistEngine:
     def _draw_text_op_cv(self, img, text, rects, preview_zoom=1.5, is_grid=False, grid_n=1, ox=0, oy=0, fs_scale=0.65):
         import unicodedata
 
+        tuning = self._normalized_text_tuning(getattr(self, "text_tuning", None))
+        uppercase_enabled = bool(tuning.get("uppercase", True))
+
+        def _apply_case(value):
+            value = unicodedata.normalize("NFC", str(value or ""))
+            return value.upper() if uppercase_enabled else value
+
         val = unicodedata.normalize("NFC", str(text or "").strip())
         if not val or val.lower() in ["nan", "none"]:
             return
         if val.endswith(".0"):
             val = val[:-2]
-        val = val.upper()
+        val = _apply_case(val)
 
         rects = sorted([self._coerce_rect(r) for r in rects], key=lambda rr: (round(rr.y0, 3), rr.x0))
         if not rects:
@@ -4778,76 +4857,103 @@ class FormAlchemistEngine:
 
         FIELD_PROFILES = {
             "grid": {
-                "font_bias": "grid",
-                "start_mul": max(float(fs_scale), 0.80),
+                "font_bias": "uniform_bold",
+                "start_mul": max(float(fs_scale), 0.86),
                 "min_size": 8,
-                "pad_x": 0.18,
-                "pad_y": 0.20,
+                "pad_x": 0.22,
+                "pad_y": 0.26,
                 "stroke_mul": 0.00,
                 "stroke_min_h": 9999,
-                "vshift": -0.10,
-                "truncate_mul": 0.58,
+                "vshift": -0.04,
+                "truncate_mul": 0.64,
+                "min_effective_h_px": 0,
+                "expand_h_mul": 1.00,
+                "content_inset_x": 0.04,
+                "content_inset_y": 0.08,
             },
             "box": {
-                "font_bias": "box",
-                "start_mul": max(float(fs_scale), 0.98),
+                "font_bias": "uniform_bold",
+                "start_mul": max(float(fs_scale), 0.95),
                 "min_size": 10,
-                "pad_x": 0.11,
-                "pad_y": 0.14,
-                "stroke_mul": 0.05,
-                "stroke_min_h": 18,
-                "vshift": -0.09,
-                "truncate_mul": 0.68,
+                "pad_x": 0.16,
+                "pad_y": 0.22,
+                "stroke_mul": 0.00,
+                "stroke_min_h": 9999,
+                "vshift": -0.03,
+                "truncate_mul": 0.72,
+                "min_effective_h_px": 0,
+                "expand_h_mul": 1.08,
+                "content_inset_x": 0.05,
+                "content_inset_y": 0.10,
             },
             "line": {
-                "font_bias": "line",
-                "start_mul": max(float(fs_scale), 0.92),
-                "min_size": 9,
-                "pad_x": 0.08,
-                "pad_y": 0.18,
-                "stroke_mul": 0.03,
-                "stroke_min_h": 22,
-                "vshift": -0.14,
-                "truncate_mul": 0.62,
+                "font_bias": "uniform_bold_condensed",
+                "start_mul": max(float(fs_scale), 0.90),
+                "min_size": 10,
+                "pad_x": 0.10,
+                "pad_y": 0.22,
+                "stroke_mul": 0.00,
+                "stroke_min_h": 9999,
+                "vshift": -0.02,
+                "truncate_mul": 0.72,
+                "min_effective_h_px": 24,
+                "expand_h_mul": 1.75,
+                "content_inset_x": 0.06,
+                "content_inset_y": 0.10,
             },
         }
 
+        overall_scale = float(tuning.get("overall_scale", 0.92))
+        profile_scale_map = {
+            "grid": float(tuning.get("grid_scale", 0.92)),
+            "box": float(tuning.get("box_scale", 1.00)),
+            "line": float(tuning.get("line_scale", 0.94)),
+        }
+        inset_x = float(tuning.get("content_inset_x", 0.07))
+        inset_y = float(tuning.get("content_inset_y", 0.14))
+        vshift_map = {
+            "grid": float(tuning.get("grid_vshift", -0.05)),
+            "box": float(tuning.get("box_vshift", -0.08)),
+            "line": float(tuning.get("line_vshift", -0.08)),
+        }
+        for _kind, _profile in FIELD_PROFILES.items():
+            scale_mul = max(0.60, min(1.60, overall_scale * profile_scale_map.get(_kind, 1.0)))
+            _profile["start_mul"] = max(0.50, float(_profile.get("start_mul", 1.0)) * scale_mul)
+            _profile["min_size"] = max(8, int(round(float(_profile.get("min_size", 10)) * min(scale_mul, 1.10))))
+            _profile["content_inset_x"] = inset_x
+            _profile["content_inset_y"] = inset_y
+            _profile["vshift"] = vshift_map.get(_kind, float(_profile.get("vshift", 0.0)))
+        FIELD_PROFILES["line"]["min_effective_h_px"] = int(tuning.get("line_min_effective_h_px", 28))
+        FIELD_PROFILES["line"]["expand_h_mul"] = float(tuning.get("line_expand_h_mul", 2.10))
+
         def build_font_candidates(style="box"):
-            if style == "line":
+            if style in ("line", "uniform_bold_condensed"):
                 candidates = [
                     "/system/fonts/RobotoCondensed-Bold.ttf",
-                    "/system/fonts/RobotoCondensed-Regular.ttf",
                     "/system/fonts/NotoSans-CondensedBold.ttf",
-                    "/system/fonts/NotoSans-Condensed.ttf",
                     "/system/fonts/NotoSansDisplay-CondensedBold.ttf",
+                    "/system/fonts/Roboto-Bold.ttf",
+                    "/system/fonts/NotoSans-Bold.ttf",
+                    "/system/fonts/RobotoCondensed-Regular.ttf",
+                    "/system/fonts/NotoSans-Condensed.ttf",
                     "/system/fonts/NotoSansDisplay-Condensed.ttf",
-                    "/system/fonts/Roboto-Bold.ttf",
-                    "/system/fonts/NotoSans-Bold.ttf",
                     "/system/fonts/Roboto-Regular.ttf",
                     "/system/fonts/NotoSans-Regular.ttf",
-                ]
-            elif style == "grid":
-                candidates = [
-                    "/system/fonts/Roboto-Medium.ttf",
-                    "/system/fonts/NotoSans-Medium.ttf",
-                    "/system/fonts/Roboto-Regular.ttf",
-                    "/system/fonts/NotoSans-Regular.ttf",
-                    "/system/fonts/Roboto-Bold.ttf",
-                    "/system/fonts/NotoSans-Bold.ttf",
                 ]
             else:
                 candidates = [
-                    "/system/fonts/NotoSans-SemiBold.ttf",
-                    "/system/fonts/Roboto-Medium.ttf",
                     "/system/fonts/NotoSans-Bold.ttf",
                     "/system/fonts/Roboto-Bold.ttf",
+                    "/system/fonts/NotoSans-SemiBold.ttf",
+                    "/system/fonts/Roboto-Medium.ttf",
+                    "/system/fonts/NotoSansDisplay-Bold.ttf",
+                    "/system/fonts/DroidSans-Bold.ttf",
                     "/system/fonts/NotoSans-Regular.ttf",
                     "/system/fonts/Roboto-Regular.ttf",
                 ]
             candidates += [
-                "/system/fonts/NotoSansDisplay-Bold.ttf",
+                "/system/fonts/RobotoStatic-Bold.ttf",
                 "/system/fonts/RobotoStatic-Regular.ttf",
-                "/system/fonts/DroidSans-Bold.ttf",
                 "/system/fonts/DroidSans.ttf",
                 "/data/data/com.termux/files/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
                 "/data/data/com.termux/files/usr/share/fonts/TTF/DejaVuSans.ttf",
@@ -4866,22 +4972,17 @@ class FormAlchemistEngine:
                         if not any(tag in low for tag in ["noto", "roboto", "dejavu", "free", "sans", "droid"]):
                             fallback.append(full)
                             continue
-                        if style == "line":
-                            if "condensed" in low:
+                        if style in ("line", "uniform_bold_condensed"):
+                            if "condensed" in low and any(tag in low for tag in ["bold", "semibold", "medium"]):
                                 preferred.insert(0, full)
-                            elif any(tag in low for tag in ["medium", "semibold", "bold", "regular"]):
+                            elif "condensed" in low:
                                 preferred.append(full)
-                            else:
-                                fallback.append(full)
-                        elif style == "grid":
-                            if any(tag in low for tag in ["medium", "regular"]):
-                                preferred.insert(0, full)
-                            elif any(tag in low for tag in ["bold", "semibold"]):
+                            elif any(tag in low for tag in ["bold", "semibold", "medium"]):
                                 preferred.append(full)
                             else:
                                 fallback.append(full)
                         else:
-                            if any(tag in low for tag in ["semibold", "medium", "bold"]):
+                            if any(tag in low for tag in ["bold", "semibold", "medium"]):
                                 preferred.insert(0, full)
                             elif "regular" in low:
                                 preferred.append(full)
@@ -4922,12 +5023,12 @@ class FormAlchemistEngine:
                     if sig and sig != qsig:
                         score += 1.0
                 low = os.path.basename(path).lower()
-                if style == "line" and "condensed" in low:
-                    score += 0.70
-                elif style == "grid" and any(tag in low for tag in ["regular", "medium"]):
-                    score += 0.45
-                elif style == "box" and any(tag in low for tag in ["semibold", "medium", "bold"]):
-                    score += 0.55
+                if style in ("line", "uniform_bold_condensed") and "condensed" in low:
+                    score += 1.00
+                elif style in ("line", "uniform_bold_condensed") and any(tag in low for tag in ["bold", "semibold", "medium"]):
+                    score += 0.60
+                elif any(tag in low for tag in ["bold", "semibold", "medium"]):
+                    score += 0.75
                 if score > best_score:
                     best_score = score
                     best_path = path
@@ -4937,7 +5038,7 @@ class FormAlchemistEngine:
             return best_path
 
         def sanitize_for_font(value, font):
-            value = unicodedata.normalize("NFC", str(value or "")).upper()
+            value = _apply_case(value)
             qsig = glyph_signature(font, "?")
             pieces = []
             for ch in value:
@@ -4977,19 +5078,16 @@ class FormAlchemistEngine:
             return bbox, max(1, bbox[2] - bbox[0]), max(1, bbox[3] - bbox[1])
 
         def fit_text(single_val, target_w, target_h, field_kind="box"):
-            candidate = unicodedata.normalize("NFC", str(single_val or "")).upper()
+            candidate = _apply_case(single_val)
             target_w = max(int(target_w), 1)
             target_h = max(int(target_h), 1)
             profile = FIELD_PROFILES.get(field_kind, FIELD_PROFILES["box"])
+            effective_h = max(target_h, int(profile.get("min_effective_h_px", 0)))
             inner_w = max(int(target_w - max(4, target_w * profile["pad_x"])), 1)
-            inner_h = max(int(target_h - max(3, target_h * profile["pad_y"])), 1)
-            start_size = max(int(target_h * profile["start_mul"]), profile["min_size"])
+            inner_h = max(int(effective_h - max(3, effective_h * profile["pad_y"])), 1)
+            start_size = max(int(effective_h * profile["start_mul"]), profile["min_size"])
             min_size = int(profile["min_size"])
-            base_stroke = int(round(target_h * profile["stroke_mul"]))
-            if target_h >= profile["stroke_min_h"]:
-                base_stroke = max(base_stroke, 1)
-            else:
-                base_stroke = 0
+            base_stroke = 0
             for size in range(start_size, min_size - 1, -1):
                 font = pick_font(size, candidate, style=profile["font_bias"])
                 if font is None:
@@ -5020,11 +5118,39 @@ class FormAlchemistEngine:
             bbox, tw, th = measure_bbox(ellipsis, font, stroke_width=0)
             return ellipsis, font, bbox, tw, th, 0, profile
 
+        def _effective_rect(rect, profile):
+            rect = self._coerce_rect(rect)
+            expand_h_mul = max(float(profile.get("expand_h_mul", 1.0)), 1.0)
+            min_effective_h_px = int(profile.get("min_effective_h_px", 0))
+            actual_h_px = max(int(rect.height * preview_zoom), 1)
+            desired_h_px = max(actual_h_px, min_effective_h_px, int(round(actual_h_px * expand_h_mul)))
+            if desired_h_px <= actual_h_px:
+                return rect
+            extra_pdf_h = (desired_h_px - actual_h_px) / max(float(preview_zoom), 0.001)
+            half_extra = extra_pdf_h / 2.0
+            return fitz.Rect(rect.x0, rect.y0 - half_extra, rect.x1, rect.y1 + half_extra)
+
+        def _content_rect(rect, profile):
+            rect = self._coerce_rect(rect)
+            inset_x = max(0.0, float(rect.width) * float(profile.get("content_inset_x", 0.0)))
+            inset_y = max(0.0, float(rect.height) * float(profile.get("content_inset_y", 0.0)))
+            x0 = rect.x0 + inset_x
+            x1 = rect.x1 - inset_x
+            y0 = rect.y0 + inset_y
+            y1 = rect.y1 - inset_y
+            if x1 <= x0:
+                x0, x1 = rect.x0, rect.x1
+            if y1 <= y0:
+                y0, y1 = rect.y0, rect.y1
+            return fitz.Rect(x0, y0, x1, y1)
+
         def centered_xy(rect, bbox, text_w, text_h, profile):
-            target_w = max(int(rect.width * preview_zoom), 1)
-            target_h = max(int(rect.height * preview_zoom), 1)
-            left = (rect.x0 * preview_zoom) + (ox * preview_zoom)
-            top = (rect.y0 * preview_zoom) + (oy * preview_zoom)
+            eff_rect = _effective_rect(rect, profile)
+            content_rect = _content_rect(eff_rect, profile)
+            target_w = max(int(content_rect.width * preview_zoom), 1)
+            target_h = max(int(content_rect.height * preview_zoom), 1)
+            left = (content_rect.x0 * preview_zoom) + (ox * preview_zoom)
+            top = (content_rect.y0 * preview_zoom) + (oy * preview_zoom)
             bx0, by0, _, _ = bbox
             x = left + ((target_w - text_w) / 2.0) - bx0
             y = top + ((target_h - text_h) / 2.0) - by0
@@ -5047,7 +5173,7 @@ class FormAlchemistEngine:
             target_h = max(int(rect.height * preview_zoom), 1)
             cell_w = (rect.width * preview_zoom) / cells
             base_cell_w = rect.width / cells
-            for i, ch in enumerate(str(grid_val).upper()[:cells]):
+            for i, ch in enumerate(_apply_case(grid_val)[:cells]):
                 display_val, font, bbox, tw, th, stroke, profile = fit_text(str(ch), cell_w - 2, target_h, field_kind="grid")
                 if not display_val or font is None or bbox is None:
                     continue
@@ -5990,6 +6116,7 @@ class FormAlchemistApp(MDApp):
         self._mobile_zoom_bootstrap_pending = bool(is_mobile)
         self.mobile_select_mode = False
         self._mobile_quick_rail_open = False
+        self.text_tuning_ui = self.engine._normalized_text_tuning(getattr(self.engine, "text_tuning", None))
 
         def style_card(widget, color=None, radius=dp(22)):
             color = color or palette["surface"]
@@ -6566,6 +6693,7 @@ class FormAlchemistApp(MDApp):
                 "Files": "Files",
                 "Session": "Session",
                 "Detection": "Fields",
+                "Text": "Text",
                 "Learning": "Memory",
                 "Mapping": "Map",
                 "Export": "Export",
@@ -6717,6 +6845,30 @@ class FormAlchemistApp(MDApp):
             self._mobile_section_cards["Detection"] = detect_card
         else:
             self._desktop_section_cards["Detection"] = detect_card
+
+        text_card, text_body = make_card("Text Rendering", "Adjust font fit, centering, and readability inside the mapped boxes")
+        text_note = Label(text="These controls change how mapped text is fitted and centered inside the selected fields and exported PDF.",
+                        color=palette["muted"], size_hint_y=None, height=dp(22), halign="left", valign="middle", font_size=dp(10.5 if is_mobile else 11))
+        text_note.bind(size=self._sync_label_text_size)
+        self._bind_auto_height_label(text_note, min_height=dp(20), extra_pad=dp(4))
+        text_body.add_widget(text_note)
+        self.text_tuning_summary_lbl = Label(text="", color=palette["text"], size_hint_y=None, height=dp(42), halign="left", valign="middle", font_size=dp(11))
+        self.text_tuning_summary_lbl.bind(size=self._sync_label_text_size)
+        self._bind_auto_height_label(self.text_tuning_summary_lbl, min_height=dp(38), extra_pad=dp(4))
+        text_body.add_widget(labeled_field("Current text fit profile", self.text_tuning_summary_lbl, "Preview and export share these font-fitting rules."))
+        text_action_row = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=row_h)
+        self.btn_text_tuning_dialog = make_button("Font Tuning Console", tone="soft")
+        self.btn_text_tuning_dialog.bind(on_release=self.open_text_tuning_popup)
+        self.btn_text_preview_refresh = make_button("Preview Text Now", tone="primary")
+        self.btn_text_preview_refresh.bind(on_release=self.on_preview)
+        text_action_row.add_widget(self.btn_text_tuning_dialog)
+        text_action_row.add_widget(self.btn_text_preview_refresh)
+        text_body.add_widget(text_action_row)
+        if is_mobile:
+            self._mobile_section_cards["Text"] = text_card
+        else:
+            self._desktop_section_cards["Text"] = text_card
+        self._update_text_tuning_summary()
 
         map_card, map_body = make_card("Mapping", "Link selected boxes to data columns" if is_mobile else "Link selected boxes to your data directly from the preview")
         self.box_ids_input = make_input("", "0,1,2")
@@ -7223,7 +7375,7 @@ class FormAlchemistApp(MDApp):
                         pass
                 self.mobile_sidebar.add_widget(mobile_flow_card)
 
-            sidebar_tabs = _make_mobile_section_tabs(["Files", "Detection", "Learning", "Mapping", "Session", "Export"])
+            sidebar_tabs = _make_mobile_section_tabs(["Files", "Detection", "Text", "Learning", "Mapping", "Session", "Export"])
             self.mobile_sidebar.add_widget(sidebar_tabs)
 
             sidebar_scroll = ScrollView(do_scroll_x=False, do_scroll_y=True, bar_width=dp(4), bar_margin=dp(10), scroll_type=["bars", "content"])
@@ -7250,7 +7402,7 @@ class FormAlchemistApp(MDApp):
             left_body = GridLayout(cols=1, spacing=dp(10), size_hint_y=None)
             left_body.bind(minimum_height=left_body.setter("height"))
             desktop_controls_card, desktop_controls_body = make_card("Document & Detection", "Compact desktop controls")
-            tabs = _make_desktop_section_tabs(["Workspace", "Session", "Detection", "Learning"])
+            tabs = _make_desktop_section_tabs(["Workspace", "Session", "Detection", "Text", "Learning"])
             desktop_controls_body.add_widget(tabs)
             self._desktop_section_host = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
             self._desktop_section_host.bind(minimum_height=self._desktop_section_host.setter("height"))
@@ -8622,6 +8774,7 @@ class FormAlchemistApp(MDApp):
             self.engine.settings["C_FillMin"] = float(self.c_fill.text)
             self.engine.settings["C_Eps"] = float(self.c_eps.text)
             self.engine.settings["Use_Extent"] = bool(getattr(self, "use_extent_chk", None).active if hasattr(self, "use_extent_chk") else int(self.use_extent.text.strip() or "0"))
+            self.engine.text_tuning = self.engine._normalized_text_tuning(getattr(self, "text_tuning_ui", None))
         except Exception as e:
             raise ValueError(f"Invalid settings input: {e}")
 
@@ -8669,6 +8822,9 @@ class FormAlchemistApp(MDApp):
             self.use_extent_chk.active = bool(s["Use_Extent"])
         elif hasattr(self, "use_extent"):
             self.use_extent.text = "1" if s["Use_Extent"] else "0"
+
+        self.text_tuning_ui = self.engine._normalized_text_tuning(getattr(self.engine, "text_tuning", None))
+        self._update_text_tuning_summary()
 
     def _apply_record_label_source_column(self, column_name, popup=None):
         column_name = str(column_name or "").strip()
@@ -10057,6 +10213,244 @@ class FormAlchemistApp(MDApp):
                 Clock.schedule_once(lambda dt, dx=pan_dx, dy=pan_dy: self._scroll_preview_by_pixels(dx, dy), 0)
         elif action == "gesture_end":
             self._schedule_preview_resync()
+
+    def _normalized_text_tuning_ui(self, tuning=None):
+        src = tuning if tuning is not None else getattr(self, "text_tuning_ui", None)
+        return self.engine._normalized_text_tuning(src if isinstance(src, dict) else None)
+
+    def _update_text_tuning_summary(self):
+        tuning = self._normalized_text_tuning_ui()
+        self.text_tuning_ui = dict(tuning)
+        summary = (
+            f"FIT INSIDE • CENTERED • {'UPPERCASE' if tuning.get('uppercase', True) else 'ORIGINAL CASE'}\n"
+            f"Overall {tuning['overall_scale']:.2f} • Box {tuning['box_scale']:.2f} • Line {tuning['line_scale']:.2f} • Grid {tuning['grid_scale']:.2f}\n"
+            f"Inset X {tuning['content_inset_x']:.2f} • Inset Y {tuning['content_inset_y']:.2f} • Line height {tuning['line_expand_h_mul']:.2f}x / min {int(tuning['line_min_effective_h_px'])} px"
+        )
+        lbl = getattr(self, "text_tuning_summary_lbl", None)
+        if lbl is not None:
+            lbl.text = summary
+
+    def open_text_tuning_popup(self, *_):
+        palette = getattr(self, "ui_palette", {}) or {}
+        base = self._normalized_text_tuning_ui()
+        outer = BoxLayout(orientation="vertical", spacing=dp(10), padding=[dp(14), dp(14), dp(14), dp(14)])
+        self._style_popup_card(outer, palette.get("surface", (0.085, 0.105, 0.145, 1)), radius=dp(22))
+
+        head = BoxLayout(orientation="vertical", spacing=dp(6), size_hint_y=None)
+        head.bind(minimum_height=head.setter("height"))
+        title_lbl = Label(text="Text Fit & Font Console", color=palette.get("text", (0.93, 0.96, 1.0, 1)), size_hint_y=None, height=dp(28), halign="left", valign="middle", font_size=dp(18), bold=True)
+        title_lbl.bind(size=self._sync_label_text_size)
+        self._bind_auto_height_label(title_lbl, min_height=dp(28), extra_pad=dp(4))
+        sub_lbl = Label(text="Adjust font fitting, centering, and line height. Apply now refreshes the current preview and also affects export.", color=palette.get("muted", (0.60, 0.68, 0.80, 1)), size_hint_y=None, height=dp(20), halign="left", valign="middle", font_size=dp(11))
+        sub_lbl.bind(size=self._sync_label_text_size)
+        self._bind_auto_height_label(sub_lbl, min_height=dp(20), extra_pad=dp(6))
+        head.add_widget(title_lbl)
+        head.add_widget(sub_lbl)
+        outer.add_widget(head)
+
+        scroll = ScrollView(do_scroll_x=False, do_scroll_y=True, bar_width=dp(6), bar_margin=dp(10))
+        content = GridLayout(cols=1, spacing=dp(10), size_hint_y=None)
+        content.bind(minimum_height=content.setter("height"))
+        scroll.add_widget(content)
+
+        def _slider_spec(key, label, min_v, max_v, step=0.01, decimals=2, helper="", widget_type="float"):
+            return {"key": key, "label": label, "min": min_v, "max": max_v, "step": step, "decimals": decimals, "helper": helper, "widget_type": widget_type}
+
+        groups = [
+            ("Scale", [
+                _slider_spec("overall_scale", "Overall Size", 0.60, 1.50, 0.01, 2, "Master size control used by preview and export."),
+                _slider_spec("box_scale", "Box Size", 0.60, 1.60, 0.01, 2, "How large text appears inside normal green/box fields."),
+                _slider_spec("line_scale", "Yellow Line Size", 0.60, 1.60, 0.01, 2, "How large text appears inside thin yellow answer lines."),
+                _slider_spec("grid_scale", "Grid Cell Size", 0.60, 1.40, 0.01, 2, "How large one character appears inside split/grid cells."),
+            ]),
+            ("Centering", [
+                _slider_spec("content_inset_x", "Horizontal Safe Padding", 0.00, 0.22, 0.01, 2, "Raises left/right padding so text stays inside the box."),
+                _slider_spec("content_inset_y", "Vertical Safe Padding", 0.00, 0.28, 0.01, 2, "Raises top/bottom padding so text stays clear of the box edges."),
+                _slider_spec("box_vshift", "Box Vertical Nudge", -0.30, 0.20, 0.01, 2, "Negative values move box text upward."),
+                _slider_spec("line_vshift", "Yellow Line Vertical Nudge", -0.30, 0.20, 0.01, 2, "Negative values move yellow line text upward."),
+                _slider_spec("grid_vshift", "Grid Vertical Nudge", -0.30, 0.20, 0.01, 2, "Negative values move grid-cell text upward."),
+            ]),
+            ("Yellow Line Readability", [
+                _slider_spec("line_expand_h_mul", "Yellow Height Boost", 1.00, 3.50, 0.05, 2, "Creates a virtual taller area so yellow line text can stay readable."),
+                _slider_spec("line_min_effective_h_px", "Yellow Minimum Height", 0, 80, 1, 0, "Minimum effective height in preview pixels for yellow line text.", "int"),
+            ]),
+        ]
+
+        controls = {}
+
+        def _format_slider_value(val, decimals=0, as_int=False):
+            return str(int(round(float(val)))) if as_int else f"{float(val):.{int(decimals)}f}"
+
+        def _make_slider_control(spec):
+            is_mobile = bool(getattr(self, "ui_mobile", False))
+            start_val = float(base.get(spec["key"], spec["min"]))
+            row = BoxLayout(orientation="vertical", spacing=dp(4), size_hint_y=None)
+            row.bind(minimum_height=row.setter("height"))
+            top = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint_y=None, height=dp(18 if is_mobile else 20))
+            lbl = Label(text=spec["label"], color=palette.get("text", (0.93, 0.96, 1.0, 1)), halign="left", valign="middle", font_size=dp(11))
+            lbl.bind(size=self._sync_label_text_size)
+            top.add_widget(lbl)
+            val_lbl = None
+            if not is_mobile:
+                val_lbl = Label(text=_format_slider_value(start_val, spec["decimals"], spec["widget_type"] == "int"), color=palette.get("accent", (0.10, 0.78, 0.63, 1)), halign="right", valign="middle", font_size=dp(11))
+                val_lbl.bind(size=self._sync_label_text_size)
+                top.add_widget(val_lbl)
+            slider = Slider(min=spec["min"], max=spec["max"], value=start_val, step=spec["step"], size_hint_y=None, height=dp(28 if is_mobile else 30))
+            input_widget = TextInput(
+                text=_format_slider_value(start_val, spec["decimals"], spec["widget_type"] == "int"),
+                multiline=False,
+                size_hint_y=None,
+                height=dp(28 if is_mobile else 28),
+                input_filter=("int" if spec["widget_type"] == "int" else None),
+                background_normal="",
+                background_active="",
+                background_color=palette.get("surface_soft", (0.135, 0.16, 0.215, 1)),
+                foreground_color=palette.get("text", (0.93, 0.96, 1.0, 1)),
+                cursor_color=palette.get("accent", (0.10, 0.78, 0.63, 1)),
+                padding=[dp(8), dp(6), dp(8), dp(6)],
+            )
+
+            def _sync_from_slider(_instance, value):
+                formatted = _format_slider_value(value, spec["decimals"], spec["widget_type"] == "int")
+                if val_lbl is not None:
+                    val_lbl.text = formatted
+                if input_widget.text != formatted:
+                    input_widget.text = formatted
+
+            def _sync_from_input(_instance=None):
+                try:
+                    value = float(input_widget.text.strip())
+                    value = max(float(spec["min"]), min(float(spec["max"]), value))
+                    slider.value = value
+                except Exception:
+                    pass
+
+            slider.bind(value=_sync_from_slider)
+            input_widget.bind(on_text_validate=_sync_from_input, focus=lambda inst, focused: (None if focused else _sync_from_input(inst)))
+            row.add_widget(top)
+            if is_mobile:
+                control_row = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint_y=None, height=dp(34))
+                slider.size_hint_x = 1
+                input_widget.size_hint_x = None
+                input_widget.width = dp(72)
+                control_row.add_widget(slider)
+                control_row.add_widget(input_widget)
+                row.add_widget(control_row)
+            else:
+                row.add_widget(slider)
+                row.add_widget(input_widget)
+            if spec.get("helper"):
+                helper = Label(text=spec["helper"], color=palette.get("muted", (0.60, 0.68, 0.80, 0.92)), size_hint_y=None, height=dp(16), halign="left", valign="middle", font_size=dp(9.2))
+                helper.bind(size=self._sync_label_text_size)
+                self._bind_auto_height_label(helper, min_height=dp(14), extra_pad=dp(2))
+                row.add_widget(helper)
+            controls[spec["key"]] = {"slider": slider, "input": input_widget, "spec": spec}
+            return row
+
+        for group_name, specs in groups:
+            card = GridLayout(cols=1, spacing=dp(8), size_hint_y=None, padding=[dp(12), dp(10), dp(12), dp(12)])
+            card.bind(minimum_height=card.setter("height"))
+            title = Label(text=group_name, color=palette.get("text", (0.93, 0.96, 1.0, 1)), size_hint_y=None, height=dp(18 if getattr(self, "ui_mobile", False) else 20), halign="left", valign="middle", font_size=dp(12 if getattr(self, "ui_mobile", False) else 13), bold=True)
+            title.bind(size=self._sync_label_text_size)
+            grid = GridLayout(cols=1 if getattr(self, "ui_mobile", False) else 2, spacing=dp(10), size_hint_y=None)
+            grid.bind(minimum_height=grid.setter("height"))
+            for spec in specs:
+                grid.add_widget(_make_slider_control(spec))
+            card.add_widget(title)
+            card.add_widget(grid)
+            self._style_popup_card(card, palette.get("surface_alt", (0.11, 0.135, 0.185, 1)), radius=dp(18))
+            content.add_widget(card)
+
+        uppercase_toggle = CheckBox(active=bool(base.get("uppercase", True)))
+        toggle_row = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint_y=None, height=dp(42))
+        toggle_lbl = Label(text="Force uppercase", color=palette.get("text", (0.93, 0.96, 1.0, 1)), halign="left", valign="middle", font_size=dp(11))
+        toggle_lbl.bind(size=self._sync_label_text_size)
+        toggle_row.add_widget(toggle_lbl)
+        toggle_slot = AnchorLayout(anchor_x="right", anchor_y="center", size_hint=(None, None), width=dp(56), height=dp(42), padding=(0, 0, dp(10), 0))
+        uppercase_toggle.size_hint = (None, None)
+        uppercase_toggle.size = (dp(24), dp(18))
+        toggle_slot.add_widget(uppercase_toggle)
+        toggle_row.add_widget(toggle_slot)
+        toggle_wrap = BoxLayout(orientation="vertical", spacing=dp(3), padding=[dp(10), dp(8), dp(10), dp(8)], size_hint_y=None)
+        toggle_wrap.bind(minimum_height=toggle_wrap.setter("height"))
+        self._style_popup_card(toggle_wrap, palette.get("surface_alt", (0.11, 0.135, 0.185, 1)), radius=dp(16))
+        toggle_wrap.add_widget(toggle_row)
+        toggle_help = Label(text="Keep this on if you want the whole form to stay visually uniform.", color=palette.get("muted", (0.60, 0.68, 0.80, 0.96)), halign="left", valign="middle", font_size=dp(9.5), size_hint_y=None)
+        toggle_help.bind(size=self._sync_label_text_size)
+        self._bind_auto_height_label(toggle_help, min_height=dp(18), extra_pad=dp(4))
+        toggle_wrap.add_widget(toggle_help)
+        content.add_widget(toggle_wrap)
+
+        outer.add_widget(scroll)
+
+        if getattr(self, "ui_mobile", False):
+            btn_row = BoxLayout(orientation="vertical", spacing=dp(8), size_hint_y=None)
+            btn_row.bind(minimum_height=btn_row.setter("height"))
+            top_actions = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=dp(44))
+            btn_defaults = self._make_compact_action_button("Reset", tone="ghost")
+            btn_apply = self._make_compact_action_button("Apply", tone="primary")
+            for btn in [btn_defaults, btn_apply]:
+                top_actions.add_widget(btn)
+            btn_close = self._make_compact_action_button("Close", tone="ghost")
+            btn_close.size_hint_y = None
+            btn_close.height = dp(42)
+            btn_row.add_widget(top_actions)
+            btn_row.add_widget(btn_close)
+        else:
+            btn_row = GridLayout(cols=3, spacing=dp(8), size_hint_y=None, height=dp(46))
+            btn_defaults = self._make_compact_action_button("Defaults", tone="ghost")
+            btn_apply = self._make_compact_action_button("Apply", tone="primary")
+            btn_close = self._make_compact_action_button("Close", tone="plain")
+            for btn in [btn_defaults, btn_apply, btn_close]:
+                btn_row.add_widget(btn)
+        outer.add_widget(btn_row)
+
+        popup = Popup(
+            title="",
+            separator_height=0,
+            background="",
+            background_color=(0, 0, 0, 0.80),
+            content=outer,
+            size_hint=(0.96 if getattr(self, "ui_mobile", False) else 0.86, 0.92 if getattr(self, "ui_mobile", False) else 0.88),
+            auto_dismiss=True,
+        )
+        self._bind_popup_background_softening(popup)
+
+        def _apply_text_settings(*_):
+            try:
+                updated = dict(base)
+                for key, payload in controls.items():
+                    slider = payload["slider"]
+                    spec = payload["spec"]
+                    if spec["widget_type"] == "int":
+                        updated[key] = int(round(float(slider.value)))
+                    else:
+                        updated[key] = float(slider.value)
+                updated["uppercase"] = bool(uppercase_toggle.active)
+                self.text_tuning_ui = self._normalized_text_tuning_ui(updated)
+                self.apply_ui_settings_to_engine()
+                self._update_text_tuning_summary()
+                popup.dismiss()
+                if not self.engine.pdf_path:
+                    self.set_status("Text tuning applied. Load a PDF to see the updated fit and centering.", kind="action", hold_seconds=2.0, force=True)
+                    return
+                self.set_status("Text tuning applied. Refreshing preview with the new fit and centering rules...", kind="action", hold_seconds=2.5, force=True)
+                Clock.schedule_once(lambda dt: self.on_preview(None), 0)
+            except Exception as e:
+                traceback.print_exc()
+                self.set_status(f"Text tuning error:\n{e}", kind="error", force=True)
+
+        def _restore_text_defaults(*_):
+            defaults = self._normalized_text_tuning_ui(TEXT_TUNING_DEFAULTS)
+            for key, payload in controls.items():
+                if key in defaults:
+                    payload["slider"].value = float(defaults[key])
+            uppercase_toggle.active = bool(defaults.get("uppercase", True))
+
+        btn_defaults.bind(on_release=_restore_text_defaults)
+        btn_apply.bind(on_release=_apply_text_settings)
+        btn_close.bind(on_release=lambda *_: popup.dismiss())
+        popup.open()
 
     def open_detection_settings_popup(self, *_):
         palette = getattr(self, "ui_palette", {}) or {}
