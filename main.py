@@ -128,6 +128,28 @@ class RectCompat:
     def __repr__(self):
         return f"RectCompat({self.x0}, {self.y0}, {self.x1}, {self.y1})"
 
+    @property
+    def is_empty(self):
+        return self.width <= 0 or self.height <= 0
+
+    def get_area(self):
+        if self.is_empty:
+            return 0.0
+        return float(self.width * self.height)
+
+    def intersect(self, other):
+        other = RectCompat(other)
+        x0 = max(self.x0, other.x0)
+        y0 = max(self.y0, other.y0)
+        x1 = min(self.x1, other.x1)
+        y1 = min(self.y1, other.y1)
+        if x1 <= x0 or y1 <= y0:
+            return RectCompat(0.0, 0.0, 0.0, 0.0)
+        return RectCompat(x0, y0, x1, y1)
+
+    def __and__(self, other):
+        return self.intersect(other)
+
 if fitz is None:
     fitz = SimpleNamespace(Rect=RectCompat)
 elif not hasattr(fitz, "Rect"):
@@ -3865,12 +3887,27 @@ class FormAlchemistEngine:
     def _rect_overlap_score(self, a, b):
         a = fitz.Rect(a)
         b = fitz.Rect(b)
-        inter = a & b
-        if inter.is_empty or inter.get_area() <= 0:
+
+        ax0, ay0, ax1, ay1 = float(a.x0), float(a.y0), float(a.x1), float(a.y1)
+        bx0, by0, bx1, by1 = float(b.x0), float(b.y0), float(b.x1), float(b.y1)
+
+        aw = max(0.0, ax1 - ax0)
+        ah = max(0.0, ay1 - ay0)
+        bw = max(0.0, bx1 - bx0)
+        bh = max(0.0, by1 - by0)
+        a_area = max(aw * ah, 1e-6)
+        b_area = max(bw * bh, 1e-6)
+
+        ix0 = max(ax0, bx0)
+        iy0 = max(ay0, by0)
+        ix1 = min(ax1, bx1)
+        iy1 = min(ay1, by1)
+        iw = max(0.0, ix1 - ix0)
+        ih = max(0.0, iy1 - iy0)
+        inter_area = iw * ih
+        if inter_area <= 0:
             return 0.0
-        inter_area = inter.get_area()
-        a_area = max(a.get_area(), 1e-6)
-        b_area = max(b.get_area(), 1e-6)
+
         iou = inter_area / float(max(a_area + b_area - inter_area, 1e-6))
         frac = inter_area / float(max(min(a_area, b_area), 1e-6))
         return max(iou, frac)
