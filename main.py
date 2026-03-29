@@ -4765,16 +4765,89 @@ class FormAlchemistEngine:
             sig_cache[key] = sig
             return sig
 
-        def build_font_candidates():
-            candidates = [
-                "/system/fonts/NotoSans-Bold.ttf",
+        def classify_field(rect_list, force_grid=False):
+            if force_grid:
+                return "grid"
+            target = rect_list[0] if len(rect_list) == 1 else self._rect_union(rect_list)
+            w = max(float(target.width), 1.0)
+            h = max(float(target.height), 1.0)
+            aspect = w / h
+            if len(rect_list) > 1:
+                return "line" if aspect >= 3.2 else "box"
+            return "line" if aspect >= 4.6 else "box"
+
+        FIELD_PROFILES = {
+            "grid": {
+                "font_bias": "grid",
+                "start_mul": max(float(fs_scale), 0.80),
+                "min_size": 8,
+                "pad_x": 0.18,
+                "pad_y": 0.20,
+                "stroke_mul": 0.00,
+                "stroke_min_h": 9999,
+                "vshift": -0.10,
+                "truncate_mul": 0.58,
+            },
+            "box": {
+                "font_bias": "box",
+                "start_mul": max(float(fs_scale), 0.98),
+                "min_size": 10,
+                "pad_x": 0.11,
+                "pad_y": 0.14,
+                "stroke_mul": 0.05,
+                "stroke_min_h": 18,
+                "vshift": -0.09,
+                "truncate_mul": 0.68,
+            },
+            "line": {
+                "font_bias": "line",
+                "start_mul": max(float(fs_scale), 0.92),
+                "min_size": 9,
+                "pad_x": 0.08,
+                "pad_y": 0.18,
+                "stroke_mul": 0.03,
+                "stroke_min_h": 22,
+                "vshift": -0.14,
+                "truncate_mul": 0.62,
+            },
+        }
+
+        def build_font_candidates(style="box"):
+            if style == "line":
+                candidates = [
+                    "/system/fonts/RobotoCondensed-Bold.ttf",
+                    "/system/fonts/RobotoCondensed-Regular.ttf",
+                    "/system/fonts/NotoSans-CondensedBold.ttf",
+                    "/system/fonts/NotoSans-Condensed.ttf",
+                    "/system/fonts/NotoSansDisplay-CondensedBold.ttf",
+                    "/system/fonts/NotoSansDisplay-Condensed.ttf",
+                    "/system/fonts/Roboto-Bold.ttf",
+                    "/system/fonts/NotoSans-Bold.ttf",
+                    "/system/fonts/Roboto-Regular.ttf",
+                    "/system/fonts/NotoSans-Regular.ttf",
+                ]
+            elif style == "grid":
+                candidates = [
+                    "/system/fonts/Roboto-Medium.ttf",
+                    "/system/fonts/NotoSans-Medium.ttf",
+                    "/system/fonts/Roboto-Regular.ttf",
+                    "/system/fonts/NotoSans-Regular.ttf",
+                    "/system/fonts/Roboto-Bold.ttf",
+                    "/system/fonts/NotoSans-Bold.ttf",
+                ]
+            else:
+                candidates = [
+                    "/system/fonts/NotoSans-SemiBold.ttf",
+                    "/system/fonts/Roboto-Medium.ttf",
+                    "/system/fonts/NotoSans-Bold.ttf",
+                    "/system/fonts/Roboto-Bold.ttf",
+                    "/system/fonts/NotoSans-Regular.ttf",
+                    "/system/fonts/Roboto-Regular.ttf",
+                ]
+            candidates += [
                 "/system/fonts/NotoSansDisplay-Bold.ttf",
-                "/system/fonts/Roboto-Bold.ttf",
-                "/system/fonts/DroidSans-Bold.ttf",
-                "/system/fonts/NotoSans-Regular.ttf",
-                "/system/fonts/NotoSansDisplay-Regular.ttf",
-                "/system/fonts/Roboto-Regular.ttf",
                 "/system/fonts/RobotoStatic-Regular.ttf",
+                "/system/fonts/DroidSans-Bold.ttf",
                 "/system/fonts/DroidSans.ttf",
                 "/data/data/com.termux/files/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
                 "/data/data/com.termux/files/usr/share/fonts/TTF/DejaVuSans.ttf",
@@ -4790,13 +4863,30 @@ class FormAlchemistEngine:
                         if not low.endswith((".ttf", ".otf", ".ttc")):
                             continue
                         full = os.path.join("/system/fonts", name)
-                        if any(tag in low for tag in ["noto", "roboto", "dejavu", "free", "sans"]):
-                            if any(tag in low for tag in ["bold", "medium", "semibold"]):
-                                preferred.insert(0, full)
-                            else:
-                                preferred.append(full)
-                        else:
+                        if not any(tag in low for tag in ["noto", "roboto", "dejavu", "free", "sans", "droid"]):
                             fallback.append(full)
+                            continue
+                        if style == "line":
+                            if "condensed" in low:
+                                preferred.insert(0, full)
+                            elif any(tag in low for tag in ["medium", "semibold", "bold", "regular"]):
+                                preferred.append(full)
+                            else:
+                                fallback.append(full)
+                        elif style == "grid":
+                            if any(tag in low for tag in ["medium", "regular"]):
+                                preferred.insert(0, full)
+                            elif any(tag in low for tag in ["bold", "semibold"]):
+                                preferred.append(full)
+                            else:
+                                fallback.append(full)
+                        else:
+                            if any(tag in low for tag in ["semibold", "medium", "bold"]):
+                                preferred.insert(0, full)
+                            elif "regular" in low:
+                                preferred.append(full)
+                            else:
+                                fallback.append(full)
                     candidates.extend(preferred)
                     candidates.extend(fallback)
             except Exception:
@@ -4809,15 +4899,15 @@ class FormAlchemistEngine:
                     out.append(path)
             return out
 
-        def best_font_path(sample_text):
-            sample_key = tuple(sorted({ch for ch in str(sample_text or "") if ord(ch) > 127}))
+        def best_font_path(sample_text, style="box"):
+            sample_key = (style, tuple(sorted({ch for ch in str(sample_text or "") if ord(ch) > 127})))
             if sample_key in font_path_cache:
                 return font_path_cache[sample_key]
-            candidates = build_font_candidates()
+            candidates = build_font_candidates(style=style)
             if not candidates:
                 font_path_cache[sample_key] = None
                 return None
-            probe_size = 28
+            probe_size = 30 if style == "box" else 28
             best_path = None
             best_score = -1.0
             for path in candidates:
@@ -4827,16 +4917,21 @@ class FormAlchemistEngine:
                     continue
                 qsig = glyph_signature(font, "?")
                 score = 0.0
-                for ch in sample_key:
+                for ch in sample_key[1]:
                     sig = glyph_signature(font, ch)
                     if sig and sig != qsig:
                         score += 1.0
-                if any(tag in os.path.basename(path).lower() for tag in ["bold", "medium", "semibold"]):
-                    score += 0.25
+                low = os.path.basename(path).lower()
+                if style == "line" and "condensed" in low:
+                    score += 0.70
+                elif style == "grid" and any(tag in low for tag in ["regular", "medium"]):
+                    score += 0.45
+                elif style == "box" and any(tag in low for tag in ["semibold", "medium", "bold"]):
+                    score += 0.55
                 if score > best_score:
                     best_score = score
                     best_path = path
-                if score >= len(sample_key) + 0.25:
+                if score >= len(sample_key[1]) + 0.55:
                     break
             font_path_cache[sample_key] = best_path
             return best_path
@@ -4845,7 +4940,6 @@ class FormAlchemistEngine:
             value = unicodedata.normalize("NFC", str(value or "")).upper()
             qsig = glyph_signature(font, "?")
             pieces = []
-            changed = False
             for ch in value:
                 if ord(ch) <= 127 or ch.isspace():
                     pieces.append(ch)
@@ -4855,19 +4949,15 @@ class FormAlchemistEngine:
                     pieces.append(ch)
                     continue
                 fallback = unicodedata.normalize("NFKD", ch).encode("ascii", "ignore").decode("ascii").upper()
-                if fallback:
-                    pieces.append(fallback)
-                else:
-                    pieces.append("?")
-                changed = True
-            return "".join(pieces), changed
+                pieces.append(fallback if fallback else "?")
+            return "".join(pieces)
 
-        def pick_font(size_px, sample_text=""):
-            size_px = max(int(size_px), 9)
-            cache_key = (size_px, tuple(sorted({ch for ch in str(sample_text or "") if ord(ch) > 127})))
+        def pick_font(size_px, sample_text="", style="box"):
+            size_px = max(int(size_px), 8)
+            cache_key = (style, size_px, tuple(sorted({ch for ch in str(sample_text or "") if ord(ch) > 127})))
             if cache_key in font_cache:
                 return font_cache[cache_key]
-            best_path = best_font_path(sample_text)
+            best_path = best_font_path(sample_text, style=style)
             font = None
             if best_path:
                 try:
@@ -4886,43 +4976,51 @@ class FormAlchemistEngine:
             bbox = draw.textbbox((0, 0), value, font=font, stroke_width=stroke_width)
             return bbox, max(1, bbox[2] - bbox[0]), max(1, bbox[3] - bbox[1])
 
-        def fit_text(single_val, target_w, target_h):
+        def fit_text(single_val, target_w, target_h, field_kind="box"):
             candidate = unicodedata.normalize("NFC", str(single_val or "")).upper()
             target_w = max(int(target_w), 1)
             target_h = max(int(target_h), 1)
-            inner_w = max(target_w - 6, 1)
-            inner_h = max(target_h - 4, 1)
-            start_size = max(int(target_h * max(fs_scale, 0.92)), 11)
-            min_size = 9
-            stroke = 1 if target_h >= 18 else 0
+            profile = FIELD_PROFILES.get(field_kind, FIELD_PROFILES["box"])
+            inner_w = max(int(target_w - max(4, target_w * profile["pad_x"])), 1)
+            inner_h = max(int(target_h - max(3, target_h * profile["pad_y"])), 1)
+            start_size = max(int(target_h * profile["start_mul"]), profile["min_size"])
+            min_size = int(profile["min_size"])
+            base_stroke = int(round(target_h * profile["stroke_mul"]))
+            if target_h >= profile["stroke_min_h"]:
+                base_stroke = max(base_stroke, 1)
+            else:
+                base_stroke = 0
             for size in range(start_size, min_size - 1, -1):
-                font = pick_font(size, candidate)
+                font = pick_font(size, candidate, style=profile["font_bias"])
                 if font is None:
                     break
-                safe_val, _ = sanitize_for_font(candidate, font)
-                bbox, tw, th = measure_bbox(safe_val, font, stroke_width=stroke)
-                if tw <= inner_w and th <= inner_h:
-                    return safe_val, font, bbox, tw, th, stroke
-            ellipsis = "..."
-            for size in range(max(min_size, int(target_h * 0.58)), min_size - 1, -1):
-                font = pick_font(size, candidate)
-                if font is None:
-                    break
-                safe_base, _ = sanitize_for_font(candidate, font)
-                shortened = safe_base
-                while len(shortened) > 0:
-                    probe = (shortened + ellipsis) if shortened else ellipsis
-                    bbox, tw, th = measure_bbox(probe, font, stroke_width=stroke)
+                safe_val = sanitize_for_font(candidate, font)
+                for stroke in [base_stroke, 0]:
+                    bbox, tw, th = measure_bbox(safe_val, font, stroke_width=stroke)
                     if tw <= inner_w and th <= inner_h:
-                        return probe, font, bbox, tw, th, stroke
-                    shortened = shortened[:-1].rstrip()
-            font = pick_font(min_size, candidate)
+                        return safe_val, font, bbox, tw, th, stroke, profile
+            ellipsis = "..."
+            trunc_start = max(min_size, int(target_h * profile["truncate_mul"]))
+            for size in range(trunc_start, min_size - 1, -1):
+                font = pick_font(size, candidate, style=profile["font_bias"])
+                if font is None:
+                    break
+                safe_base = sanitize_for_font(candidate, font)
+                for stroke in [base_stroke, 0]:
+                    shortened = safe_base
+                    while len(shortened) > 0:
+                        probe = (shortened + ellipsis) if shortened else ellipsis
+                        bbox, tw, th = measure_bbox(probe, font, stroke_width=stroke)
+                        if tw <= inner_w and th <= inner_h:
+                            return probe, font, bbox, tw, th, stroke, profile
+                        shortened = shortened[:-1].rstrip()
+            font = pick_font(min_size, candidate, style=profile["font_bias"])
             if font is None:
-                return "", None, None, 0, 0, 0
-            bbox, tw, th = measure_bbox(ellipsis, font, stroke_width=stroke)
-            return ellipsis, font, bbox, tw, th, stroke
+                return "", None, None, 0, 0, 0, profile
+            bbox, tw, th = measure_bbox(ellipsis, font, stroke_width=0)
+            return ellipsis, font, bbox, tw, th, 0, profile
 
-        def centered_xy(rect, bbox, text_w, text_h):
+        def centered_xy(rect, bbox, text_w, text_h, profile):
             target_w = max(int(rect.width * preview_zoom), 1)
             target_h = max(int(rect.height * preview_zoom), 1)
             left = (rect.x0 * preview_zoom) + (ox * preview_zoom)
@@ -4930,15 +5028,18 @@ class FormAlchemistEngine:
             bx0, by0, _, _ = bbox
             x = left + ((target_w - text_w) / 2.0) - bx0
             y = top + ((target_h - text_h) / 2.0) - by0
+            y += float(target_h) * float(profile.get("vshift", 0.0))
             return int(round(x)), int(round(y))
+
+        field_kind = classify_field(rects, force_grid=bool(is_grid))
 
         def draw_single(single_val, rect):
             target_w = max(int(rect.width * preview_zoom), 1)
             target_h = max(int(rect.height * preview_zoom), 1)
-            display_val, font, bbox, tw, th, stroke = fit_text(single_val, target_w, target_h)
+            display_val, font, bbox, tw, th, stroke, profile = fit_text(single_val, target_w, target_h, field_kind=field_kind)
             if not display_val or font is None or bbox is None:
                 return
-            x, y = centered_xy(rect, bbox, tw, th)
+            x, y = centered_xy(rect, bbox, tw, th, profile)
             draw.text((x, y), display_val, font=font, fill=(0, 0, 0), stroke_width=stroke, stroke_fill=(0, 0, 0))
 
         def draw_grid(grid_val, rect, cells):
@@ -4947,7 +5048,7 @@ class FormAlchemistEngine:
             cell_w = (rect.width * preview_zoom) / cells
             base_cell_w = rect.width / cells
             for i, ch in enumerate(str(grid_val).upper()[:cells]):
-                display_val, font, bbox, tw, th, stroke = fit_text(str(ch), cell_w - 1, target_h)
+                display_val, font, bbox, tw, th, stroke, profile = fit_text(str(ch), cell_w - 2, target_h, field_kind="grid")
                 if not display_val or font is None or bbox is None:
                     continue
                 cell_rect = fitz.Rect(
@@ -4956,7 +5057,7 @@ class FormAlchemistEngine:
                     rect.x0 + ((i + 1) * base_cell_w),
                     rect.y1,
                 )
-                x, y = centered_xy(cell_rect, bbox, tw, th)
+                x, y = centered_xy(cell_rect, bbox, tw, th, profile)
                 draw.text((x, y), display_val, font=font, fill=(0, 0, 0), stroke_width=stroke, stroke_fill=(0, 0, 0))
 
         if is_grid and len(rects) > 1:
