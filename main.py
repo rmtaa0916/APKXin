@@ -150,6 +150,27 @@ class RectCompat:
     def __and__(self, other):
         return self.intersect(other)
 
+    def union(self, other):
+        other = RectCompat(other)
+        if self.is_empty:
+            return RectCompat(other)
+        if other.is_empty:
+            return RectCompat(self)
+        return RectCompat(
+            min(self.x0, other.x0),
+            min(self.y0, other.y0),
+            max(self.x1, other.x1),
+            max(self.y1, other.y1),
+        )
+
+    def __or__(self, other):
+        return self.union(other)
+
+    def __ior__(self, other):
+        u = self.union(other)
+        self.x0, self.y0, self.x1, self.y1 = u.x0, u.y0, u.x1, u.y1
+        return self
+
 if fitz is None:
     fitz = SimpleNamespace(Rect=RectCompat)
 elif not hasattr(fitz, "Rect"):
@@ -3159,7 +3180,13 @@ class FormAlchemistEngine:
             rects = [self.all_boxes[i] for i in cluster]
             bbox = fitz.Rect(rects[0])
             for rr in rects[1:]:
-                bbox |= rr
+                rr = fitz.Rect(rr)
+                bbox = fitz.Rect(
+                    min(bbox.x0, rr.x0),
+                    min(bbox.y0, rr.y0),
+                    max(bbox.x1, rr.x1),
+                    max(bbox.y1, rr.y1),
+                )
             if bbox.width < 40 and bbox.height < 24:
                 continue
             centers_y = [((r.y0 + r.y1) / 2.0) for r in rects]
