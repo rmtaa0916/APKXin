@@ -21,7 +21,7 @@ import zipfile
 from urllib.parse import urlparse, parse_qs
 from types import SimpleNamespace
 
-# -------------------------------------------------------------------
+# ------------------------------------------------------------------
 # Python 3.10+ compatibility patch for older reportlab builds
 # Fixes:
 # ImportError: cannot import name 'decodestring' from 'base64'
