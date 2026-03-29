@@ -21,7 +21,7 @@ import zipfile
 from urllib.parse import urlparse, parse_qs
 from types import SimpleNamespace
 
-# ------------------------------------------------------------------
+# -------------------------------------------------------------------
 # Python 3.10+ compatibility patch for older reportlab builds
 # Fixes:
 # ImportError: cannot import name 'decodestring' from 'base64'
@@ -127,6 +127,49 @@ class RectCompat:
 
     def __repr__(self):
         return f"RectCompat({self.x0}, {self.y0}, {self.x1}, {self.y1})"
+
+    @property
+    def is_empty(self):
+        return self.width <= 0 or self.height <= 0
+
+    def get_area(self):
+        if self.is_empty:
+            return 0.0
+        return float(self.width * self.height)
+
+    def intersect(self, other):
+        other = RectCompat(other)
+        x0 = max(self.x0, other.x0)
+        y0 = max(self.y0, other.y0)
+        x1 = min(self.x1, other.x1)
+        y1 = min(self.y1, other.y1)
+        if x1 <= x0 or y1 <= y0:
+            return RectCompat(0.0, 0.0, 0.0, 0.0)
+        return RectCompat(x0, y0, x1, y1)
+
+    def __and__(self, other):
+        return self.intersect(other)
+
+    def union(self, other):
+        other = RectCompat(other)
+        if self.is_empty:
+            return RectCompat(other)
+        if other.is_empty:
+            return RectCompat(self)
+        return RectCompat(
+            min(self.x0, other.x0),
+            min(self.y0, other.y0),
+            max(self.x1, other.x1),
+            max(self.y1, other.y1),
+        )
+
+    def __or__(self, other):
+        return self.union(other)
+
+    def __ior__(self, other):
+        u = self.union(other)
+        self.x0, self.y0, self.x1, self.y1 = u.x0, u.y0, u.x1, u.y1
+        return self
 
 if fitz is None:
     fitz = SimpleNamespace(Rect=RectCompat)
@@ -969,7 +1012,7 @@ else:
     ZOOM = 4.0
     PREVIEW_SCALE = 2.2
 
-DEFAULTS = {
+DEFAULTS_BASE = {
     "F_Area": 500,
     "F_MinW": 15,
     "F_MinH": 35,
@@ -993,6 +1036,135 @@ DEFAULTS = {
     "Is_Grid": False,
     "Grid_N": 1,
 }
+
+TEXT_TUNING_DEFAULTS_BASE = {
+    "uppercase": True,
+    "overall_scale": 0.92,
+    "box_scale": 1.00,
+    "line_scale": 0.94,
+    "grid_scale": 0.92,
+    "content_inset_x": 0.07,
+    "content_inset_y": 0.14,
+    "box_vshift": 0.00,
+    "line_vshift": 0.00,
+    "grid_vshift": 0.00,
+    "line_expand_h_mul": 2.10,
+    "line_min_effective_h_px": 28,
+}
+
+EMBEDDED_DEFAULT_PROFILE = {
+    "version": 7,
+    "text_tuning": {
+        "uppercase": True,
+        "overall_scale": 0.71,
+        "box_scale": 1.0,
+        "line_scale": 0.6,
+        "grid_scale": 0.92,
+        "content_inset_x": 0.22,
+        "content_inset_y": 0.26,
+        "box_vshift": 0.0,
+        "line_vshift": 0.0,
+        "grid_vshift": 0.0,
+        "line_expand_h_mul": 1.95,
+        "line_min_effective_h_px": 12,
+    },
+    "defaults": {
+        "F_Area": 500,
+        "F_MinW": 15,
+        "F_MinH": 35,
+        "F_Close": 1,
+        "Line_MinW": 100,
+        "Line_MaxW": 1680,
+        "C_Strict": 40,
+        "C_Size": [14, 65],
+        "C_Border": 0.1,
+        "C_Inner": 0.4,
+        "ROI_Max": 200,
+        "C_Open": 1,
+        "C_Close": 0,
+        "C_BandPct": 0.18,
+        "C_AspectTol": 0.1,
+        "Ext_Low": 0.04,
+        "Ext_High": 0.6,
+        "C_FillMin": 0.45,
+        "C_Eps": 0.04,
+        "Use_Extent": False,
+        "Is_Grid": False,
+        "Grid_N": 1,
+    },
+}
+
+
+def _candidate_default_profile_paths():
+    roots = []
+    try:
+        roots.append(os.path.dirname(os.path.abspath(__file__)))
+    except Exception:
+        pass
+    try:
+        roots.append(os.getcwd())
+    except Exception:
+        pass
+    roots.append('/mnt/data')
+
+    seen = set()
+    ordered_roots = []
+    for root in roots:
+        root = str(root or '').strip()
+        if root and root not in seen:
+            seen.add(root)
+            ordered_roots.append(root)
+
+    names = ['default_profile.json', 'TESTMAPPING.json', CONFIG_FILENAME]
+    paths = []
+    for root in ordered_roots:
+        for name in names:
+            candidate = os.path.join(root, name)
+            if candidate not in paths:
+                paths.append(candidate)
+    return paths
+
+
+def _load_builtin_default_profile():
+    for path in _candidate_default_profile_paths():
+        try:
+            if not os.path.exists(path):
+                continue
+            with open(path, 'r', encoding='utf-8') as fh:
+                payload = json.load(fh)
+            if isinstance(payload, dict) and (isinstance(payload.get('text_tuning'), dict) or isinstance(payload.get('defaults'), dict)):
+                payload = dict(payload)
+                payload['_source_path'] = path
+                payload['_source_kind'] = 'file'
+                return payload
+        except Exception:
+            continue
+    payload = dict(EMBEDDED_DEFAULT_PROFILE)
+    payload['_source_path'] = 'embedded:TESTMAPPING'
+    payload['_source_kind'] = 'embedded'
+    return payload
+
+
+def _merge_defaults(base_defaults, override_defaults):
+    merged = dict(base_defaults or {})
+    if not isinstance(override_defaults, dict):
+        return merged
+    for key, value in override_defaults.items():
+        if key not in merged:
+            continue
+        if key == 'C_Size' and isinstance(value, (list, tuple)) and len(value) == 2:
+            merged[key] = (int(value[0]), int(value[1]))
+        else:
+            merged[key] = value
+    return merged
+
+
+BUILTIN_DEFAULT_PROFILE = _load_builtin_default_profile()
+DEFAULT_PROFILE_SOURCE = str(BUILTIN_DEFAULT_PROFILE.get('_source_path', '') or '')
+DEFAULT_PROFILE_SOURCE_KIND = str(BUILTIN_DEFAULT_PROFILE.get('_source_kind', '') or '')
+DEFAULTS = _merge_defaults(DEFAULTS_BASE, BUILTIN_DEFAULT_PROFILE.get('defaults', {}))
+TEXT_TUNING_DEFAULTS = _merge_defaults(TEXT_TUNING_DEFAULTS_BASE, BUILTIN_DEFAULT_PROFILE.get('text_tuning', {}))
+
 
 DETECTION_UI_META = {
     "f_area": {"label": "Minimum Box Area", "helper": "Ignore very tiny shapes. Raise this if the app finds too many tiny false boxes."},
@@ -1848,16 +2020,29 @@ class FormAlchemistEngine:
         self.geom = {"names": [], "dob": [], "phil": []}
         self.all_boxes = []
         self.box_types = []
+        self.option_groups = []
+        self.unknown_fillables = []
+        self.compound_sections = []
+        self.option_groups = []
+        self.option_groups_by_page = {}
+        self.unknown_fillables = []
+        self.unknown_fillables_by_page = {}
+        self.compound_sections = []
+        self.compound_sections_by_page = {}
         self.custom_mappings = {}
         self.selected_box_ids = []
 
         self.settings = dict(DEFAULTS)
         self.settings["C_Size"] = list(DEFAULTS["C_Size"])
+        self.text_tuning = dict(TEXT_TUNING_DEFAULTS)
         self.pdf_source = PdfPageSource()
         self.detected_page_idx = None
         self.detected_settings_signature = None
         self.boxes_by_page = {}
         self.box_types_by_page = {}
+        self.option_groups_by_page = {}
+        self.unknown_fillables_by_page = {}
+        self.compound_sections_by_page = {}
         self.geom_by_page = {}
         self.boxes_settings_signature_by_page = {}
 
@@ -1874,6 +2059,60 @@ class FormAlchemistEngine:
         self.semantic_targets = self._empty_semantic_targets()
         self.semantic_targets_by_page = {}
         self.semantic_target_overrides = {}
+        self.section_automation_enabled = True
+
+    def _normalized_text_tuning(self, tuning=None):
+        base = dict(TEXT_TUNING_DEFAULTS)
+        if isinstance(tuning, dict):
+            for key, value in tuning.items():
+                if key in base:
+                    base[key] = value
+
+        def _to_bool(value, default):
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, (int, float)):
+                return bool(value)
+            txt = str(value or "").strip().lower()
+            if txt in ("1", "true", "yes", "on"): return True
+            if txt in ("0", "false", "no", "off"): return False
+            return bool(default)
+
+        def _to_float(value, default, lo=None, hi=None):
+            try:
+                out = float(value)
+            except Exception:
+                out = float(default)
+            if lo is not None:
+                out = max(float(lo), out)
+            if hi is not None:
+                out = min(float(hi), out)
+            return float(out)
+
+        def _to_int(value, default, lo=None, hi=None):
+            try:
+                out = int(round(float(value)))
+            except Exception:
+                out = int(default)
+            if lo is not None:
+                out = max(int(lo), out)
+            if hi is not None:
+                out = min(int(hi), out)
+            return int(out)
+
+        base["uppercase"] = _to_bool(base.get("uppercase", True), True)
+        base["overall_scale"] = _to_float(base.get("overall_scale", 0.92), 0.92, 0.60, 1.50)
+        base["box_scale"] = _to_float(base.get("box_scale", 1.00), 1.00, 0.60, 1.60)
+        base["line_scale"] = _to_float(base.get("line_scale", 0.94), 0.94, 0.60, 1.60)
+        base["grid_scale"] = _to_float(base.get("grid_scale", 0.92), 0.92, 0.60, 1.40)
+        base["content_inset_x"] = _to_float(base.get("content_inset_x", 0.07), 0.07, 0.00, 0.22)
+        base["content_inset_y"] = _to_float(base.get("content_inset_y", 0.14), 0.14, 0.00, 0.28)
+        base["box_vshift"] = _to_float(base.get("box_vshift", -0.08), -0.08, -0.30, 0.20)
+        base["line_vshift"] = _to_float(base.get("line_vshift", -0.08), -0.08, -0.30, 0.20)
+        base["grid_vshift"] = _to_float(base.get("grid_vshift", -0.05), -0.05, -0.30, 0.20)
+        base["line_expand_h_mul"] = _to_float(base.get("line_expand_h_mul", 2.10), 2.10, 1.00, 3.50)
+        base["line_min_effective_h_px"] = _to_int(base.get("line_min_effective_h_px", 28), 28, 0, 80)
+        return base
 
     def _empty_geom(self):
         return {"names": [], "dob": [], "phil": []}
@@ -2259,6 +2498,9 @@ class FormAlchemistEngine:
         self.pdf_path = path
         self.all_boxes = []
         self.box_types = []
+        self.option_groups = []
+        self.unknown_fillables = []
+        self.compound_sections = []
         self.geom = self._empty_geom()
         self.semantic_targets = self._empty_semantic_targets()
         self.detected_page_idx = None
@@ -2373,10 +2615,51 @@ class FormAlchemistEngine:
         }
         return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
+    def _clone_option_groups(self, groups):
+        out = []
+        for group in list(groups or []):
+            if not isinstance(group, dict):
+                continue
+            clone = dict(group)
+            bbox = clone.get("bbox")
+            clone["bbox"] = fitz.Rect(bbox) if bbox is not None else None
+            clone["member_ids"] = [int(x) for x in list(clone.get("member_ids", []) or []) if isinstance(x, int) or str(x).isdigit()]
+            clone["member_types"] = [str(x) for x in list(clone.get("member_types", []) or [])]
+            clone["count"] = int(clone.get("count", len(clone["member_ids"])) or len(clone["member_ids"]))
+            clone["orientation"] = str(clone.get("orientation", "mixed") or "mixed")
+            clone["kind"] = str(clone.get("kind", "option_group") or "option_group")
+            out.append(clone)
+        return out
+
+    def _clone_compound_sections(self, sections):
+        out = []
+        for section in list(sections or []):
+            if not isinstance(section, dict):
+                continue
+            clone = dict(section)
+            bbox = clone.get("bbox")
+            clone["bbox"] = fitz.Rect(bbox) if bbox is not None else None
+            clone["member_ids"] = [int(x) for x in list(clone.get("member_ids", []) or []) if isinstance(x, int) or str(x).isdigit()]
+            clone["member_types"] = [str(x) for x in list(clone.get("member_types", []) or [])]
+            clone["count"] = int(clone.get("count", len(clone["member_ids"])) or len(clone["member_ids"]))
+            clone["row_count"] = int(clone.get("row_count", 1) or 1)
+            clone["col_count"] = int(clone.get("col_count", 1) or 1)
+            clone["kind"] = str(clone.get("kind", "compound_block") or "compound_block")
+            clone["layout"] = str(clone.get("layout", "mixed") or "mixed")
+            clone["label_text"] = str(clone.get("label_text", "") or "")
+            clone["label_tokens"] = [str(x) for x in list(clone.get("label_tokens", []) or [])]
+            clone["label_hints"] = [str(x) for x in list(clone.get("label_hints", []) or [])]
+            clone["context_score"] = float(clone.get("context_score", 0.0) or 0.0)
+            out.append(clone)
+        return out
+
     def _cache_detection_for_page(self, page_idx):
         page_idx = int(page_idx)
         self.boxes_by_page[page_idx] = [fitz.Rect(r) for r in self.all_boxes]
         self.box_types_by_page[page_idx] = list(self.box_types)
+        self.option_groups_by_page[page_idx] = self._clone_option_groups(self.option_groups)
+        self.unknown_fillables_by_page[page_idx] = [fitz.Rect(r) for r in self.unknown_fillables]
+        self.compound_sections_by_page[page_idx] = self._clone_compound_sections(self.compound_sections)
         geom_copy = {}
         for key, rects in (self.geom or {}).items():
             geom_copy[key] = [fitz.Rect(r) for r in rects]
@@ -2390,12 +2673,18 @@ class FormAlchemistEngine:
         if page_idx is None:
             self.boxes_by_page = {}
             self.box_types_by_page = {}
+            self.option_groups_by_page = {}
+            self.unknown_fillables_by_page = {}
+            self.compound_sections_by_page = {}
             self.geom_by_page = {}
             self.semantic_targets_by_page = {}
             self.boxes_settings_signature_by_page = {}
             if clear_current:
                 self.all_boxes = []
                 self.box_types = []
+                self.option_groups = []
+                self.unknown_fillables = []
+                self.compound_sections = []
                 self.geom = self._empty_geom()
                 self.semantic_targets = self._empty_semantic_targets()
                 self.detected_page_idx = None
@@ -2405,12 +2694,18 @@ class FormAlchemistEngine:
         page_idx = int(page_idx)
         self.boxes_by_page.pop(page_idx, None)
         self.box_types_by_page.pop(page_idx, None)
+        self.option_groups_by_page.pop(page_idx, None)
+        self.unknown_fillables_by_page.pop(page_idx, None)
+        self.compound_sections_by_page.pop(page_idx, None)
         self.geom_by_page.pop(page_idx, None)
         self.semantic_targets_by_page.pop(page_idx, None)
         self.boxes_settings_signature_by_page.pop(page_idx, None)
         if clear_current and self.detected_page_idx == page_idx:
             self.all_boxes = []
             self.box_types = []
+            self.option_groups = []
+            self.unknown_fillables = []
+            self.compound_sections = []
             self.geom = self._empty_geom()
             self.semantic_targets = self._empty_semantic_targets()
             self.detected_page_idx = None
@@ -2431,6 +2726,9 @@ class FormAlchemistEngine:
             return False
         self.all_boxes = [fitz.Rect(r) for r in self.boxes_by_page.get(page_idx, [])]
         self.box_types = list(self.box_types_by_page.get(page_idx, []))
+        self.option_groups = self._clone_option_groups(self.option_groups_by_page.get(page_idx, []))
+        self.unknown_fillables = [fitz.Rect(r) for r in self.unknown_fillables_by_page.get(page_idx, [])]
+        self.compound_sections = self._clone_compound_sections(self.compound_sections_by_page.get(page_idx, []))
         geom_src = self.geom_by_page.get(page_idx, {}) or {}
         semantic_src = self.semantic_targets_by_page.get(page_idx)
         if semantic_src:
@@ -2464,16 +2762,773 @@ class FormAlchemistEngine:
     # Box append helpers
     # --------------------------------------------------------
     def _append_box_unique(self, rect, box_type="check", iou_thresh=0.55):
+        option_types = {"check", "radio"}
         for j, existing in enumerate(self.all_boxes):
-            if self.box_types[j] != box_type:
+            existing_type = self.box_types[j]
+            overlap = _rect_iou(rect, existing)
+            if existing_type == "unknown" and box_type != "unknown" and overlap >= max(0.30, iou_thresh * 0.6):
+                self.all_boxes[j] = rect
+                self.box_types[j] = box_type
+                try:
+                    self.unknown_fillables = [u for u in self.unknown_fillables if self._rect_overlap_score(u, rect) < max(0.30, iou_thresh * 0.6)]
+                except Exception:
+                    pass
+                return
+            same_family = (existing_type == box_type) or (existing_type in option_types and box_type in option_types)
+            if not same_family:
                 continue
-            if _rect_iou(rect, existing) >= iou_thresh:
+            if overlap >= iou_thresh:
+                if existing_type == box_type:
+                    return
+                # Prefer the more specific circle option label when the shape families overlap.
+                if box_type == "radio" and existing_type == "check":
+                    self.all_boxes[j] = rect
+                    self.box_types[j] = box_type
                 return
         self.all_boxes.append(rect)
         self.box_types.append(box_type)
 
     def _append_geom_fields(self):
         return
+
+    def _make_bbox_from_rects(self, rects):
+        rects = [fitz.Rect(r) for r in list(rects or [])]
+        if not rects:
+            return None
+        x0 = min(r.x0 for r in rects)
+        y0 = min(r.y0 for r in rects)
+        x1 = max(r.x1 for r in rects)
+        y1 = max(r.y1 for r in rects)
+        return fitz.Rect(x0, y0, x1, y1)
+
+    def _option_group_kind(self, member_types):
+        member_types = [str(t or "") for t in list(member_types or [])]
+        if member_types and all(t == "radio" for t in member_types):
+            return "radio_group"
+        if member_types and all(t == "check" for t in member_types):
+            return "check_group"
+        return "option_group"
+
+    def _cluster_option_groups(self):
+        option_indices = [i for i, t in enumerate(self.box_types) if str(t) in {"check", "radio"}]
+        if len(option_indices) < 2:
+            return []
+
+        rects = {i: fitz.Rect(self.all_boxes[i]) for i in option_indices}
+        centers = {i: ((rects[i].x0 + rects[i].x1) / 2.0, (rects[i].y0 + rects[i].y1) / 2.0) for i in option_indices}
+        sizes = {i: (max(rects[i].width, 1e-6), max(rects[i].height, 1e-6)) for i in option_indices}
+        parent = {i: i for i in option_indices}
+
+        def find(x):
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        def union(a, b):
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                parent[rb] = ra
+
+        for pos_a, a in enumerate(option_indices):
+            ra = rects[a]
+            cxa, cya = centers[a]
+            wa, ha = sizes[a]
+            sa = max(wa, ha)
+            for b in option_indices[pos_a + 1:]:
+                rb = rects[b]
+                cxb, cyb = centers[b]
+                wb, hb = sizes[b]
+                sb = max(wb, hb)
+                size_ratio = min(sa, sb) / max(sa, sb)
+                if size_ratio < 0.55:
+                    continue
+                dx = abs(cxa - cxb)
+                dy = abs(cya - cyb)
+                gap_x = max(0.0, max(ra.x0, rb.x0) - min(ra.x1, rb.x1))
+                gap_y = max(0.0, max(ra.y0, rb.y0) - min(ra.y1, rb.y1))
+                horiz = dy <= max(ha, hb) * 0.95 and gap_x <= max(wa, wb) * 6.0
+                vert = dx <= max(wa, wb) * 1.10 and gap_y <= max(ha, hb) * 4.5
+                if horiz or vert:
+                    union(a, b)
+
+        groups = {}
+        for idx in option_indices:
+            groups.setdefault(find(idx), []).append(idx)
+
+        out = []
+        for _, members in groups.items():
+            members = sorted(set(int(m) for m in members))
+            if len(members) < 2:
+                continue
+            member_rects = [rects[m] for m in members]
+            bbox = self._make_bbox_from_rects(member_rects)
+            if bbox is None:
+                continue
+            xs = [centers[m][0] for m in members]
+            ys = [centers[m][1] for m in members]
+            spread_x = (max(xs) - min(xs)) if xs else 0.0
+            spread_y = (max(ys) - min(ys)) if ys else 0.0
+            orientation = "horizontal" if spread_x >= spread_y * 1.2 else ("vertical" if spread_y >= spread_x * 1.2 else "mixed")
+            if orientation == "horizontal":
+                members.sort(key=lambda m: (centers[m][0], centers[m][1]))
+            elif orientation == "vertical":
+                members.sort(key=lambda m: (centers[m][1], centers[m][0]))
+            else:
+                members.sort(key=lambda m: (centers[m][1], centers[m][0]))
+            member_types = [str(self.box_types[m]) for m in members]
+            out.append({
+                "id": len(out),
+                "kind": self._option_group_kind(member_types),
+                "orientation": orientation,
+                "member_ids": members,
+                "member_types": member_types,
+                "bbox": bbox,
+                "count": len(members),
+            })
+
+        out.sort(key=lambda g: (round(g["bbox"].y0, 3) if g.get("bbox") else 0.0, g["bbox"].x0 if g.get("bbox") else 0.0))
+        for gid, group in enumerate(out):
+            group["id"] = gid
+        return out
+
+    def get_option_group_for_box(self, box_idx):
+        try:
+            box_idx = int(box_idx)
+        except Exception:
+            return None
+        for group in list(self.option_groups or []):
+            members = list(group.get("member_ids", []) or [])
+            if box_idx in members:
+                return group
+        return None
+
+    def describe_box_group(self, box_idx):
+        group = self.get_option_group_for_box(box_idx)
+        if not group:
+            return ""
+        members = list(group.get("member_ids", []) or [])
+        kind = str(group.get("kind", "option_group") or "option_group")
+        kind_label = {"radio_group": "radio group", "check_group": "square option group", "option_group": "option group"}.get(kind, kind.replace("_", " "))
+        orientation = str(group.get("orientation", "mixed") or "mixed")
+        try:
+            slot = members.index(int(box_idx)) + 1
+        except Exception:
+            slot = 0
+        count = int(group.get("count", len(members)) or len(members))
+        slot_text = f" • slot {slot}/{count}" if slot > 0 and count > 0 else ""
+        return f"{kind_label} • {orientation} • {count} options{slot_text}"
+
+
+    def _cluster_axis_positions(self, values, tol):
+        vals = sorted(float(v) for v in list(values or []))
+        if not vals:
+            return []
+        clusters = [[vals[0]]]
+        for v in vals[1:]:
+            if abs(v - (sum(clusters[-1]) / max(len(clusters[-1]), 1))) <= float(tol):
+                clusters[-1].append(v)
+            else:
+                clusters.append([v])
+        return [sum(c) / max(len(c), 1) for c in clusters]
+
+    def _compound_section_kind(self, member_rects, member_types, row_count, col_count, bbox):
+        member_types = [str(t or "") for t in list(member_types or [])]
+        widths = [float(r.width) for r in member_rects if r is not None]
+        heights = [float(r.height) for r in member_rects if r is not None]
+        if not widths or not heights:
+            return "compound_block", "mixed"
+        med_w = float(np.median(widths)) if widths else 0.0
+        med_h = float(np.median(heights)) if heights else 0.0
+        wide_count = sum(1 for w in widths if w >= max(24.0, med_w * 1.45))
+        line_like_count = sum(1 for t in member_types if t in ("line", "unknown"))
+        if row_count >= 2 and col_count >= 3 and bbox.width >= max(140.0, med_w * 4.2):
+            if wide_count >= 2 or line_like_count >= max(2, len(member_types) // 3):
+                return "address_block", "multi_row_grid"
+            return "table_block", "multi_row_grid"
+        if row_count >= 3 and col_count <= 2 and bbox.height >= max(40.0, med_h * 4.0):
+            return "contact_block", "stacked"
+        if row_count == 1 and col_count >= 3:
+            return "row_cluster", "single_row"
+        return "compound_block", "mixed"
+
+    def _normalize_context_text(self, text):
+        text = str(text or "")
+        try:
+            text = unicodedata.normalize("NFKD", text)
+            text = text.encode("ascii", "ignore").decode("ascii")
+        except Exception:
+            pass
+        text = text.upper()
+        text = re.sub(r"[^A-Z0-9\s/&()\-]+", " ", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text
+
+    def _extract_page_label_spans(self, page_idx=0):
+        spans = []
+        doc = None
+        try:
+            if not self.pdf_path:
+                return []
+            doc = fitz.open(self.pdf_path)
+            page = doc.load_page(int(page_idx))
+            words = page.get_text("words") or []
+            cleaned = []
+            for item in words:
+                if not item or len(item) < 5:
+                    continue
+                try:
+                    x0, y0, x1, y1, word = item[:5]
+                except Exception:
+                    continue
+                word = str(word or "").strip()
+                if not word:
+                    continue
+                norm = self._normalize_context_text(word)
+                if not norm:
+                    continue
+                cleaned.append((float(y0), float(x0), float(x1), float(y1), word, norm))
+            cleaned.sort(key=lambda z: (round(z[0], 1), z[1]))
+            lines = []
+            current = []
+            current_y = None
+            for rec in cleaned:
+                y0 = rec[0]
+                if current_y is None or abs(y0 - current_y) <= 4.0:
+                    current.append(rec)
+                    current_y = y0 if current_y is None else ((current_y * (len(current) - 1)) + y0) / float(len(current))
+                else:
+                    lines.append(current)
+                    current = [rec]
+                    current_y = y0
+            if current:
+                lines.append(current)
+            for line in lines:
+                xs0 = min(r[1] for r in line)
+                ys0 = min(r[0] for r in line)
+                xs1 = max(r[2] for r in line)
+                ys1 = max(r[3] for r in line)
+                raw_text = " ".join(r[4] for r in line).strip()
+                norm_text = self._normalize_context_text(raw_text)
+                if not norm_text:
+                    continue
+                toks = [tok for tok in re.findall(r"[A-Z][A-Z0-9/&()\-]{1,}", norm_text) if len(tok) >= 2]
+                spans.append({
+                    "rect": fitz.Rect(xs0, ys0, xs1, ys1),
+                    "text": raw_text,
+                    "norm_text": norm_text,
+                    "tokens": toks,
+                })
+        except Exception:
+            spans = []
+        finally:
+            try:
+                if doc is not None:
+                    doc.close()
+            except Exception:
+                pass
+        return spans
+
+    def _find_nearby_label_spans(self, rect, page_idx=0, limit=4):
+        rect = fitz.Rect(rect)
+        spans = self._extract_page_label_spans(page_idx=page_idx)
+        if not spans:
+            return []
+        ranked = []
+        for span in spans:
+            srect = span.get("rect")
+            if srect is None:
+                continue
+            hgap = max(0.0, max(srect.x0 - rect.x1, rect.x0 - srect.x1))
+            vgap = max(0.0, max(srect.y0 - rect.y1, rect.y0 - srect.y1))
+            x_overlap = _x_overlap_ratio(rect, srect)
+            y_overlap = _y_overlap_ratio(rect, srect) if '_y_overlap_ratio' in globals() else 0.0
+            above_bonus = 0.0
+            if srect.y1 <= rect.y0 + max(6.0, rect.height * 0.4):
+                above_bonus = 18.0
+            left_bonus = 0.0
+            if srect.x1 <= rect.x0 + max(6.0, rect.width * 0.3):
+                left_bonus = 8.0
+            if hgap > max(120.0, rect.width * 0.8) and vgap > max(50.0, rect.height * 1.5):
+                continue
+            score = (x_overlap * 30.0) + (y_overlap * 16.0) + above_bonus + left_bonus - (hgap * 0.12) - (vgap * 0.35)
+            if score < 2.0:
+                continue
+            ranked.append((score, span))
+        ranked.sort(key=lambda z: (-z[0], z[1].get("rect").y0 if z[1].get("rect") is not None else 0.0, z[1].get("rect").x0 if z[1].get("rect") is not None else 0.0))
+        return [span for _, span in ranked[:max(1, int(limit))]]
+
+    def _contextual_section_kind(self, base_kind, label_tokens, label_text, row_count, col_count, bbox):
+        toks = set(str(t or "") for t in list(label_tokens or []))
+        text = self._normalize_context_text(label_text)
+        def _has_any(*needles):
+            for n in needles:
+                n = str(n or "").upper()
+                if n in toks or n in text:
+                    return True
+            return False
+        address_hits = sum(int(_has_any(k)) for k in [
+            "ADDRESS", "PERMANENT", "MAILING", "BARANGAY", "MUNICIPALITY", "CITY",
+            "PROVINCE", "STATE", "COUNTRY", "ZIP", "STREET", "BUILDING", "LOT",
+            "BLOCK", "HOUSE", "UNIT", "ROOM", "FLOOR", "SUBDIVISION"
+        ])
+        contact_hits = sum(int(_has_any(k)) for k in [
+            "CONTACT", "PHONE", "HOME", "MOBILE", "EMAIL", "E MAIL", "FAX", "TELEPHONE"
+        ])
+        if _has_any("SAME", "ABOVE") and _has_any("ADDRESS", "MAILING", "PERMANENT"):
+            return "linked_address_block", ["same_as_above", "address_context"]
+        if address_hits >= 2:
+            return "address_block", ["address_context"]
+        if contact_hits >= 2:
+            return "contact_block", ["contact_context"]
+        if _has_any("DATE", "MONTH", "DAY", "YEAR") and (row_count >= 1 and col_count >= 2):
+            return "date_block", ["date_context"]
+        return str(base_kind or "compound_block"), []
+
+    def _contextualize_compound_sections(self, sections, page_idx=0):
+        out = []
+        for section in list(sections or []):
+            if not isinstance(section, dict):
+                continue
+            clone = dict(section)
+            bbox = clone.get("bbox")
+            if bbox is None:
+                out.append(clone)
+                continue
+            nearby = self._find_nearby_label_spans(bbox, page_idx=page_idx, limit=4)
+            label_text = " | ".join(str(s.get("text", "") or "").strip() for s in nearby if str(s.get("text", "") or "").strip())
+            label_tokens = []
+            seen = set()
+            for span in nearby:
+                for tok in list(span.get("tokens", []) or []):
+                    tok = str(tok or "").upper()
+                    if tok and tok not in seen:
+                        seen.add(tok)
+                        label_tokens.append(tok)
+            new_kind, hints = self._contextual_section_kind(
+                clone.get("kind", "compound_block"),
+                label_tokens,
+                label_text,
+                clone.get("row_count", 1),
+                clone.get("col_count", 1),
+                bbox,
+            )
+            clone["kind"] = str(new_kind or clone.get("kind", "compound_block"))
+            clone["label_text"] = label_text
+            clone["label_tokens"] = label_tokens[:12]
+            clone["label_hints"] = [str(h) for h in list(hints or [])]
+            clone["context_score"] = float(len(label_tokens) + (2 * len(hints)))
+            out.append(clone)
+        return out
+
+    def _cluster_compound_sections(self):
+        candidate_ids = []
+        for idx, (rect, kind) in enumerate(zip(list(self.all_boxes or []), list(self.box_types or []))):
+            kind = str(kind or "")
+            if kind not in ("field", "line", "unknown"):
+                continue
+            if rect is None or rect.width <= 0 or rect.height <= 0:
+                continue
+            if rect.width < 6 or rect.height < 4:
+                continue
+            candidate_ids.append(idx)
+        if len(candidate_ids) < 3:
+            return []
+
+        def _near(a, b):
+            ra = self.all_boxes[a]
+            rb = self.all_boxes[b]
+            x_overlap = _x_overlap_ratio(ra, rb)
+            inter = _rect_intersection_area(ra, rb)
+            if inter > 0:
+                return True
+            hgap = max(0.0, max(rb.x0 - ra.x1, ra.x0 - rb.x1))
+            vgap = max(0.0, max(rb.y0 - ra.y1, ra.y0 - rb.y1))
+            row_tol = max(8.0, min(28.0, max(ra.height, rb.height) * 1.6))
+            col_tol = max(10.0, min(34.0, max(ra.width, rb.width) * 0.55))
+            if x_overlap >= 0.15 and vgap <= row_tol:
+                return True
+            y_overlap = _y_overlap_ratio(ra, rb) if '_y_overlap_ratio' in globals() else 0.0
+            if y_overlap >= 0.20 and hgap <= col_tol:
+                return True
+            pad_x = max(10.0, min(36.0, max(ra.width, rb.width) * 0.35))
+            pad_y = max(8.0, min(28.0, max(ra.height, rb.height) * 1.1))
+            ea = fitz.Rect(ra.x0 - pad_x, ra.y0 - pad_y, ra.x1 + pad_x, ra.y1 + pad_y)
+            eb = fitz.Rect(rb.x0 - pad_x, rb.y0 - pad_y, rb.x1 + pad_x, rb.y1 + pad_y)
+            return _rect_intersection_area(ea, eb) > 0
+
+        seen = set()
+        sections = []
+        for seed in candidate_ids:
+            if seed in seen:
+                continue
+            stack = [seed]
+            cluster = []
+            seen.add(seed)
+            while stack:
+                cur = stack.pop()
+                cluster.append(cur)
+                for other in candidate_ids:
+                    if other in seen:
+                        continue
+                    if _near(cur, other):
+                        seen.add(other)
+                        stack.append(other)
+            cluster = sorted(set(cluster))
+            if len(cluster) < 3:
+                continue
+            rects = [self.all_boxes[i] for i in cluster]
+            bbox = fitz.Rect(rects[0])
+            for rr in rects[1:]:
+                rr = fitz.Rect(rr)
+                bbox = fitz.Rect(
+                    min(bbox.x0, rr.x0),
+                    min(bbox.y0, rr.y0),
+                    max(bbox.x1, rr.x1),
+                    max(bbox.y1, rr.y1),
+                )
+            if bbox.width < 40 and bbox.height < 24:
+                continue
+            centers_y = [((r.y0 + r.y1) / 2.0) for r in rects]
+            centers_x = [((r.x0 + r.x1) / 2.0) for r in rects]
+            med_h = float(np.median([max(r.height, 1.0) for r in rects])) if rects else 8.0
+            med_w = float(np.median([max(r.width, 1.0) for r in rects])) if rects else 12.0
+            row_count = len(self._cluster_axis_positions(centers_y, tol=max(5.0, min(20.0, med_h * 1.05))))
+            col_count = len(self._cluster_axis_positions(centers_x, tol=max(7.0, min(36.0, med_w * 0.60))))
+            member_types = [self.box_types[i] if i < len(self.box_types) else "field" for i in cluster]
+            kind, layout = self._compound_section_kind(rects, member_types, row_count, col_count, bbox)
+            sections.append({
+                "bbox": bbox,
+                "member_ids": cluster,
+                "member_types": member_types,
+                "count": len(cluster),
+                "row_count": int(row_count),
+                "col_count": int(col_count),
+                "kind": kind,
+                "layout": layout,
+            })
+        return sections
+
+    def get_compound_section_for_box(self, box_idx):
+        try:
+            box_idx = int(box_idx)
+        except Exception:
+            return None
+        for section in list(self.compound_sections or []):
+            if box_idx in list(section.get("member_ids", []) or []):
+                return section
+        return None
+
+    def describe_box_section(self, box_idx):
+        section = self.get_compound_section_for_box(box_idx)
+        if not section:
+            return ""
+        kind = str(section.get("kind", "compound_block") or "compound_block")
+        kind_label = {
+            "address_block": "address block",
+            "linked_address_block": "linked address block",
+            "contact_block": "contact block",
+            "table_block": "table block",
+            "date_block": "date block",
+            "row_cluster": "row cluster",
+            "compound_block": "compound block",
+        }.get(kind, kind.replace("_", " "))
+        count = int(section.get("count", len(section.get("member_ids", []) or [])) or len(section.get("member_ids", []) or []))
+        rows = int(section.get("row_count", 1) or 1)
+        cols = int(section.get("col_count", 1) or 1)
+        layout = str(section.get("layout", "mixed") or "mixed").replace("_", " ")
+        label_text = str(section.get("label_text", "") or "").strip()
+        label_part = f" • labels: {label_text}" if label_text else ""
+        return f"{kind_label} • {rows} rows × {cols} cols • {count} members • {layout}{label_part}"
+
+    def _normalize_column_for_matching(self, text):
+        s = str(text or "").strip().upper()
+        s = re.sub(r"[^A-Z0-9]+", " ", s)
+        s = re.sub(r"\s+", " ", s).strip()
+        return s
+
+    def _column_leaf_tokens(self, column_name):
+        text = self._normalize_column_for_matching(column_name)
+        tokens = [t for t in text.split() if t]
+        if not tokens:
+            return []
+        generic = {
+            "MAILING", "PERMANENT", "CURRENT", "PRESENT", "HOME", "WORK", "OFFICE",
+            "ADDRESS", "DETAILS", "DETAIL", "CONTACT", "CONTACTS", "ABOVE", "SAME",
+            "AS", "PRIMARY", "SECONDARY", "ALTERNATE", "ALT", "RESIDENTIAL", "RESIDENCE"
+        }
+        leaf = [t for t in tokens if t not in generic]
+        return leaf or tokens
+
+    def _same_as_above_enabled_for_row(self, row, section=None):
+        sec = section or {}
+        sec_text = self._normalize_context_text((sec.get("label_text", "") or "") + " " + (sec.get("kind", "") or ""))
+        bool_true = {"1", "TRUE", "YES", "Y", "CHECKED", "X", "ON"}
+        bool_false = {"0", "FALSE", "NO", "N", "UNCHECKED", "OFF"}
+        explicit_false = False
+        try:
+            row_keys = list(getattr(row, 'index', [])) if hasattr(row, 'index') else list(row.keys())
+        except Exception:
+            row_keys = []
+        for key in row_keys:
+            ktext = self._normalize_column_for_matching(key)
+            if not ktext:
+                continue
+            if "SAME" in ktext and "ABOVE" in ktext:
+                val = str(row.get(key, "") or "").strip().upper()
+                if val in bool_true:
+                    return True
+                if val in bool_false:
+                    explicit_false = True
+        if explicit_false:
+            return False
+        return "SAME AS ABOVE" in sec_text or str(sec.get("kind", "") or "") == "linked_address_block"
+
+    def _score_same_as_above_source_column(self, target_column, candidate_column, section=None):
+        tnorm = self._normalize_column_for_matching(target_column)
+        cnorm = self._normalize_column_for_matching(candidate_column)
+        if not tnorm or not cnorm or tnorm == cnorm:
+            return -1.0
+        target_leaf = set(self._column_leaf_tokens(target_column))
+        cand_leaf = set(self._column_leaf_tokens(candidate_column))
+        if not target_leaf or not cand_leaf:
+            return -1.0
+        common = target_leaf & cand_leaf
+        if not common:
+            return -1.0
+        score = float(len(common) * 10)
+        if "MAILING" in tnorm:
+            if "PERMANENT" in cnorm:
+                score += 24.0
+            if "CURRENT" in cnorm or "HOME" in cnorm or "PRESENT" in cnorm:
+                score += 12.0
+        if "CONTACT" in tnorm or "EMAIL" in tnorm or "PHONE" in tnorm or "MOBILE" in tnorm:
+            if "CONTACT" in cnorm or "EMAIL" in cnorm or "PHONE" in cnorm or "MOBILE" in cnorm:
+                score += 8.0
+        sec_text = self._normalize_context_text((section or {}).get("label_text", ""))
+        if "ADDRESS" in sec_text and ("ADDRESS" in cnorm or "ADDRESS" in tnorm):
+            score += 3.0
+        if "CONTACT" in sec_text and ("CONTACT" in cnorm or "CONTACT" in tnorm):
+            score += 3.0
+        score -= abs(len(cand_leaf) - len(target_leaf)) * 0.75
+        return score
+
+    def _find_same_as_above_source_column(self, row, target_column, section=None):
+        best_col = ""
+        best_score = 0.0
+        try:
+            row_keys = list(getattr(row, 'index', [])) if hasattr(row, 'index') else list(row.keys())
+        except Exception:
+            row_keys = []
+        for candidate in row_keys:
+            ctext = str(candidate or "").strip()
+            if not ctext or ctext == str(target_column or ""):
+                continue
+            val = str(row.get(candidate, "") or "").strip()
+            if not val:
+                continue
+            score = self._score_same_as_above_source_column(target_column, ctext, section=section)
+            if score > best_score:
+                best_score = score
+                best_col = ctext
+        return best_col if best_score >= 11.0 else ""
+
+    def _mapping_section_for_item(self, item, page_idx=0):
+        rects = [self._coerce_rect(r) for r in self._mapping_rect_list(item)]
+        if not rects:
+            return None
+        target = rects[0] if len(rects) == 1 else self._rect_union(rects)
+        best = None
+        best_score = 0.0
+        for section in list(getattr(self, 'compound_sections', []) or []):
+            bbox = section.get('bbox')
+            if bbox is None:
+                continue
+            score = self._rect_overlap_score(target, bbox)
+            if score > best_score:
+                best_score = score
+                best = section
+        return best if best_score >= 0.08 else None
+
+    def _resolve_mapping_value(self, item, row, page_idx=0):
+        col = str(item.get("column", "") or "").strip()
+        raw_val = str(row.get(col, "") or "").strip()
+        if raw_val:
+            return raw_val, {"resolved_from": col, "same_as_above": False}
+        section = self._mapping_section_for_item(item, page_idx=page_idx)
+        if not section:
+            return "", {"resolved_from": col, "same_as_above": False}
+        kind = str(section.get("kind", "") or "")
+        if kind not in ("linked_address_block", "address_block", "contact_block"):
+            return "", {"resolved_from": col, "same_as_above": False}
+        if not self._same_as_above_enabled_for_row(row, section=section):
+            return "", {"resolved_from": col, "same_as_above": False}
+        src_col = self._find_same_as_above_source_column(row, col, section=section)
+        if not src_col:
+            return "", {"resolved_from": col, "same_as_above": False}
+        src_val = str(row.get(src_col, "") or "").strip()
+        if not src_val:
+            return "", {"resolved_from": col, "same_as_above": False}
+        return src_val, {
+            "resolved_from": src_col,
+            "same_as_above": True,
+            "section_kind": kind,
+        }
+
+    def get_section_action_suggestions(self, box_idx):
+        section = self.get_compound_section_for_box(box_idx)
+        if not section:
+            return []
+        kind = str(section.get("kind", "compound_block") or "compound_block")
+        suggestions = []
+        if kind == "linked_address_block":
+            suggestions.append("Same as Above helper can copy blank mailing/contact values from matching permanent/current columns.")
+            suggestions.append("Map one side cleanly first; linked fields can reuse the matching source column when the row flag is checked.")
+        elif kind == "address_block":
+            suggestions.append("Treat this as one address group: map street/building cells separately from barangay/city/province/ZIP.")
+            suggestions.append("Prefer consistent column prefixes so profile learning can recognize this address block later.")
+        elif kind == "contact_block":
+            suggestions.append("Keep phone/mobile/email mappings semantically distinct; contact blocks are now context-aware.")
+        elif kind == "date_block":
+            suggestions.append("Use grid/date mappings for split day-month-year slots to keep centering and fit behavior stable.")
+        elif kind in ("table_block", "row_cluster"):
+            suggestions.append("Review neighboring fields together; grouped rows/columns are easier to maintain as a section.")
+        label_text = str(section.get("label_text", "") or "").strip()
+        if label_text and "SAME AS ABOVE" in self._normalize_context_text(label_text):
+            suggestions.append("Nearby label indicates linked-copy behavior may be appropriate for blank secondary fields.")
+        return suggestions[:4]
+
+    def _mapping_exists_for_box(self, box_idx, page_idx=0):
+        try:
+            box_idx = int(box_idx)
+        except Exception:
+            return False
+        if box_idx < 0 or box_idx >= len(self.all_boxes):
+            return False
+        target_rect = self.all_boxes[box_idx]
+        for configs in self.custom_mappings.values():
+            for cfg in configs:
+                if int(cfg.get("page", 0) or 0) != int(page_idx):
+                    continue
+                for r in self._mapping_rect_list(cfg):
+                    if self._mapping_match_score(target_rect, r) >= 1.0:
+                        return True
+        return False
+
+    def _section_candidate_label_text(self, box_idx, page_idx=0):
+        if box_idx < 0 or box_idx >= len(self.all_boxes):
+            return ""
+        rect = self.all_boxes[box_idx]
+        parts = []
+        section = self.get_compound_section_for_box(box_idx)
+        if section:
+            sec_label = str(section.get("label_text", "") or "").strip()
+            if sec_label:
+                parts.append(sec_label)
+            kind = str(section.get("kind", "") or "").strip()
+            if kind:
+                parts.append(kind.replace("_", " "))
+        for span in self._find_nearby_label_spans(rect, page_idx=page_idx, limit=5):
+            raw = str(span.get("raw_text", "") or "").strip()
+            if raw:
+                parts.append(raw)
+        # preserve order while deduplicating
+        seen = set()
+        ordered = []
+        for part in parts:
+            norm = self._normalize_context_text(part)
+            if not norm or norm in seen:
+                continue
+            seen.add(norm)
+            ordered.append(part)
+        return " | ".join(ordered[:5])
+
+    def _score_section_label_to_column(self, label_text, column_name, section=None):
+        lnorm = self._normalize_context_text(label_text)
+        cnorm = self._normalize_column_for_matching(column_name)
+        if not lnorm or not cnorm:
+            return -1.0
+        lset = set(t for t in lnorm.split() if t)
+        cset = set(self._column_leaf_tokens(column_name))
+        if not cset:
+            cset = set(t for t in cnorm.split() if t)
+        common = lset & cset
+        score = float(len(common) * 10.0)
+        if cnorm in lnorm or lnorm in cnorm:
+            score += 8.0
+        if any(tok in lnorm for tok in cset):
+            score += 4.0
+        kind = str((section or {}).get("kind", "") or "")
+        if kind in ("address_block", "linked_address_block"):
+            if any(tok in cnorm for tok in ("ADDRESS", "BARANGAY", "CITY", "MUNICIPALITY", "PROVINCE", "STATE", "COUNTRY", "ZIP", "POSTAL", "STREET", "BUILDING", "HOUSE", "LOT", "BLOCK", "SUBDIVISION")):
+                score += 3.0
+        elif kind == "contact_block":
+            if any(tok in cnorm for tok in ("PHONE", "MOBILE", "EMAIL", "CONTACT", "FAX", "LANDLINE")):
+                score += 3.0
+        elif kind == "date_block":
+            if any(tok in cnorm for tok in ("DATE", "DAY", "MONTH", "YEAR")):
+                score += 3.0
+        return score
+
+    def preview_section_auto_links(self, section, page_idx=0, available_columns=None):
+        if not bool(getattr(self, "section_automation_enabled", True)):
+            return []
+        if not isinstance(section, dict):
+            return []
+        columns = [str(c).strip() for c in list(available_columns or []) if str(c).strip()]
+        if not columns:
+            return []
+        suggestions = []
+        used_columns = set()
+        member_ids = [int(x) for x in list(section.get("member_ids", []) or []) if str(x).isdigit()]
+        for box_idx in member_ids:
+            if box_idx < 0 or box_idx >= len(self.all_boxes):
+                continue
+            btype = str(self.box_types[box_idx] if box_idx < len(self.box_types) else "")
+            if btype not in ("field", "line", "unknown"):
+                continue
+            if self._mapping_exists_for_box(box_idx, page_idx=page_idx):
+                continue
+            label_text = self._section_candidate_label_text(box_idx, page_idx=page_idx)
+            if not label_text:
+                continue
+            best_col = ""
+            best_score = -1.0
+            for col in columns:
+                if col in used_columns:
+                    continue
+                score = self._score_section_label_to_column(label_text, col, section=section)
+                if score > best_score:
+                    best_score = score
+                    best_col = col
+            if best_col and best_score >= 12.0:
+                suggestions.append({
+                    "box_idx": int(box_idx),
+                    "column": str(best_col),
+                    "score": float(best_score),
+                    "label_text": str(label_text),
+                    "box_type": btype,
+                })
+                used_columns.add(best_col)
+        suggestions.sort(key=lambda item: (-float(item.get("score", 0.0)), int(item.get("box_idx", -1))))
+        return suggestions
+
+    def apply_section_auto_links(self, section, page_idx=0, available_columns=None):
+        suggestions = self.preview_section_auto_links(section, page_idx=page_idx, available_columns=available_columns)
+        applied = 0
+        errors = []
+        for item in suggestions:
+            try:
+                self.assign_mapping([int(item["box_idx"])], str(item["column"]), "", False, 1, int(page_idx))
+                applied += 1
+            except Exception as e:
+                errors.append(str(e))
+        return {
+            "applied": int(applied),
+            "suggested": int(len(suggestions)),
+            "errors": errors[:5],
+            "suggestions": suggestions,
+        }
 
     # --------------------------------------------------------
     # Cleanup helpers
@@ -2708,6 +3763,227 @@ class FormAlchemistEngine:
             return False
 
         return True
+
+    def looks_like_circle_option(self, binv, x, y, w, h, cc_area=None):
+        roi = binv[y:y+h, x:x+w]
+        if roi.size == 0 or w <= 0 or h <= 0:
+            return False
+
+        aspect = w / float(max(h, 1))
+        if not (0.72 <= aspect <= 1.38):
+            return False
+
+        cnts, _ = cv2.findContours(roi, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not cnts:
+            return False
+
+        c = max(cnts, key=cv2.contourArea)
+        area = float(cc_area if cc_area is not None else cv2.contourArea(c))
+        if area <= 0:
+            return False
+
+        peri = cv2.arcLength(c, True)
+        if peri <= 0:
+            return False
+
+        approx = cv2.approxPolyDP(c, 0.04 * peri, True)
+        if len(approx) <= 4:
+            return False
+
+        circularity = (4.0 * np.pi * area) / float(max(peri * peri, 1e-6))
+        if circularity < 0.52:
+            return False
+
+        bx, by, bw, bh = cv2.boundingRect(c)
+        extent = area / float(max(bw * bh, 1))
+        if not (0.32 <= extent <= 0.92):
+            return False
+
+        t = max(1, int(min(w, h) * 0.18))
+        if w <= 2 * t or h <= 2 * t:
+            return False
+
+        top, bottom, left, right = roi[:t, :], roi[-t:, :], roi[:, :t], roi[:, -t:]
+        inner = roi[t:-t, t:-t]
+
+        def frac(a):
+            return cv2.countNonZero(a) / float(a.size) if a.size > 0 else 0.0
+
+        border_min = min(frac(top), frac(bottom), frac(left), frac(right))
+        inner_frac = frac(inner)
+        if border_min < 0.08:
+            return False
+        if inner_frac > 0.78:
+            return False
+
+        cp = max(1, int(min(w, h) * 0.22))
+        corners = [roi[:cp, :cp], roi[:cp, -cp:], roi[-cp:, :cp], roi[-cp:, -cp:]]
+        corner_frac = sum(frac(cn) for cn in corners) / float(max(len(corners), 1))
+        if corner_frac > 0.42:
+            return False
+
+        pad = max(2, int(min(w, h) * 0.30))
+        y0 = max(0, y - pad)
+        y1 = min(binv.shape[0], y + h + pad)
+        x0 = max(0, x - pad)
+        x1 = min(binv.shape[1], x + w + pad)
+        outer = binv[y0:y1, x0:x1].copy()
+        ix0 = x - x0
+        iy0 = y - y0
+        ix1 = ix0 + w
+        iy1 = iy0 + h
+        outer[iy0:iy1, ix0:ix1] = 0
+        outer_frac = cv2.countNonZero(outer) / float(max(outer.size, 1))
+        if outer_frac > 0.12:
+            return False
+
+        return True
+
+    def find_circle_option_rects_in_roi(self, binv, x, y, w, h):
+        roi = binv[y:y + h, x:x + w]
+        if roi.size == 0:
+            return []
+
+        min_sz, max_sz = self.settings["C_Size"]
+        cnts, _ = cv2.findContours(roi, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        found = []
+
+        for c in cnts:
+            rx, ry, rw, rh = cv2.boundingRect(c)
+            if not (min_sz <= rw <= max_sz and min_sz <= rh <= max_sz):
+                continue
+            cc_area = cv2.contourArea(c)
+            if self.looks_like_circle_option(binv, x + rx, y + ry, rw, rh, cc_area=cc_area):
+                found.append((x + rx, y + ry, rw, rh))
+
+        return found
+
+    def looks_like_unknown_fillable(self, binv, x, y, w, h, cc_area=None):
+        roi = binv[y:y+h, x:x+w]
+        if roi.size == 0 or w <= 0 or h <= 0:
+            return False
+
+        aspect = w / float(max(h, 1))
+        if not (0.35 <= aspect <= 26.0):
+            return False
+
+        cnts, _ = cv2.findContours(roi, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not cnts:
+            return False
+
+        c = max(cnts, key=cv2.contourArea)
+        area = float(cc_area if cc_area is not None else cv2.contourArea(c))
+        if area <= 0:
+            return False
+
+        bbox_area = float(max(w * h, 1))
+        fill = area / bbox_area
+        if fill < 0.04 or fill > 0.94:
+            return False
+
+        peri = cv2.arcLength(c, True)
+        if peri <= 0:
+            return False
+        approx = cv2.approxPolyDP(c, 0.04 * peri, True)
+        circularity = (4.0 * np.pi * area) / float(max(peri * peri, 1e-6))
+
+        t = max(1, int(min(w, h) * 0.14))
+        if w <= 2 * t or h <= 2 * t:
+            return False
+
+        top, bottom, left, right = roi[:t, :], roi[-t:, :], roi[:, :t], roi[:, -t:]
+        inner = roi[t:-t, t:-t]
+
+        def frac(a):
+            return cv2.countNonZero(a) / float(a.size) if a.size > 0 else 0.0
+
+        border_fracs = [frac(top), frac(bottom), frac(left), frac(right)]
+        strong_borders = sum(1 for v in border_fracs if v >= 0.07)
+        inner_frac = frac(inner)
+
+        if strong_borders >= 3 and inner_frac <= 0.72:
+            return True
+        if aspect >= 2.2 and strong_borders >= 2 and inner_frac <= 0.65 and fill <= 0.72:
+            return True
+        if 4 < len(approx) <= 18 and 0.12 <= fill <= 0.82 and inner_frac <= 0.78:
+            return True
+        if circularity >= 0.48 and 0.18 <= fill <= 0.82 and inner_frac <= 0.78:
+            return True
+        return False
+
+    def _rect_overlap_score(self, a, b):
+        a = fitz.Rect(a)
+        b = fitz.Rect(b)
+
+        ax0, ay0, ax1, ay1 = float(a.x0), float(a.y0), float(a.x1), float(a.y1)
+        bx0, by0, bx1, by1 = float(b.x0), float(b.y0), float(b.x1), float(b.y1)
+
+        aw = max(0.0, ax1 - ax0)
+        ah = max(0.0, ay1 - ay0)
+        bw = max(0.0, bx1 - bx0)
+        bh = max(0.0, by1 - by0)
+        a_area = max(aw * ah, 1e-6)
+        b_area = max(bw * bh, 1e-6)
+
+        ix0 = max(ax0, bx0)
+        iy0 = max(ay0, by0)
+        ix1 = min(ax1, bx1)
+        iy1 = min(ay1, by1)
+        iw = max(0.0, ix1 - ix0)
+        ih = max(0.0, iy1 - iy0)
+        inter_area = iw * ih
+        if inter_area <= 0:
+            return 0.0
+
+        iou = inter_area / float(max(a_area + b_area - inter_area, 1e-6))
+        frac = inter_area / float(max(min(a_area, b_area), 1e-6))
+        return max(iou, frac)
+
+    def _append_unknown_fillable(self, rect, overlap_thresh=0.33):
+        rect = fitz.Rect(rect)
+        for existing in list(getattr(self, 'all_boxes', []) or []):
+            if self._rect_overlap_score(rect, existing) >= overlap_thresh:
+                return False
+        for existing in list(getattr(self, 'unknown_fillables', []) or []):
+            if self._rect_overlap_score(rect, existing) >= overlap_thresh:
+                return False
+        self.unknown_fillables.append(rect)
+        self.all_boxes.append(rect)
+        self.box_types.append('unknown')
+        return True
+
+    def find_unknown_fillable_rects(self, binv, zoom_factor=3.0):
+        if binv is None or getattr(binv, 'size', 0) == 0:
+            return []
+
+        nf, _, stats, _ = cv2.connectedComponentsWithStats(binv)
+        out = []
+        min_w = max(10, int(self.settings.get('F_MinW', 15) * 0.55))
+        min_h = max(8, int(self.settings.get('F_MinH', 35) * 0.22))
+        min_area = max(24, int(self.settings.get('F_Area', 500) * 0.10))
+        max_sz = int(max(self.settings.get('ROI_Max', 200), self.settings.get('Line_MaxW', 800) * 0.65))
+        img_h, img_w = binv.shape[:2]
+
+        for i in range(1, nf):
+            x, y, w, h, area = stats[i]
+            if area < min_area:
+                continue
+            if w < min_w and h < min_h:
+                continue
+            if w >= img_w * 0.92 or h >= img_h * 0.16:
+                continue
+            if max(w, h) > max_sz:
+                continue
+            aspect = w / float(max(h, 1))
+            if aspect > 32.0 or (aspect > 8.0 and h <= max(10, min_h)):
+                continue
+            if min(w, h) <= 4:
+                continue
+            if w <= int(self.settings['C_Size'][1]) and h <= int(self.settings['C_Size'][1]) and 0.70 <= aspect <= 1.40:
+                continue
+            if self.looks_like_unknown_fillable(binv, x, y, w, h, cc_area=area):
+                out.append(fitz.Rect(x / zoom_factor, y / zoom_factor, (x + w) / zoom_factor, (y + h) / zoom_factor))
+        return out
 
 # =========================
 # PART 2 / 4
@@ -2982,6 +4258,8 @@ class FormAlchemistEngine:
 
         self.all_boxes = []
         self.box_types = []
+        self.option_groups = []
+        self.unknown_fillables = []
         self.geom = self._empty_geom()
         self.semantic_targets = self._empty_semantic_targets()
 
@@ -3136,6 +4414,35 @@ class FormAlchemistEngine:
                         iou_thresh=0.45
                     )
 
+        # --- circle / radio option detection
+        radio_min_sz = max(7, int(checkbox_min_sz) - 5)
+        for i in range(1, nf):
+            x, y, w, h, area = sf[i]
+            if w >= w_img * 0.9:
+                continue
+
+            aspect = w / float(h) if h > 0 else 999
+            if not (radio_min_sz <= w <= checkbox_max_sz and radio_min_sz <= h <= checkbox_max_sz and 0.70 <= aspect <= 1.40):
+                continue
+
+            if self.looks_like_circle_option(bin_checks, x, y, w, h, area):
+                self._append_box_unique(
+                    fitz.Rect(x / ZOOM, y / ZOOM, (x + w) / ZOOM, (y + h) / ZOOM),
+                    "radio",
+                    iou_thresh=0.45
+                )
+            elif (
+                max(w, h) <= int(red_roi_max_val) and
+                min(w, h) >= radio_min_sz and
+                0.65 <= aspect <= 1.55
+            ):
+                for fx, fy, fw, fh in self.find_circle_option_rects_in_roi(bin_checks, x, y, w, h):
+                    self._append_box_unique(
+                        fitz.Rect(fx / ZOOM, fy / ZOOM, (fx + fw) / ZOOM, (fy + fh) / ZOOM),
+                        "radio",
+                        iou_thresh=0.45
+                    )
+
         # --- field detection
         nf2, _, sf2, _ = cv2.connectedComponentsWithStats(bin_fields)
         for i in range(1, nf2):
@@ -3165,6 +4472,24 @@ class FormAlchemistEngine:
 
         self._cleanup_field_fragments()
         self._cleanup_line_field_conflicts()
+
+        # --- unknown/custom fillable candidates
+        unknown_mask = bin_fields.copy()
+        if line_rects:
+            for lr in line_rects:
+                try:
+                    x0 = max(0, int(lr.x0 * ZOOM) - 2)
+                    y0 = max(0, int(lr.y0 * ZOOM) - 2)
+                    x1 = min(unknown_mask.shape[1], int(lr.x1 * ZOOM) + 2)
+                    y1 = min(unknown_mask.shape[0], int(lr.y1 * ZOOM) + 2)
+                    unknown_mask[y0:y1, x0:x1] = 0
+                except Exception:
+                    pass
+        for ur in self.find_unknown_fillable_rects(unknown_mask, zoom_factor=ZOOM):
+            self._append_unknown_fillable(ur, overlap_thresh=0.33)
+
+        self.option_groups = self._cluster_option_groups()
+        self.compound_sections = self._contextualize_compound_sections(self._cluster_compound_sections(), page_idx=page_idx)
         self.detected_page_idx = int(page_idx)
         self.detected_settings_signature = self._settings_signature()
         self._cache_detection_for_page(page_idx)
@@ -3500,6 +4825,9 @@ class FormAlchemistEngine:
 
                 csv_val = str(row.get(c["column"], "")).strip()
                 trigger = str(c.get("trigger", "")).strip()
+                resolved_meta = {"resolved_from": str(c.get("column", "") or ""), "same_as_above": False}
+                if not trigger:
+                    csv_val, resolved_meta = self._resolve_mapping_value(c, row, page_idx=page_idx)
 
                 if trigger and csv_val.upper() == trigger.upper():
                     ops.append({
@@ -3513,6 +4841,8 @@ class FormAlchemistEngine:
                         "rects": target_rects,
                         "grid": bool(c.get("g", False)),
                         "grid_n": int(c.get("n", 1)),
+                        "resolved_from": str(resolved_meta.get("resolved_from", c.get("column", "")) or c.get("column", "")),
+                        "same_as_above": bool(resolved_meta.get("same_as_above", False)),
                     })
 
         return ops
@@ -3530,6 +4860,9 @@ class FormAlchemistEngine:
 
                 csv_val = str(row.get(c["column"], "")).strip()
                 trigger = str(c.get("trigger", "")).strip()
+                resolved_meta = {"resolved_from": str(c.get("column", "") or ""), "same_as_above": False}
+                if not trigger:
+                    csv_val, resolved_meta = self._resolve_mapping_value(c, row, page_idx=page_idx)
 
                 if trigger:
                     if csv_val.upper() != trigger.upper():
@@ -3545,6 +4878,8 @@ class FormAlchemistEngine:
                         "rects": target_rects,
                         "grid": bool(c.get("g", False)),
                         "grid_n": int(c.get("n", 1)),
+                        "resolved_from": str(resolved_meta.get("resolved_from", c.get("column", "")) or c.get("column", "")),
+                        "same_as_above": bool(resolved_meta.get("same_as_above", False)),
                     })
 
         return ops_by_page
@@ -3871,6 +5206,111 @@ class FormAlchemistEngine:
         base = re.sub(r"[_\-]+", " ", base)
         return _safe_slug(base)
 
+    def _extract_page_anchor_tokens(self, page_idx=0, max_tokens=14):
+        raw_text = ""
+        doc = None
+        try:
+            if not self.pdf_path:
+                return []
+            doc = fitz.open(self.pdf_path)
+            page = doc.load_page(int(page_idx))
+            page_rect = page.rect
+            top_cutoff = float(page_rect.y0 + (page_rect.height * 0.45))
+            blocks = page.get_text("blocks") or []
+            chunks = []
+            for blk in blocks:
+                if not blk or len(blk) < 5:
+                    continue
+                try:
+                    x0, y0, x1, y1, blk_text = blk[:5]
+                except Exception:
+                    continue
+                blk_text = str(blk_text or "").strip()
+                if not blk_text:
+                    continue
+                if float(y1) <= top_cutoff:
+                    chunks.append((float(y0), float(x0), blk_text))
+            if chunks:
+                raw_text = "\n".join(part for _, __, part in sorted(chunks))
+            else:
+                raw_text = str(page.get_text("text") or "")
+        except Exception:
+            raw_text = ""
+        finally:
+            try:
+                if doc is not None:
+                    doc.close()
+            except Exception:
+                pass
+
+        if not raw_text:
+            return []
+        try:
+            raw_text = unicodedata.normalize("NFKD", raw_text)
+            raw_text = raw_text.encode("ascii", "ignore").decode("ascii")
+        except Exception:
+            raw_text = str(raw_text)
+        raw_text = raw_text.upper()
+        raw_text = re.sub(r"[^A-Z0-9\s/&()\-]+", " ", raw_text)
+        stop = {
+            "THE", "AND", "FOR", "WITH", "FROM", "THIS", "THAT", "ARE", "YOU", "YOUR",
+            "NOT", "YES", "NO", "ALL", "USE", "PLEASE", "INDICATE", "FORM", "PAGE", "TO",
+            "OF", "IN", "ON", "AT", "BY", "BE", "AS", "IS", "OR", "AN", "A"
+        }
+        tokens = []
+        seen = set()
+        for tok in re.findall(r"[A-Z][A-Z0-9/&()\-]{1,}", raw_text):
+            tok = tok.strip("-/&() ")
+            if len(tok) < 3 or tok in stop:
+                continue
+            if tok not in seen:
+                seen.add(tok)
+                tokens.append(tok)
+            if len(tokens) >= int(max_tokens):
+                break
+        return tokens
+
+    def _coarse_layout_signature(self, binv, cols=12, rows=16, threshold=0.035):
+        try:
+            h, w = binv.shape[:2]
+        except Exception:
+            return ""
+        cols = max(4, int(cols))
+        rows = max(4, int(rows))
+        bits = []
+        for r in range(rows):
+            y0 = int(round((r * h) / float(rows)))
+            y1 = int(round(((r + 1) * h) / float(rows)))
+            if y1 <= y0:
+                y1 = min(h, y0 + 1)
+            for c in range(cols):
+                x0 = int(round((c * w) / float(cols)))
+                x1 = int(round(((c + 1) * w) / float(cols)))
+                if x1 <= x0:
+                    x1 = min(w, x0 + 1)
+                cell = binv[y0:y1, x0:x1]
+                density = float(cv2.countNonZero(cell) / float(max(cell.size, 1))) if cell.size else 0.0
+                bits.append("1" if density >= float(threshold) else "0")
+        return "".join(bits)
+
+    def _token_overlap_score(self, left, right):
+        a = {str(x).strip().upper() for x in (left or []) if str(x).strip()}
+        b = {str(x).strip().upper() for x in (right or []) if str(x).strip()}
+        if not a or not b:
+            return 0.0
+        return float(len(a & b) / float(max(len(a | b), 1)))
+
+    def _bitstring_similarity(self, left, right):
+        a = str(left or "")
+        b = str(right or "")
+        if not a or not b:
+            return 0.0
+        n = min(len(a), len(b))
+        if n <= 0:
+            return 0.0
+        same = sum(1 for i in range(n) if a[i] == b[i])
+        return float(same / float(max(n, 1)))
+
     def build_page_fingerprint(self, page_idx=0, img_bgr=None):
         if img_bgr is None:
             img_bgr = self._render_pdf_page_bgr(self.pdf_path, page_idx=page_idx, preview_zoom=ZOOM)
@@ -3892,6 +5332,8 @@ class FormAlchemistEngine:
         horiz = cv2.morphologyEx(binv, cv2.MORPH_OPEN, h_kernel)
         vert = cv2.morphologyEx(binv, cv2.MORPH_OPEN, v_kernel)
 
+        anchor_tokens = self._extract_page_anchor_tokens(page_idx=page_idx, max_tokens=14)
+        layout_signature = self._coarse_layout_signature(binv)
         features = {
             "page_idx": int(page_idx),
             "width": int(w),
@@ -3902,14 +5344,19 @@ class FormAlchemistEngine:
             "ink_density": round(ink_density, 6),
             "hline_density": round(float(cv2.countNonZero(horiz) / float(max(horiz.size, 1))), 6),
             "vline_density": round(float(cv2.countNonZero(vert) / float(max(vert.size, 1))), 6),
+            "layout_signature": layout_signature,
+            "anchor_hash": _sha1_json(anchor_tokens) if anchor_tokens else "",
+            "anchor_count": int(len(anchor_tokens)),
         }
 
         fingerprint = {
-            "version": 1,
+            "version": 2,
             "pdf_family_hint": self._page_family_hint(),
             "page_idx": int(page_idx),
             "page_count": int(self.total_pages() or 0) if self.pdf_path else 0,
             "features": features,
+            "anchor_tokens": list(anchor_tokens),
+            "anchor_signature": " | ".join(anchor_tokens[:8]),
         }
         fingerprint["fingerprint_key"] = _sha1_json(fingerprint)
         return fingerprint
@@ -3919,18 +5366,20 @@ class FormAlchemistEngine:
             return 0.0
         score = 0.0
         if str(profile_entry.get("pdf_family_hint", "")) == str(fingerprint.get("pdf_family_hint", "")):
-            score += 0.42
+            score += 0.28
         if int(profile_entry.get("page_idx", -1)) == int(fingerprint.get("page_idx", -2)):
-            score += 0.18
+            score += 0.12
+        if int(profile_entry.get("page_count", 0) or 0) == int(fingerprint.get("page_count", -1) or -1):
+            score += 0.04
 
         pf = profile_entry.get("feature_snapshot", {}) or {}
         ff = fingerprint.get("features", {}) or {}
         for key, weight, scale in [
-            ("aspect", 0.10, 0.20),
-            ("ink_density", 0.12, 0.08),
-            ("hline_density", 0.09, 0.06),
-            ("vline_density", 0.09, 0.06),
-            ("gray_std", 0.05, 45.0),
+            ("aspect", 0.08, 0.20),
+            ("ink_density", 0.10, 0.08),
+            ("hline_density", 0.08, 0.06),
+            ("vline_density", 0.08, 0.06),
+            ("gray_std", 0.04, 45.0),
         ]:
             try:
                 a = float(ff.get(key, 0.0))
@@ -3939,6 +5388,15 @@ class FormAlchemistEngine:
                 score += weight * closeness
             except Exception:
                 pass
+
+        score += 0.16 * self._token_overlap_score(
+            fingerprint.get("anchor_tokens", []),
+            profile_entry.get("anchor_tokens", []),
+        )
+        score += 0.11 * self._bitstring_similarity(
+            ff.get("layout_signature", ""),
+            pf.get("layout_signature", ""),
+        )
 
         quality = float(profile_entry.get("avg_quality", 0.0) or 0.0)
         score += min(0.08, max(0.0, quality) * 0.08)
@@ -3950,7 +5408,7 @@ class FormAlchemistEngine:
         profiles = (self.profile_memory or {}).get("profiles", {}) or {}
         fp_key = str((fingerprint or {}).get("fingerprint_key", "") or "")
         exact = profiles.get(fp_key)
-        if isinstance(exact, dict):
+        if isinstance(exact, dict) and not bool(exact.get("disabled", False)) and not bool(exact.get("forgotten", False)):
             exact = dict(exact)
             exact["match_score"] = 1.0
             exact["match_kind"] = "exact"
@@ -3959,12 +5417,18 @@ class FormAlchemistEngine:
         best = None
         best_score = 0.0
         for entry in profiles.values():
+            if not isinstance(entry, dict):
+                continue
+            if bool(entry.get("disabled", False)) or bool(entry.get("forgotten", False)):
+                continue
             score = self._score_profile_match(fingerprint, entry)
+            if bool(entry.get("pinned", False)):
+                score += 0.035
             if score > best_score:
                 best_score = score
                 best = dict(entry)
         if best is not None:
-            best["match_score"] = float(best_score)
+            best["match_score"] = float(min(1.0, max(0.0, best_score)))
             best["match_kind"] = "fuzzy"
         return best
 
@@ -4325,7 +5789,10 @@ class FormAlchemistEngine:
             "fingerprint_key": fp_key,
             "pdf_family_hint": str(fingerprint.get("pdf_family_hint", "")),
             "page_idx": int(fingerprint.get("page_idx", revision.get("page_idx", 0)) or 0),
+            "page_count": int(fingerprint.get("page_count", 0) or 0),
             "feature_snapshot": dict((fingerprint.get("features") or {})),
+            "anchor_tokens": list(fingerprint.get("anchor_tokens", []) or []),
+            "anchor_signature": str(fingerprint.get("anchor_signature", "") or ""),
             "settings": dict(revision.get("profile_used", {}) or {}),
             "save_count": combined_count,
             "approved_count": int(existing.get("approved_count", 0) or 0) + (1 if revision.get("approved") else 0),
@@ -4535,6 +6002,7 @@ class FormAlchemistEngine:
             "record_key_column": str(self._record_key_column()),
             "pdf_path": self.pdf_path,
             "zoom": float(ZOOM),
+            "text_tuning": self._normalized_text_tuning(getattr(self, "text_tuning", None)),
             "ui_state": ui_state,
             "learning_meta": self.collect_learning_meta(),
             "current_detection_context": dict(self.current_detection_context or {}),
@@ -4606,6 +6074,7 @@ class FormAlchemistEngine:
         self.settings["Grid_N"] = int(cfg.get("Grid_N", self.settings["Grid_N"]))
         self.config_zoom = float(cfg.get("zoom", getattr(self, "config_zoom", ZOOM)))
         self.config_pdf_path = str(cfg.get("pdf_path", getattr(self, "config_pdf_path", "")) or "")
+        self.text_tuning = self._normalized_text_tuning(cfg.get("text_tuning", getattr(self, "text_tuning", None)))
         self.record_label_source_column = str(cfg.get("record_label_source_column", getattr(self, "record_label_source_column", "")) or "").strip()
         self.apply_learning_meta(cfg.get("learning_meta", {}))
         restored_ctx = cfg.get("current_detection_context", {}) or {}
@@ -4730,15 +6199,23 @@ class FormAlchemistEngine:
         return cfg
 
 
+
     def _draw_text_op_cv(self, img, text, rects, preview_zoom=1.5, is_grid=False, grid_n=1, ox=0, oy=0, fs_scale=0.65):
         import unicodedata
+
+        tuning = self._normalized_text_tuning(getattr(self, "text_tuning", None))
+        uppercase_enabled = bool(tuning.get("uppercase", True))
+
+        def _apply_case(value):
+            value = unicodedata.normalize("NFC", str(value or ""))
+            return value.upper() if uppercase_enabled else value
 
         val = unicodedata.normalize("NFC", str(text or "").strip())
         if not val or val.lower() in ["nan", "none"]:
             return
         if val.endswith(".0"):
             val = val[:-2]
-        val = val.upper()
+        val = _apply_case(val)
 
         rects = sorted([self._coerce_rect(r) for r in rects], key=lambda rr: (round(rr.y0, 3), rr.x0))
         if not rects:
@@ -4772,82 +6249,119 @@ class FormAlchemistEngine:
             w = max(float(target.width), 1.0)
             h = max(float(target.height), 1.0)
             aspect = w / h
+            h_px = h * max(float(preview_zoom), 0.001)
             if len(rect_list) > 1:
-                return "line" if aspect >= 3.2 else "box"
-            return "line" if aspect >= 4.6 else "box"
+                return "line" if (h_px <= 16 and aspect >= 3.4) else "box"
+            if h_px <= 12 and aspect >= 2.8:
+                return "line"
+            if h_px <= 15 and aspect >= 5.4:
+                return "line"
+            if h_px <= 22 and aspect >= 11.0:
+                return "line"
+            return "box"
 
         FIELD_PROFILES = {
             "grid": {
-                "font_bias": "grid",
-                "start_mul": max(float(fs_scale), 0.80),
+                "font_bias": "uniform_bold",
+                "start_mul": max(float(fs_scale), 0.86),
                 "min_size": 8,
-                "pad_x": 0.18,
-                "pad_y": 0.20,
+                "pad_x": 0.22,
+                "pad_y": 0.26,
                 "stroke_mul": 0.00,
                 "stroke_min_h": 9999,
-                "vshift": -0.10,
-                "truncate_mul": 0.58,
+                "vshift": 0.00,
+                "truncate_mul": 0.64,
+                "min_effective_h_px": 0,
+                "expand_h_mul": 1.00,
+                "content_inset_x": 0.04,
+                "content_inset_y": 0.08,
+                "true_center": True,
             },
             "box": {
-                "font_bias": "box",
-                "start_mul": max(float(fs_scale), 0.98),
+                "font_bias": "uniform_bold",
+                "start_mul": max(float(fs_scale), 0.95),
                 "min_size": 10,
-                "pad_x": 0.11,
-                "pad_y": 0.14,
-                "stroke_mul": 0.05,
-                "stroke_min_h": 18,
-                "vshift": -0.09,
-                "truncate_mul": 0.68,
+                "pad_x": 0.16,
+                "pad_y": 0.22,
+                "stroke_mul": 0.00,
+                "stroke_min_h": 9999,
+                "vshift": 0.00,
+                "truncate_mul": 0.72,
+                "min_effective_h_px": 0,
+                "expand_h_mul": 1.00,
+                "content_inset_x": 0.05,
+                "content_inset_y": 0.10,
+                "true_center": True,
             },
             "line": {
-                "font_bias": "line",
-                "start_mul": max(float(fs_scale), 0.92),
-                "min_size": 9,
-                "pad_x": 0.08,
-                "pad_y": 0.18,
-                "stroke_mul": 0.03,
-                "stroke_min_h": 22,
-                "vshift": -0.14,
-                "truncate_mul": 0.62,
+                "font_bias": "uniform_bold_condensed",
+                "start_mul": max(float(fs_scale), 0.90),
+                "min_size": 10,
+                "pad_x": 0.10,
+                "pad_y": 0.22,
+                "stroke_mul": 0.00,
+                "stroke_min_h": 9999,
+                "vshift": 0.00,
+                "truncate_mul": 0.72,
+                "min_effective_h_px": 24,
+                "expand_h_mul": 1.75,
+                "content_inset_x": 0.06,
+                "content_inset_y": 0.10,
+                "true_center": True,
             },
         }
 
+        overall_scale = float(tuning.get("overall_scale", 0.92))
+        profile_scale_map = {
+            "grid": float(tuning.get("grid_scale", 0.92)),
+            "box": float(tuning.get("box_scale", 1.00)),
+            "line": float(tuning.get("line_scale", 0.94)),
+        }
+        inset_x = float(tuning.get("content_inset_x", 0.07))
+        inset_y = float(tuning.get("content_inset_y", 0.14))
+        vshift_map = {
+            "grid": float(tuning.get("grid_vshift", 0.00)),
+            "box": float(tuning.get("box_vshift", 0.00)),
+            "line": float(tuning.get("line_vshift", 0.00)),
+        }
+        for _kind, _profile in FIELD_PROFILES.items():
+            scale_mul = max(0.60, min(1.60, overall_scale * profile_scale_map.get(_kind, 1.0)))
+            _profile["start_mul"] = max(0.50, float(_profile.get("start_mul", 1.0)) * scale_mul)
+            _profile["min_size"] = max(8, int(round(float(_profile.get("min_size", 10)) * min(scale_mul, 1.10))))
+            _profile["content_inset_x"] = inset_x
+            _profile["content_inset_y"] = inset_y
+            _profile["vshift"] = vshift_map.get(_kind, float(_profile.get("vshift", 0.0)))
+        FIELD_PROFILES["line"]["min_effective_h_px"] = int(tuning.get("line_min_effective_h_px", 28))
+        FIELD_PROFILES["line"]["expand_h_mul"] = float(tuning.get("line_expand_h_mul", 2.10))
+
         def build_font_candidates(style="box"):
-            if style == "line":
+            if style in ("line", "uniform_bold_condensed"):
                 candidates = [
                     "/system/fonts/RobotoCondensed-Bold.ttf",
-                    "/system/fonts/RobotoCondensed-Regular.ttf",
                     "/system/fonts/NotoSans-CondensedBold.ttf",
-                    "/system/fonts/NotoSans-Condensed.ttf",
                     "/system/fonts/NotoSansDisplay-CondensedBold.ttf",
+                    "/system/fonts/Roboto-Bold.ttf",
+                    "/system/fonts/NotoSans-Bold.ttf",
+                    "/system/fonts/RobotoCondensed-Regular.ttf",
+                    "/system/fonts/NotoSans-Condensed.ttf",
                     "/system/fonts/NotoSansDisplay-Condensed.ttf",
-                    "/system/fonts/Roboto-Bold.ttf",
-                    "/system/fonts/NotoSans-Bold.ttf",
                     "/system/fonts/Roboto-Regular.ttf",
                     "/system/fonts/NotoSans-Regular.ttf",
-                ]
-            elif style == "grid":
-                candidates = [
-                    "/system/fonts/Roboto-Medium.ttf",
-                    "/system/fonts/NotoSans-Medium.ttf",
-                    "/system/fonts/Roboto-Regular.ttf",
-                    "/system/fonts/NotoSans-Regular.ttf",
-                    "/system/fonts/Roboto-Bold.ttf",
-                    "/system/fonts/NotoSans-Bold.ttf",
                 ]
             else:
                 candidates = [
-                    "/system/fonts/NotoSans-SemiBold.ttf",
-                    "/system/fonts/Roboto-Medium.ttf",
                     "/system/fonts/NotoSans-Bold.ttf",
                     "/system/fonts/Roboto-Bold.ttf",
+                    "/system/fonts/NotoSans-SemiBold.ttf",
+                    "/system/fonts/Roboto-Medium.ttf",
+                    "/system/fonts/NotoSansDisplay-Bold.ttf",
+                    "/system/fonts/DroidSans-Bold.ttf",
                     "/system/fonts/NotoSans-Regular.ttf",
                     "/system/fonts/Roboto-Regular.ttf",
                 ]
             candidates += [
-                "/system/fonts/NotoSansDisplay-Bold.ttf",
+                "/system/fonts/RobotoStatic-Bold.ttf",
                 "/system/fonts/RobotoStatic-Regular.ttf",
-                "/system/fonts/DroidSans-Bold.ttf",
                 "/system/fonts/DroidSans.ttf",
                 "/data/data/com.termux/files/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
                 "/data/data/com.termux/files/usr/share/fonts/TTF/DejaVuSans.ttf",
@@ -4866,22 +6380,17 @@ class FormAlchemistEngine:
                         if not any(tag in low for tag in ["noto", "roboto", "dejavu", "free", "sans", "droid"]):
                             fallback.append(full)
                             continue
-                        if style == "line":
-                            if "condensed" in low:
+                        if style in ("line", "uniform_bold_condensed"):
+                            if "condensed" in low and any(tag in low for tag in ["bold", "semibold", "medium"]):
                                 preferred.insert(0, full)
-                            elif any(tag in low for tag in ["medium", "semibold", "bold", "regular"]):
+                            elif "condensed" in low:
                                 preferred.append(full)
-                            else:
-                                fallback.append(full)
-                        elif style == "grid":
-                            if any(tag in low for tag in ["medium", "regular"]):
-                                preferred.insert(0, full)
-                            elif any(tag in low for tag in ["bold", "semibold"]):
+                            elif any(tag in low for tag in ["bold", "semibold", "medium"]):
                                 preferred.append(full)
                             else:
                                 fallback.append(full)
                         else:
-                            if any(tag in low for tag in ["semibold", "medium", "bold"]):
+                            if any(tag in low for tag in ["bold", "semibold", "medium"]):
                                 preferred.insert(0, full)
                             elif "regular" in low:
                                 preferred.append(full)
@@ -4922,12 +6431,12 @@ class FormAlchemistEngine:
                     if sig and sig != qsig:
                         score += 1.0
                 low = os.path.basename(path).lower()
-                if style == "line" and "condensed" in low:
-                    score += 0.70
-                elif style == "grid" and any(tag in low for tag in ["regular", "medium"]):
-                    score += 0.45
-                elif style == "box" and any(tag in low for tag in ["semibold", "medium", "bold"]):
-                    score += 0.55
+                if style in ("line", "uniform_bold_condensed") and "condensed" in low:
+                    score += 1.00
+                elif style in ("line", "uniform_bold_condensed") and any(tag in low for tag in ["bold", "semibold", "medium"]):
+                    score += 0.60
+                elif any(tag in low for tag in ["bold", "semibold", "medium"]):
+                    score += 0.75
                 if score > best_score:
                     best_score = score
                     best_path = path
@@ -4937,7 +6446,7 @@ class FormAlchemistEngine:
             return best_path
 
         def sanitize_for_font(value, font):
-            value = unicodedata.normalize("NFC", str(value or "")).upper()
+            value = _apply_case(value)
             qsig = glyph_signature(font, "?")
             pieces = []
             for ch in value:
@@ -4977,19 +6486,16 @@ class FormAlchemistEngine:
             return bbox, max(1, bbox[2] - bbox[0]), max(1, bbox[3] - bbox[1])
 
         def fit_text(single_val, target_w, target_h, field_kind="box"):
-            candidate = unicodedata.normalize("NFC", str(single_val or "")).upper()
+            candidate = _apply_case(single_val)
             target_w = max(int(target_w), 1)
             target_h = max(int(target_h), 1)
             profile = FIELD_PROFILES.get(field_kind, FIELD_PROFILES["box"])
+            effective_h = max(target_h, int(profile.get("min_effective_h_px", 0)))
             inner_w = max(int(target_w - max(4, target_w * profile["pad_x"])), 1)
-            inner_h = max(int(target_h - max(3, target_h * profile["pad_y"])), 1)
-            start_size = max(int(target_h * profile["start_mul"]), profile["min_size"])
+            inner_h = max(int(effective_h - max(3, effective_h * profile["pad_y"])), 1)
+            start_size = max(int(effective_h * profile["start_mul"]), profile["min_size"])
             min_size = int(profile["min_size"])
-            base_stroke = int(round(target_h * profile["stroke_mul"]))
-            if target_h >= profile["stroke_min_h"]:
-                base_stroke = max(base_stroke, 1)
-            else:
-                base_stroke = 0
+            base_stroke = 0
             for size in range(start_size, min_size - 1, -1):
                 font = pick_font(size, candidate, style=profile["font_bias"])
                 if font is None:
@@ -5020,34 +6526,83 @@ class FormAlchemistEngine:
             bbox, tw, th = measure_bbox(ellipsis, font, stroke_width=0)
             return ellipsis, font, bbox, tw, th, 0, profile
 
-        def centered_xy(rect, bbox, text_w, text_h, profile):
-            target_w = max(int(rect.width * preview_zoom), 1)
-            target_h = max(int(rect.height * preview_zoom), 1)
-            left = (rect.x0 * preview_zoom) + (ox * preview_zoom)
-            top = (rect.y0 * preview_zoom) + (oy * preview_zoom)
-            bx0, by0, _, _ = bbox
-            x = left + ((target_w - text_w) / 2.0) - bx0
-            y = top + ((target_h - text_h) / 2.0) - by0
-            y += float(target_h) * float(profile.get("vshift", 0.0))
-            return int(round(x)), int(round(y))
+        def _effective_rect(rect, profile):
+            rect = self._coerce_rect(rect)
+            expand_h_mul = max(float(profile.get("expand_h_mul", 1.0)), 1.0)
+            min_effective_h_px = int(profile.get("min_effective_h_px", 0))
+            actual_h_px = max(int(rect.height * preview_zoom), 1)
+            desired_h_px = max(actual_h_px, min_effective_h_px, int(round(actual_h_px * expand_h_mul)))
+            if desired_h_px <= actual_h_px:
+                return rect
+            extra_pdf_h = (desired_h_px - actual_h_px) / max(float(preview_zoom), 0.001)
+            half_extra = extra_pdf_h / 2.0
+            return fitz.Rect(rect.x0, rect.y0 - half_extra, rect.x1, rect.y1 + half_extra)
+
+        def _target_rect(rect, profile, field_kind):
+            rect = self._coerce_rect(rect)
+            if field_kind == "line":
+                return _effective_rect(rect, profile)
+            return rect
+
+        def _content_rect(rect, profile):
+            rect = self._coerce_rect(rect)
+            inset_x = max(0.0, float(rect.width) * float(profile.get("content_inset_x", 0.0)))
+            inset_y = max(0.0, float(rect.height) * float(profile.get("content_inset_y", 0.0)))
+            x0 = rect.x0 + inset_x
+            x1 = rect.x1 - inset_x
+            y0 = rect.y0 + inset_y
+            y1 = rect.y1 - inset_y
+            if x1 <= x0:
+                x0, x1 = rect.x0, rect.x1
+            if y1 <= y0:
+                y0, y1 = rect.y0, rect.y1
+            return fitz.Rect(x0, y0, x1, y1)
+
+        def centered_anchor(rect, profile, field_kind):
+            target_rect = _target_rect(rect, profile, field_kind)
+            content_rect = _content_rect(target_rect, profile)
+            left = (content_rect.x0 * preview_zoom) + (ox * preview_zoom)
+            top = (content_rect.y0 * preview_zoom) + (oy * preview_zoom)
+            target_w = max(float(content_rect.width * preview_zoom), 1.0)
+            target_h = max(float(content_rect.height * preview_zoom), 1.0)
+            cx = left + (target_w / 2.0)
+            cy = top + (target_h / 2.0)
+            cy += target_h * float(profile.get("vshift", 0.0))
+            return cx, cy, content_rect
+
+        def draw_centered_text(cx, cy, display_val, font, stroke, bbox):
+            try:
+                draw.text((cx, cy), display_val, font=font, fill=(0, 0, 0),
+                          stroke_width=stroke, stroke_fill=(0, 0, 0), anchor="mm")
+                return
+            except Exception:
+                pass
+            bx0, by0, bx1, by1 = bbox
+            x = cx - ((bx0 + bx1) / 2.0)
+            y = cy - ((by0 + by1) / 2.0)
+            draw.text((int(round(x)), int(round(y))), display_val, font=font, fill=(0, 0, 0),
+                      stroke_width=stroke, stroke_fill=(0, 0, 0))
 
         field_kind = classify_field(rects, force_grid=bool(is_grid))
 
         def draw_single(single_val, rect):
-            target_w = max(int(rect.width * preview_zoom), 1)
-            target_h = max(int(rect.height * preview_zoom), 1)
+            probe_profile = FIELD_PROFILES.get(field_kind, FIELD_PROFILES["box"])
+            target_rect = _target_rect(rect, probe_profile, field_kind)
+            target_w = max(int(target_rect.width * preview_zoom), 1)
+            target_h = max(int(target_rect.height * preview_zoom), 1)
             display_val, font, bbox, tw, th, stroke, profile = fit_text(single_val, target_w, target_h, field_kind=field_kind)
             if not display_val or font is None or bbox is None:
                 return
-            x, y = centered_xy(rect, bbox, tw, th, profile)
-            draw.text((x, y), display_val, font=font, fill=(0, 0, 0), stroke_width=stroke, stroke_fill=(0, 0, 0))
+            cx, cy, _ = centered_anchor(rect, profile, field_kind)
+            draw_centered_text(cx, cy, display_val, font, stroke, bbox)
 
         def draw_grid(grid_val, rect, cells):
             cells = max(int(cells), 1)
-            target_h = max(int(rect.height * preview_zoom), 1)
-            cell_w = (rect.width * preview_zoom) / cells
+            target_rect = _target_rect(rect, FIELD_PROFILES["grid"], "grid")
+            target_h = max(int(target_rect.height * preview_zoom), 1)
+            cell_w = (target_rect.width * preview_zoom) / cells
             base_cell_w = rect.width / cells
-            for i, ch in enumerate(str(grid_val).upper()[:cells]):
+            for i, ch in enumerate(_apply_case(grid_val)[:cells]):
                 display_val, font, bbox, tw, th, stroke, profile = fit_text(str(ch), cell_w - 2, target_h, field_kind="grid")
                 if not display_val or font is None or bbox is None:
                     continue
@@ -5057,8 +6612,8 @@ class FormAlchemistEngine:
                     rect.x0 + ((i + 1) * base_cell_w),
                     rect.y1,
                 )
-                x, y = centered_xy(cell_rect, bbox, tw, th, profile)
-                draw.text((x, y), display_val, font=font, fill=(0, 0, 0), stroke_width=stroke, stroke_fill=(0, 0, 0))
+                cx, cy, _ = centered_anchor(cell_rect, profile, "grid")
+                draw_centered_text(cx, cy, display_val, font, stroke, bbox)
 
         if is_grid and len(rects) > 1:
             counts = self._allocate_cells_by_width(rects, grid_n)
@@ -5123,8 +6678,12 @@ class FormAlchemistEngine:
             box_type = self.box_types[i]
             if box_type == "check":
                 color = (0, 0, 255)
+            elif box_type == "radio":
+                color = (255, 0, 255)
             elif box_type == "line":
                 color = (0, 215, 255)
+            elif box_type == "unknown":
+                color = (0, 140, 255)
             else:
                 color = (0, 255, 0)
 
@@ -5990,6 +7549,8 @@ class FormAlchemistApp(MDApp):
         self._mobile_zoom_bootstrap_pending = bool(is_mobile)
         self.mobile_select_mode = False
         self._mobile_quick_rail_open = False
+        self.text_tuning_ui = self.engine._normalized_text_tuning(getattr(self.engine, "text_tuning", None))
+        self.learning_auto_apply = True
 
         def style_card(widget, color=None, radius=dp(22)):
             color = color or palette["surface"]
@@ -6565,8 +8126,9 @@ class FormAlchemistApp(MDApp):
             display_map = {
                 "Files": "Files",
                 "Session": "Session",
-                "Detection": "Fields",
                 "Selection": "Inspect",
+                "Detection": "Fields",
+                "Text": "Text",
                 "Learning": "Memory",
                 "Mapping": "Map",
                 "Export": "Export",
@@ -6719,6 +8281,30 @@ class FormAlchemistApp(MDApp):
         else:
             self._desktop_section_cards["Detection"] = detect_card
 
+        text_card, text_body = make_card("Text Rendering", "Adjust font fit, centering, and readability inside the mapped boxes")
+        text_note = Label(text="These controls change how mapped text is fitted and centered inside the selected fields and exported PDF.",
+                        color=palette["muted"], size_hint_y=None, height=dp(22), halign="left", valign="middle", font_size=dp(10.5 if is_mobile else 11))
+        text_note.bind(size=self._sync_label_text_size)
+        self._bind_auto_height_label(text_note, min_height=dp(20), extra_pad=dp(4))
+        text_body.add_widget(text_note)
+        self.text_tuning_summary_lbl = Label(text="", color=palette["text"], size_hint_y=None, height=dp(42), halign="left", valign="middle", font_size=dp(11))
+        self.text_tuning_summary_lbl.bind(size=self._sync_label_text_size)
+        self._bind_auto_height_label(self.text_tuning_summary_lbl, min_height=dp(38), extra_pad=dp(4))
+        text_body.add_widget(labeled_field("Current text fit profile", self.text_tuning_summary_lbl, "Preview and export share these font-fitting rules."))
+        text_action_row = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=row_h)
+        self.btn_text_tuning_dialog = make_button("Font Tuning Console", tone="soft")
+        self.btn_text_tuning_dialog.bind(on_release=self.open_text_tuning_popup)
+        self.btn_text_preview_refresh = make_button("Preview Text Now", tone="primary")
+        self.btn_text_preview_refresh.bind(on_release=self.on_preview)
+        text_action_row.add_widget(self.btn_text_tuning_dialog)
+        text_action_row.add_widget(self.btn_text_preview_refresh)
+        text_body.add_widget(text_action_row)
+        if is_mobile:
+            self._mobile_section_cards["Text"] = text_card
+        else:
+            self._desktop_section_cards["Text"] = text_card
+        self._update_text_tuning_summary()
+
         map_card, map_body = make_card("Mapping", "Link selected boxes to data columns" if is_mobile else "Link selected boxes to your data directly from the preview")
         self.box_ids_input = make_input("", "0,1,2")
         self.column_spinner = make_spinner(COLUMN_SELECT_TEXT, picker_title="Choose a data column", search_hint="Type to find a column name")
@@ -6800,19 +8386,39 @@ class FormAlchemistApp(MDApp):
         self.learning_revision_lbl = _make_learning_info_label("Current revision: none")
         self.learning_recent_lbl = _make_learning_info_label("Recent revisions: none", min_height=dp(48))
         self.learning_storage_lbl = _make_learning_info_label("Storage: —", color=palette["muted"], min_height=dp(40))
+        self.learning_validation_lbl = _make_learning_info_label("Validation: not run yet", min_height=dp(48))
 
         learning_body.add_widget(labeled_field("Summary", self.learning_summary_lbl, "Counts and current page learning state"))
         learning_body.add_widget(labeled_field("Best Match", self.learning_match_lbl, "The closest saved setup the app found for this page"))
         learning_body.add_widget(labeled_field("Saved Versions", self.learning_revision_lbl, "The current saved or approved setup version"))
         learning_body.add_widget(labeled_field("Recent History", self.learning_recent_lbl, "Recently saved setup versions for quick review"))
         learning_body.add_widget(labeled_field("Storage", self.learning_storage_lbl, "Where the app keeps its saved memory files"))
+        learning_body.add_widget(labeled_field("Validation", self.learning_validation_lbl, "Preflight scan for overlaps, custom fillables, weak sections, and unmapped text fields"))
+
+        auto_row = BoxLayout(orientation="horizontal", spacing=dp(10), size_hint_y=None, height=dp(34))
+        self.learning_auto_apply_chk = CheckBox(active=True, size_hint=(None, None), size=(dp(24), dp(24)))
+        self.learning_auto_apply_chk.bind(active=self.on_learning_auto_apply_change)
+        auto_lbl = Label(
+            text="Auto-apply learned setup on Detect",
+            color=palette["text"],
+            size_hint=(1, 1),
+            halign="left",
+            valign="middle",
+            font_size=dp(11.2 if is_mobile else 11.8),
+        )
+        auto_lbl.bind(size=self._sync_label_text_size)
+        auto_row.add_widget(self.learning_auto_apply_chk)
+        auto_row.add_widget(auto_lbl)
+        learning_body.add_widget(labeled_field("Auto Apply", auto_row, "When enabled, Detect may preload the best approved learned profile before scanning"))
 
         learn_grid = GridLayout(cols=2 if is_mobile else 3, spacing=dp(8), size_hint_y=None)
         learning_buttons = [
             ("Refresh State", self.on_learning_refresh, "soft"),
+            ("Validate Page", self.on_learning_validate_page, "accent"),
             ("Save Revision", self.on_learning_save_revision, "accent"),
             ("Approve Current", self.on_learning_approve_current, "primary"),
             ("Apply Best", self.on_learning_apply_best_profile, "plain"),
+            ("Manage Profiles", self.on_learning_manage_profiles, "soft"),
             ("View Current", self.on_learning_view_current_revision, "plain"),
             ("Browse Revisions", self.on_learning_browse_revisions, "plain"),
             ("Reload Memory", self.on_learning_reload_memory, "plain"),
@@ -6824,12 +8430,16 @@ class FormAlchemistApp(MDApp):
             btn.bind(on_release=cb)
             if txt == "Refresh State":
                 self.btn_learning_refresh = btn
+            elif txt == "Validate Page":
+                self.btn_learning_validate_page = btn
             elif txt == "Save Revision":
                 self.btn_learning_save_revision = btn
             elif txt == "Approve Current":
                 self.btn_learning_approve_current = btn
             elif txt == "Apply Best":
                 self.btn_learning_apply_best = btn
+            elif txt == "Manage Profiles":
+                self.btn_learning_manage_profiles = btn
             elif txt == "View Current":
                 self.btn_learning_view_current = btn
             elif txt == "Browse Revisions":
@@ -6877,6 +8487,14 @@ class FormAlchemistApp(MDApp):
         self.btn_clear_mapping.bind(on_release=self.on_clear_selected_mapping)
         clear_row.add_widget(self.btn_clear_mapping)
         mapping_section_body.add_widget(clear_row)
+        section_action_row = GridLayout(cols=1 if is_mobile else 2, spacing=dp(8), size_hint_y=None, height=row_h if not is_mobile else (row_h*2 + dp(8)))
+        self.btn_section_assist = make_button("Section Assist", tone="soft")
+        self.btn_section_assist.bind(on_release=self.on_section_assist)
+        section_action_row.add_widget(self.btn_section_assist)
+        self.section_auto_chk = CheckBox(active=bool(getattr(self.engine, "section_automation_enabled", True)))
+        self.section_auto_chk.bind(active=self.on_section_automation_toggle)
+        section_action_row.add_widget(labeled_checkbox("Enable Section Helpers", self.section_auto_chk, "Use section-aware auto-linking and same-as-above fallback during preview and export"))
+        mapping_section_body.add_widget(section_action_row)
 
         hover_section_body = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
         hover_section_body.bind(minimum_height=hover_section_body.setter("height"))
@@ -7226,7 +8844,7 @@ class FormAlchemistApp(MDApp):
                         pass
                 self.mobile_sidebar.add_widget(mobile_flow_card)
 
-            sidebar_tabs = _make_mobile_section_tabs(["Files", "Detection", "Selection", "Learning", "Mapping", "Session", "Export"])
+            sidebar_tabs = _make_mobile_section_tabs(["Files", "Detection", "Selection", "Text", "Learning", "Mapping", "Session", "Export"])
             self.mobile_sidebar.add_widget(sidebar_tabs)
 
             sidebar_scroll = ScrollView(do_scroll_x=False, do_scroll_y=True, bar_width=dp(4), bar_margin=dp(10), scroll_type=["bars", "content"])
@@ -7253,7 +8871,7 @@ class FormAlchemistApp(MDApp):
             left_body = GridLayout(cols=1, spacing=dp(10), size_hint_y=None)
             left_body.bind(minimum_height=left_body.setter("height"))
             desktop_controls_card, desktop_controls_body = make_card("Document & Detection", "Compact desktop controls")
-            tabs = _make_desktop_section_tabs(["Workspace", "Session", "Detection", "Learning"])
+            tabs = _make_desktop_section_tabs(["Workspace", "Session", "Detection", "Text", "Learning"])
             desktop_controls_body.add_widget(tabs)
             self._desktop_section_host = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
             self._desktop_section_host.bind(minimum_height=self._desktop_section_host.setter("height"))
@@ -7716,6 +9334,13 @@ class FormAlchemistApp(MDApp):
 
     def _update_selection_inspector(self):
         ids = sorted(set(int(x) for x in getattr(self.engine, "selected_box_ids", []) if isinstance(x, int) or str(x).isdigit()))
+        if getattr(self, "ui_mobile", False) and ids:
+            active = str(getattr(self, "_mobile_active_section", "") or "")
+            if active in {"", "Files", "Session", "Detection"} and callable(getattr(self, "_show_mobile_section", None)):
+                try:
+                    self._show_mobile_section("Selection")
+                except Exception:
+                    pass
         if hasattr(self, "inspector_selected_lbl") and self.inspector_selected_lbl is not None:
             self.inspector_selected_lbl.text = (", ".join(str(i) for i in ids) if ids else "None")
         if hasattr(self, "inspector_count_lbl") and self.inspector_count_lbl is not None:
@@ -7731,9 +9356,21 @@ class FormAlchemistApp(MDApp):
             rect_text = ""
             if rect is not None:
                 rect_text = f" | ({int(rect.x0)}, {int(rect.y0)}) → ({int(rect.x1)}, {int(rect.y1)})"
-            box_text = f"Box {first} • {box_type}{rect_text}"
+            box_text = f"Box {first} • {self._friendly_box_type_label(box_type)}{rect_text}"
             mapping = self.engine.describe_box_mapping(first, self.current_page_idx())
+            group_info = self.engine.describe_box_group(first)
+            section_info = self.engine.describe_box_section(first)
             mapping_text = mapping if mapping and mapping != "EMPTY" else "Unmapped"
+            if group_info:
+                mapping_text = mapping_text + ("\n" if mapping_text else "") + "Group: " + group_info
+            if section_info:
+                mapping_text = mapping_text + ("\n" if mapping_text else "") + "Section: " + section_info
+            section_actions = self.engine.get_section_action_suggestions(first)
+            if section_actions:
+                mapping_text = mapping_text + ("\n" if mapping_text else "") + "Suggestions: " + " | ".join(section_actions)
+            if section_info:
+                helper_state = "ON" if bool(getattr(self.engine, "section_automation_enabled", True)) else "OFF"
+                mapping_text = mapping_text + ("\n" if mapping_text else "") + f"Section Assist: {helper_state}"
 
         if hasattr(self, "inspector_box_lbl") and self.inspector_box_lbl is not None:
             self.inspector_box_lbl.text = box_text
@@ -7743,12 +9380,22 @@ class FormAlchemistApp(MDApp):
             if ids:
                 first = ids[0]
                 mapping = self._find_mapping_for_box(first, self.current_page_idx()) or {}
-                self.inspector_resolution_lbl.text = "Resolved preview value: " + self._get_selected_column_preview(
+                preview_value = self._get_selected_column_preview(
                     mapping.get("column", self.column_spinner.text if hasattr(self, "column_spinner") else ""),
                     trigger=mapping.get("trigger", self.trigger_input.text if hasattr(self, "trigger_input") else ""),
                     is_grid=bool(mapping.get("g", getattr(self.grid_flag_chk, "active", False) if hasattr(self, "grid_flag_chk") else False)),
                     grid_n=int(mapping.get("n", self.grid_n_input.text if hasattr(self, "grid_n_input") else "1") or 1),
                 )
+                same_as_above_note = ""
+                try:
+                    if mapping and not str(mapping.get("trigger", "") or "").strip():
+                        row = self.engine._get_patient_row(self.selected_patient() or "", record_key=self.selected_record_key())
+                        _, resolved_meta = self.engine._resolve_mapping_value(mapping, row, page_idx=self.current_page_idx())
+                        if bool(resolved_meta.get("same_as_above", False)):
+                            same_as_above_note = f" (same-as-above from {resolved_meta.get('resolved_from', '')})"
+                except Exception:
+                    same_as_above_note = ""
+                self.inspector_resolution_lbl.text = "Resolved preview value: " + preview_value + same_as_above_note
             else:
                 self.inspector_resolution_lbl.text = "Resolved preview value: —"
         self._update_preview_hud()
@@ -7872,6 +9519,22 @@ class FormAlchemistApp(MDApp):
         keep = max(18, (max_len - 3) // 2)
         return f"{txt[:keep]}...{txt[-keep:]}"
 
+    def _learning_auto_apply_enabled(self):
+        try:
+            if hasattr(self, "learning_auto_apply_chk"):
+                return bool(getattr(self.learning_auto_apply_chk, "active", False))
+        except Exception:
+            pass
+        return bool(getattr(self, "learning_auto_apply", True))
+
+    def on_learning_auto_apply_change(self, instance, value):
+        self.learning_auto_apply = bool(value)
+        self.refresh_learning_ui()
+        try:
+            self._persist_runtime_session_state(current_page_idx=self.current_page_idx())
+        except Exception:
+            pass
+
     def refresh_learning_ui(self, *_):
         if not hasattr(self, "engine") or self.engine is None:
             return
@@ -7879,6 +9542,8 @@ class FormAlchemistApp(MDApp):
             return
         try:
             profiles = ((self.engine.profile_memory or {}).get("profiles", {}) or {})
+            active_profiles = [p for p in profiles.values() if isinstance(p, dict) and not bool(p.get("disabled", False)) and not bool(p.get("forgotten", False))]
+            pinned_count = sum(1 for p in active_profiles if bool(p.get("pinned", False)))
             revision_index = self.engine.learning_storage.load_revision_index() if getattr(self.engine, "learning_storage", None) else {"items": []}
             rev_items = revision_index.get("items", []) if isinstance(revision_index, dict) else []
             corrections = ((self.engine.correction_log or {}).get("events", []) or [])
@@ -7889,23 +9554,27 @@ class FormAlchemistApp(MDApp):
             box_count = len(getattr(self.engine, "all_boxes", []) or [])
             enabled = bool(getattr(self.engine, "learning_enabled", False))
             self.learning_summary_lbl.text = (
-                f"Profiles: {len(profiles)} • Revisions: {len(rev_items)} • Corrections: {len(corrections)}\n"
+                f"Profiles: {len(active_profiles)} • Pinned: {pinned_count} • Revisions: {len(rev_items)} • Corrections: {len(corrections)}\n"
                 f"Page: {page_idx} • Boxes: {box_count} • Learning: {'On' if enabled else 'Off'}"
             )
 
             fp_key = str(fp.get("fingerprint_key", "") or "")
             fp_short = (fp_key[:12] + "…") if fp_key and len(fp_key) > 13 else (fp_key or "—")
+            fp_anchor = str(fp.get("anchor_signature", "") or "").strip()
             if match:
                 kind = str(match.get("match_kind", "fuzzy") or "fuzzy").title()
                 score = float(match.get("match_score", 0.0) or 0.0)
                 applied = bool(ctx.get("profile_applied", False))
                 approved = bool(match.get("approved", False))
+                anchor_sig = str(match.get("anchor_signature", "") or "").strip()
+                anchor_line = f" • Anchors: {anchor_sig[:48]}" if anchor_sig else (f" • Page: {fp_anchor[:48]}" if fp_anchor else "")
                 self.learning_match_lbl.text = (
                     f"Match: {kind} • Score: {score:.2f} • Applied: {'Yes' if applied else 'No'}\n"
-                    f"Approved profile: {'Yes' if approved else 'No'} • Fingerprint: {fp_short}"
+                    f"Approved profile: {'Yes' if approved else 'No'} • Fingerprint: {fp_short}{anchor_line}"
                 )
             else:
-                self.learning_match_lbl.text = f"Match: none yet\nFingerprint: {fp_short}"
+                anchor_line = f" • Page: {fp_anchor[:48]}" if fp_anchor else ""
+                self.learning_match_lbl.text = f"Match: none yet\nFingerprint: {fp_short}{anchor_line}"
 
             current_rev = str(getattr(self.engine, "current_revision_id", "") or "")
             last_saved = str(getattr(self.engine, "last_saved_revision_id", "") or "")
@@ -7934,8 +9603,235 @@ class FormAlchemistApp(MDApp):
                 f"Store: {self._short_learning_path(getattr(self.engine.learning_storage, 'base_dir', ''))}\n"
                 f"PDF: {os.path.basename(getattr(self.engine, 'pdf_path', '') or '') or 'None loaded'}"
             )
+            if hasattr(self, "learning_validation_lbl"):
+                report = self._scan_validation_issues(page_idx=page_idx)
+                self.last_validation_report = report
+                overlap_count = int(report.get("overlap_count", 0) or 0)
+                unknown_count = int(report.get("unknown_count", 0) or 0)
+                unmapped_count = int(report.get("unmapped_text_count", 0) or 0)
+                unlabeled_count = int(report.get("unlabeled_section_count", 0) or 0)
+                weak_links = int(report.get("weak_auto_link_count", 0) or 0)
+                issue_count = len(list(report.get("issues", []) or []))
+                status_text = "Clean" if issue_count <= 0 else ("Watch" if issue_count <= 4 else "Needs review")
+                self.learning_validation_lbl.text = (
+                    f"{status_text} • Issues: {issue_count} • Overlaps: {overlap_count} • Unknown: {unknown_count}\n"
+                    f"Unmapped text: {unmapped_count} • Sections without labels: {unlabeled_count} • Weak auto-links: {weak_links}"
+                )
         except Exception:
             pass
+
+    def _is_mobile_layout(self):
+        try:
+            return bool(platform == "android" or getattr(self, "_mobile_mode", False))
+        except Exception:
+            return bool(platform == "android")
+
+    def _mapping_exists_for_box(self, box_idx, page_idx=0):
+        engine = getattr(self, "engine", None)
+        if engine is None:
+            return False
+        try:
+            return bool(engine._mapping_exists_for_box(box_idx, page_idx=page_idx))
+        except Exception:
+            return False
+
+    def _scan_validation_issues(self, page_idx=None):
+        report = {
+            "page_idx": 0,
+            "issues": [],
+            "overlap_count": 0,
+            "unknown_count": 0,
+            "unmapped_text_count": 0,
+            "unlabeled_section_count": 0,
+            "weak_auto_link_count": 0,
+            "box_count": 0,
+            "section_count": 0,
+            "group_count": 0,
+        }
+        engine = getattr(self, "engine", None)
+        if engine is None:
+            return report
+        try:
+            page_idx = int(page_idx if page_idx is not None else (getattr(engine, "detected_page_idx", 0) or 0))
+        except Exception:
+            page_idx = 0
+        report["page_idx"] = page_idx
+        boxes = list(getattr(engine, "all_boxes", []) or [])
+        box_types = list(getattr(engine, "box_types", []) or [])
+        n = min(len(boxes), len(box_types))
+        report["box_count"] = n
+        option_groups = list(getattr(engine, "option_groups", []) or [])
+        compound_sections = list(getattr(engine, "compound_sections", []) or [])
+        report["group_count"] = len(option_groups)
+        report["section_count"] = len(compound_sections)
+        option_group_by_box = {}
+        for group in option_groups:
+            gid = int(group.get("id", len(option_group_by_box)) or 0)
+            for member in list(group.get("member_ids", []) or []):
+                try:
+                    option_group_by_box[int(member)] = gid
+                except Exception:
+                    continue
+        text_like = {"field", "line", "unknown"}
+        for idx in range(n):
+            btype = str(box_types[idx] or "")
+            if btype == "unknown":
+                report["unknown_count"] += 1
+                report["issues"].append({
+                    "severity": "info",
+                    "title": "Custom fillable candidate",
+                    "detail": f"Box {idx + 1} is still classified as custom/unknown. Review or map it manually if important.",
+                })
+            if btype in text_like and not self._mapping_exists_for_box(idx, page_idx=page_idx):
+                report["unmapped_text_count"] += 1
+        for section in compound_sections:
+            label_text = str(section.get("label_text", "") or "").strip()
+            if not label_text:
+                report["unlabeled_section_count"] += 1
+        for section in compound_sections:
+            try:
+                suggestions = list(engine.preview_section_auto_links(section, page_idx=page_idx, available_columns=list(getattr(self, "csv_columns", []) or [])) or [])
+            except Exception:
+                suggestions = []
+            weak = [s for s in suggestions if float(s.get("score", 0.0) or 0.0) < 18.0]
+            report["weak_auto_link_count"] += len(weak)
+        for i in range(n):
+            rect_i = fitz.Rect(boxes[i])
+            type_i = str(box_types[i] or "")
+            for j in range(i + 1, n):
+                if option_group_by_box.get(i) == option_group_by_box.get(j) and i in option_group_by_box and j in option_group_by_box:
+                    continue
+                rect_j = fitz.Rect(boxes[j])
+                overlap = _rect_iou(rect_i, rect_j)
+                if overlap < 0.42:
+                    continue
+                type_j = str(box_types[j] or "")
+                report["overlap_count"] += 1
+                sev = "warning" if (type_i == type_j or "unknown" in {type_i, type_j}) else "info"
+                report["issues"].append({
+                    "severity": sev,
+                    "title": "Overlapping detections",
+                    "detail": f"Box {i + 1} ({type_i}) overlaps Box {j + 1} ({type_j}) with IOU {overlap:.2f}.",
+                })
+        tuning = dict(getattr(engine, "text_tuning", {}) or {})
+        inset_x = float(tuning.get("content_inset_x", 0.0) or 0.0)
+        inset_y = float(tuning.get("content_inset_y", 0.0) or 0.0)
+        overall_scale = float(tuning.get("overall_scale", 1.0) or 1.0)
+        line_scale = float(tuning.get("line_scale", 1.0) or 1.0)
+        if inset_x >= 0.36 or inset_y >= 0.36:
+            report["issues"].append({
+                "severity": "info",
+                "title": "Aggressive content inset",
+                "detail": f"Current inset is X={inset_x:.2f}, Y={inset_y:.2f}; text may look over-tight inside narrow fields.",
+            })
+        if overall_scale <= 0.55 or line_scale <= 0.45:
+            report["issues"].append({
+                "severity": "info",
+                "title": "Small text scale",
+                "detail": f"Overall scale={overall_scale:.2f}, line scale={line_scale:.2f}; long fields may appear too small in preview/export.",
+            })
+        report["issues"] = list(report.get("issues", []) or [])[:80]
+        return report
+
+    def _format_validation_report_text(self, report):
+        report = dict(report or {})
+        lines = []
+        page_idx = int(report.get("page_idx", 0) or 0)
+        lines.append(f"Page: {page_idx}")
+        lines.append(
+            f"Boxes: {int(report.get('box_count', 0) or 0)} • Groups: {int(report.get('group_count', 0) or 0)} • Sections: {int(report.get('section_count', 0) or 0)}"
+        )
+        lines.append(
+            f"Overlaps: {int(report.get('overlap_count', 0) or 0)} • Unknown: {int(report.get('unknown_count', 0) or 0)} • Unmapped text: {int(report.get('unmapped_text_count', 0) or 0)}"
+        )
+        lines.append(
+            f"Sections without labels: {int(report.get('unlabeled_section_count', 0) or 0)} • Weak auto-links: {int(report.get('weak_auto_link_count', 0) or 0)}"
+        )
+        issues = list(report.get("issues", []) or [])
+        if not issues:
+            lines.append("")
+            lines.append("No obvious validation issues found on the current page.")
+            return "\n".join(lines)
+        lines.append("")
+        lines.append("Issues:")
+        severity_symbol = {"warning": "!", "info": "•", "error": "×"}
+        for item in issues[:30]:
+            sev = str(item.get("severity", "info") or "info")
+            symbol = severity_symbol.get(sev, "•")
+            title = str(item.get("title", "Issue") or "Issue")
+            detail = str(item.get("detail", "") or "").strip()
+            lines.append(f"{symbol} {title}")
+            if detail:
+                lines.append(f"   {detail}")
+        if len(issues) > 30:
+            lines.append(f"… {len(issues) - 30} more issue(s) not shown in this popup.")
+        return "\n".join(lines)
+
+    def _open_validation_report_popup(self, report):
+        palette = getattr(self, "ui_palette", {}) or {}
+        body = BoxLayout(orientation="vertical", spacing=dp(8))
+        header = Label(
+            text="Current page validation report",
+            color=palette.get("text", (1, 1, 1, 1)),
+            size_hint_y=None,
+            height=dp(28),
+            halign="left",
+            valign="middle",
+            font_size=dp(12),
+        )
+        header.bind(size=self._sync_label_text_size)
+        body.add_widget(header)
+        scroll = ScrollView(do_scroll_x=False, do_scroll_y=True, bar_width=dp(5), scroll_type=["bars", "content"])
+        content = Label(
+            text=self._format_validation_report_text(report),
+            color=palette.get("text", (1, 1, 1, 1)),
+            size_hint_y=None,
+            halign="left",
+            valign="top",
+            font_size=dp(11),
+        )
+        content.bind(size=self._sync_label_text_size)
+        self._bind_auto_height_label(content, min_height=dp(260), extra_pad=dp(10))
+        scroll.add_widget(content)
+        body.add_widget(scroll)
+        btn_row = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=dp(40))
+        refresh_btn = Button(text="Refresh", background_normal="", background_color=palette.get("surface_soft", (0.15, 0.16, 0.22, 1)), color=palette.get("text", (1,1,1,1)))
+        close_btn = Button(text="Close", background_normal="", background_color=palette.get("surface_soft", (0.15, 0.16, 0.22, 1)), color=palette.get("text", (1,1,1,1)))
+        btn_row.add_widget(refresh_btn)
+        btn_row.add_widget(close_btn)
+        body.add_widget(btn_row)
+        popup = Popup(
+            title="Validation Report",
+            separator_height=0,
+            background="",
+            background_color=(0, 0, 0, 0.78),
+            content=body,
+            size_hint=((0.94 if self._is_mobile_layout() else 0.70), (0.86 if self._is_mobile_layout() else 0.78)),
+            auto_dismiss=True,
+        )
+        def _refresh_and_replace(*_):
+            try:
+                report2 = self._scan_validation_issues()
+                self.last_validation_report = report2
+                content.text = self._format_validation_report_text(report2)
+                self.refresh_learning_ui()
+                self.set_status("Validation report refreshed.")
+            except Exception as e:
+                self.set_status(f"Validation refresh failed.\n{e}", kind="error")
+        refresh_btn.bind(on_release=_refresh_and_replace)
+        close_btn.bind(on_release=lambda *_: popup.dismiss())
+        popup.open()
+
+    def on_learning_validate_page(self, instance):
+        try:
+            report = self._scan_validation_issues()
+            self.last_validation_report = report
+            self.refresh_learning_ui()
+            self._open_validation_report_popup(report)
+            issue_count = len(list(report.get("issues", []) or []))
+            self.set_status(f"Validation complete.\nIssues found: {issue_count}")
+        except Exception as e:
+            self.set_status(f"Validation failed.\n{e}", kind="error")
 
     def on_learning_refresh(self, instance):
         self.refresh_learning_ui()
@@ -8049,6 +9945,304 @@ class FormAlchemistApp(MDApp):
         except Exception as e:
             self.set_status(f"Apply learned profile error:\n{e}")
 
+    def _persist_profile_memory_ui_changes(self):
+        try:
+            self.engine.profile_memory["version"] = 1
+            self.engine.profile_memory["updated_at"] = _utc_now_iso()
+            self.engine.learning_storage.save_profile_memory(self.engine.profile_memory)
+        except Exception:
+            pass
+
+    def _get_active_profile_entries(self):
+        profiles = ((self.engine.profile_memory or {}).get("profiles", {}) or {}) if hasattr(self, "engine") else {}
+        items = []
+        for key, entry in profiles.items():
+            if not isinstance(entry, dict):
+                continue
+            row = dict(entry)
+            row.setdefault("fingerprint_key", str(key))
+            if bool(row.get("disabled", False)) or bool(row.get("forgotten", False)):
+                continue
+            items.append(row)
+        items.sort(
+            key=lambda e: (
+                1 if bool(e.get("pinned", False)) else 0,
+                1 if bool(e.get("approved", False)) else 0,
+                float(e.get("avg_quality_weighted", e.get("avg_quality", 0.0)) or 0.0),
+                int(e.get("save_count", 0) or 0),
+                str(e.get("last_used_at", "") or ""),
+            ),
+            reverse=True,
+        )
+        return items
+
+    def _profile_card_summary_text(self, entry):
+        key = str(entry.get("fingerprint_key", "") or "")
+        key_short = (key[:16] + "…") if len(key) > 17 else (key or "—")
+        family = str(entry.get("pdf_family_hint", "") or "unknown")
+        page_idx = int(entry.get("page_idx", 0) or 0)
+        page_count = int(entry.get("page_count", 0) or 0)
+        quality = float(entry.get("avg_quality_weighted", entry.get("avg_quality", 0.0)) or 0.0)
+        saves = int(entry.get("save_count", 0) or 0)
+        approved = "Approved" if bool(entry.get("approved", False)) else "Draft"
+        pinned = "Pinned" if bool(entry.get("pinned", False)) else "Normal"
+        anchor = str(entry.get("anchor_signature", "") or "").strip()
+        anchor_line = f"Anchors: {anchor[:72]}" if anchor else "Anchors: —"
+        return (
+            f"{family} • p{page_idx}/{max(page_count, 1)} • {approved} • {pinned}\n"
+            f"Key: {key_short} • Quality: {quality:.2f} • Saves: {saves}\n"
+            f"{anchor_line}"
+        )
+
+    def _refresh_profile_manager_popup(self, popup_holder=None):
+        if isinstance(popup_holder, dict):
+            refresh_fn = popup_holder.get("refresh")
+            if callable(refresh_fn):
+                try:
+                    refresh_fn()
+                    return
+                except Exception:
+                    pass
+        Clock.schedule_once(lambda dt: self.on_learning_manage_profiles(None), 0.05)
+
+    def _apply_profile_from_manager(self, profile_key, popup_holder=None):
+        try:
+            profiles = ((self.engine.profile_memory or {}).get("profiles", {}) or {})
+            entry = profiles.get(profile_key)
+            if not isinstance(entry, dict):
+                self.set_status("Profile entry could not be loaded.")
+                return
+            settings = dict(entry.get("settings", {}) or {})
+            if not settings:
+                self.set_status("Profile has no stored settings to apply.")
+                return
+            self.engine._apply_learning_profile_settings(settings)
+            page_idx = int(self.current_page_idx()) if hasattr(self, "current_page_idx") else 0
+            ctx = dict(getattr(self.engine, "current_detection_context", {}) or {})
+            ctx.update({
+                "page_idx": page_idx,
+                "matched_profile": dict(entry),
+                "profile_applied": True,
+            })
+            self.engine.current_detection_context = ctx
+            self.engine.last_applied_profile_meta = {
+                "profile_key": str(profile_key),
+                "match_kind": "manual_browser",
+                "match_score": 1.0,
+                "applied_at": _utc_now_iso(),
+                "explicit_ui_apply": True,
+            }
+            entry["last_used_at"] = _utc_now_iso()
+            profiles[str(profile_key)] = entry
+            self._persist_profile_memory_ui_changes()
+            self.push_engine_settings_to_ui()
+            self.refresh_learning_ui()
+            self.engine.persist_learning_session(current_page_idx=page_idx)
+            if isinstance(popup_holder, dict) and popup_holder.get("popup") is not None:
+                try:
+                    popup_holder.get("popup").dismiss()
+                except Exception:
+                    pass
+            self.set_status(f"Applied saved profile.\nKey: {str(profile_key)[:20]}")
+        except Exception as e:
+            self.set_status(f"Apply profile error:\n{e}")
+
+    def _toggle_profile_pin_from_manager(self, profile_key, popup_holder=None):
+        try:
+            profiles = ((self.engine.profile_memory or {}).get("profiles", {}) or {})
+            entry = profiles.get(profile_key)
+            if not isinstance(entry, dict):
+                self.set_status("Profile entry could not be loaded.")
+                return
+            new_state = not bool(entry.get("pinned", False))
+            entry["pinned"] = new_state
+            entry["pinned_at"] = _utc_now_iso() if new_state else ""
+            entry["last_used_at"] = _utc_now_iso()
+            profiles[str(profile_key)] = entry
+            self._persist_profile_memory_ui_changes()
+            self.refresh_learning_ui()
+            self._refresh_profile_manager_popup(popup_holder)
+            self.set_status(f"Profile {'pinned' if new_state else 'unpinned'}.\nKey: {str(profile_key)[:20]}")
+        except Exception as e:
+            self.set_status(f"Pin profile error:\n{e}")
+
+    def _toggle_profile_approval_from_manager(self, profile_key, popup_holder=None):
+        try:
+            profiles = ((self.engine.profile_memory or {}).get("profiles", {}) or {})
+            entry = profiles.get(profile_key)
+            if not isinstance(entry, dict):
+                self.set_status("Profile entry could not be loaded.")
+                return
+            new_state = not bool(entry.get("approved", False))
+            entry["approved"] = new_state
+            entry["trust_class"] = "approved" if new_state else "saved"
+            entry["last_used_at"] = _utc_now_iso()
+            profiles[str(profile_key)] = entry
+            self._persist_profile_memory_ui_changes()
+            self.refresh_learning_ui()
+            self._refresh_profile_manager_popup(popup_holder)
+            self.set_status(f"Profile {'approved' if new_state else 'set to draft'}.\nKey: {str(profile_key)[:20]}")
+        except Exception as e:
+            self.set_status(f"Approve profile error:\n{e}")
+
+    def _forget_profile_from_manager(self, profile_key, popup_holder=None):
+        try:
+            profiles = ((self.engine.profile_memory or {}).get("profiles", {}) or {})
+            if str(profile_key) in profiles:
+                profiles.pop(str(profile_key), None)
+                self._persist_profile_memory_ui_changes()
+                self.refresh_learning_ui()
+                self._refresh_profile_manager_popup(popup_holder)
+                self.set_status(f"Profile forgotten.\nKey: {str(profile_key)[:20]}")
+                return
+            self.set_status("Profile entry was already removed.")
+        except Exception as e:
+            self.set_status(f"Forget profile error:\n{e}")
+
+    def _open_profile_details_popup(self, profile_key, popup_holder=None):
+        profiles = ((self.engine.profile_memory or {}).get("profiles", {}) or {})
+        entry = profiles.get(profile_key)
+        if not isinstance(entry, dict):
+            self.set_status("Profile details could not be loaded.")
+            return
+        palette = getattr(self, "ui_palette", {}) or {}
+        data = dict(entry)
+        body = BoxLayout(orientation="vertical", spacing=dp(8))
+        scroll = ScrollView(do_scroll_x=False, do_scroll_y=True, bar_width=dp(5), scroll_type=["bars", "content"])
+        content = BoxLayout(orientation="vertical", spacing=dp(8), size_hint_y=None)
+        content.bind(minimum_height=content.setter("height"))
+        sections = [
+            ("Profile", [
+                f"Key: {data.get('fingerprint_key', '—')}",
+                f"Family: {data.get('pdf_family_hint', '—')}",
+                f"Page: {int(data.get('page_idx', 0) or 0)} / Count: {int(data.get('page_count', 0) or 0)}",
+                f"Pinned: {'Yes' if data.get('pinned', False) else 'No'}",
+                f"Approved: {'Yes' if data.get('approved', False) else 'No'}",
+                f"Trust: {data.get('trust_class', 'draft')}",
+            ]),
+            ("Quality", [
+                f"Saves: {int(data.get('save_count', 0) or 0)}",
+                f"Approved count: {int(data.get('approved_count', 0) or 0)}",
+                f"Avg quality: {float(data.get('avg_quality', 0.0) or 0.0):.3f}",
+                f"Weighted quality: {float(data.get('avg_quality_weighted', 0.0) or 0.0):.3f}",
+                f"Weight total: {float(data.get('learning_weight_total', 0.0) or 0.0):.3f}",
+            ]),
+            ("Anchors", [
+                f"Signature: {str(data.get('anchor_signature', '') or '—')}",
+                f"Tokens: {', '.join(list(data.get('anchor_tokens', []) or [])[:20]) or '—'}",
+            ]),
+            ("Settings", [
+                f"Keys: {', '.join(sorted(list((data.get('settings', {}) or {}).keys()))[:18]) or '—'}",
+                f"Last revision: {data.get('last_revision_id', '—')}",
+                f"Last used: {data.get('last_used_at', '—')}",
+            ]),
+        ]
+        for title, lines in sections:
+            card = BoxLayout(orientation="vertical", spacing=dp(6), padding=[dp(10), dp(10), dp(10), dp(10)], size_hint_y=None)
+            card.bind(minimum_height=card.setter("height"))
+            self._style_popup_card(card, palette.get("surface_alt", (0.11, 0.135, 0.185, 1)), radius=dp(16))
+            ttl = Label(text=title, color=palette.get("text", (0.93, 0.96, 1.0, 1)), size_hint_y=None, height=dp(20), halign="left", valign="middle", font_size=dp(12.5), bold=True)
+            ttl.bind(size=self._sync_label_text_size)
+            card.add_widget(ttl)
+            for line in lines:
+                lbl = Label(text=str(line), color=palette.get("text", (0.93, 0.96, 1.0, 1)), size_hint_y=None, height=dp(18), halign="left", valign="middle", font_size=dp(11.0))
+                lbl.bind(size=self._sync_label_text_size)
+                self._bind_auto_height_label(lbl, min_height=dp(18), extra_pad=dp(2))
+                card.add_widget(lbl)
+            content.add_widget(card)
+        scroll.add_widget(content)
+        body.add_widget(scroll)
+        popup, _outer = self._make_styled_popup(
+            "Profile Details",
+            body,
+            subtitle="Saved learned profile details and quality signals",
+            size_hint=(0.94 if getattr(self, "ui_mobile", False) else 0.68, 0.86 if getattr(self, "ui_mobile", False) else 0.82),
+        )
+        popup.open()
+
+    def on_learning_manage_profiles(self, instance):
+        entries = self._get_active_profile_entries()
+        if not entries:
+            self.set_status("No saved profiles yet.")
+            return
+        palette = getattr(self, "ui_palette", {}) or {}
+        body = BoxLayout(orientation="vertical", spacing=dp(8))
+        note = Label(
+            text="Manage learned profiles here. You can inspect, apply, pin, approve, or forget stored profiles. Pinned profiles get a small priority boost during matching.",
+            color=palette.get("muted", (0.76, 0.82, 0.9, 1)),
+            size_hint_y=None,
+            height=dp(34),
+            halign="left",
+            valign="middle",
+            font_size=dp(11),
+        )
+        note.bind(size=self._sync_label_text_size)
+        self._bind_auto_height_label(note, min_height=dp(30), extra_pad=dp(4))
+        body.add_widget(note)
+        host = BoxLayout(orientation="vertical", size_hint=(1, 1))
+        body.add_widget(host)
+        popup_holder = {"popup": None, "host": host}
+
+        def _render_profiles():
+            host.clear_widgets()
+            items = self._get_active_profile_entries()
+            if not items:
+                empty = Label(text="No active profiles remain.", color=palette.get("muted", (0.76, 0.82, 0.9, 1)), halign="left", valign="middle")
+                empty.bind(size=self._sync_label_text_size)
+                host.add_widget(empty)
+                return
+            scroll = ScrollView(do_scroll_x=False, do_scroll_y=True, bar_width=dp(5), scroll_type=["bars", "content"])
+            content = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
+            content.bind(minimum_height=content.setter("height"))
+            for entry in items[:32]:
+                profile_key = str(entry.get("fingerprint_key", "") or "")
+                row = BoxLayout(orientation="vertical", spacing=dp(6), padding=[dp(10), dp(10), dp(10), dp(10)], size_hint_y=None)
+                row.bind(minimum_height=row.setter("height"))
+                self._style_popup_card(row, palette.get("surface_alt", (0.11, 0.135, 0.185, 1)), radius=dp(16))
+                summary = Label(
+                    text=self._profile_card_summary_text(entry),
+                    color=palette.get("text", (0.93, 0.96, 1.0, 1)),
+                    size_hint_y=None,
+                    height=dp(58),
+                    halign="left",
+                    valign="middle",
+                    font_size=dp(10.8),
+                )
+                summary.bind(size=self._sync_label_text_size)
+                self._bind_auto_height_label(summary, min_height=dp(48), extra_pad=dp(2))
+                row.add_widget(summary)
+                cols = 2 if getattr(self, "ui_mobile", False) else 5
+                btn_row = GridLayout(cols=cols, spacing=dp(8), size_hint_y=None)
+                rows = 3 if cols == 2 else 1
+                btn_row.height = rows * dp(36) + max(rows - 1, 0) * dp(8)
+                btn_view = self._make_compact_action_button("View", tone="plain")
+                btn_apply = self._make_compact_action_button("Apply", tone="soft")
+                btn_pin = self._make_compact_action_button("Unpin" if bool(entry.get("pinned", False)) else "Pin", tone="soft")
+                btn_approve = self._make_compact_action_button("Unapprove" if bool(entry.get("approved", False)) else "Approve", tone="soft")
+                btn_forget = self._make_compact_action_button("Forget", tone="soft")
+                btn_view.bind(on_release=lambda *_, k=profile_key: self._open_profile_details_popup(k, popup_holder))
+                btn_apply.bind(on_release=lambda *_, k=profile_key: self._apply_profile_from_manager(k, popup_holder))
+                btn_pin.bind(on_release=lambda *_, k=profile_key: self._toggle_profile_pin_from_manager(k, popup_holder))
+                btn_approve.bind(on_release=lambda *_, k=profile_key: self._toggle_profile_approval_from_manager(k, popup_holder))
+                btn_forget.bind(on_release=lambda *_, k=profile_key: self._forget_profile_from_manager(k, popup_holder))
+                for btn in [btn_view, btn_apply, btn_pin, btn_approve, btn_forget]:
+                    btn_row.add_widget(btn)
+                row.add_widget(btn_row)
+                content.add_widget(row)
+            scroll.add_widget(content)
+            host.add_widget(scroll)
+
+        popup_holder["refresh"] = _render_profiles
+        _render_profiles()
+        popup, _outer = self._make_styled_popup(
+            "Profile Manager",
+            body,
+            subtitle="Inspect and control saved learned profiles",
+            size_hint=(0.95 if getattr(self, "ui_mobile", False) else 0.76, 0.90 if getattr(self, "ui_mobile", False) else 0.86),
+        )
+        popup_holder["popup"] = popup
+        popup.open()
+
     def _revision_popup_body(self, revision):
         palette = getattr(self, "ui_palette", {}) or {}
         data = dict(revision or {})
@@ -8069,9 +10263,10 @@ class FormAlchemistApp(MDApp):
             ]),
             ("Page / file", [
                 f"PDF: {os.path.basename(str(data.get('pdf_path', '') or '')) or '—'}",
-                f"Page: {int(data.get('page_idx', 0) or 0)}",
+                f"Page: {int(data.get('page_idx', 0) or 0)} / Count: {int((fp or {}).get('page_count', 0) or 0)}",
                 f"Family: {data.get('pdf_family_hint', '—')}",
                 f"Fingerprint: {fp.get('fingerprint_key', '—') or '—'}",
+                f"Anchors: {str(fp.get('anchor_signature', '') or '—')[:80]}",
             ]),
             ("Delta", [
                 f"Raw boxes: {int(delta.get('raw_count', 0) or 0)}",
@@ -8582,8 +10777,18 @@ class FormAlchemistApp(MDApp):
             return 0
         return min(idx, total - 1)
 
+    def _friendly_box_type_label(self, box_type):
+        box_type = str(box_type or "field")
+        return {
+            "check": "square option",
+            "radio": "circle option",
+            "line": "line field",
+            "field": "box field",
+            "unknown": "custom fillable",
+        }.get(box_type, box_type)
+
     def _box_type_counts(self):
-        counts = {"check": 0, "line": 0, "field": 0}
+        counts = {"check": 0, "radio": 0, "line": 0, "field": 0, "unknown": 0}
         for kind in list(getattr(self.engine, "box_types", []) or []):
             counts[str(kind)] = counts.get(str(kind), 0) + 1
         return counts
@@ -8625,6 +10830,7 @@ class FormAlchemistApp(MDApp):
             self.engine.settings["C_FillMin"] = float(self.c_fill.text)
             self.engine.settings["C_Eps"] = float(self.c_eps.text)
             self.engine.settings["Use_Extent"] = bool(getattr(self, "use_extent_chk", None).active if hasattr(self, "use_extent_chk") else int(self.use_extent.text.strip() or "0"))
+            self.engine.text_tuning = self.engine._normalized_text_tuning(getattr(self, "text_tuning_ui", None))
         except Exception as e:
             raise ValueError(f"Invalid settings input: {e}")
 
@@ -8672,6 +10878,9 @@ class FormAlchemistApp(MDApp):
             self.use_extent_chk.active = bool(s["Use_Extent"])
         elif hasattr(self, "use_extent"):
             self.use_extent.text = "1" if s["Use_Extent"] else "0"
+
+        self.text_tuning_ui = self.engine._normalized_text_tuning(getattr(self.engine, "text_tuning", None))
+        self._update_text_tuning_summary()
 
     def _apply_record_label_source_column(self, column_name, popup=None):
         column_name = str(column_name or "").strip()
@@ -9035,6 +11244,8 @@ class FormAlchemistApp(MDApp):
                 "h": float(r.height * preview_zoom),
                 "t": self.engine.box_types[i] if i < len(self.engine.box_types) else "field",
                 "mapping": self.engine.describe_box_mapping(i, page_idx),
+                "group": self.engine.describe_box_group(i),
+                "section": self.engine.describe_box_section(i),
             })
         return payload
 
@@ -9321,11 +11532,7 @@ class FormAlchemistApp(MDApp):
         self._update_selection_inspector()
         self._update_bottom_statusbar()
         try:
-            if getattr(self, "ui_mobile", False) and hasattr(self, "_show_mobile_section"):
-                current_mobile_section = str(getattr(self, "_mobile_active_section", "") or "")
-                if current_mobile_section in ("", "Files", "Session", "Detection", "Learning"):
-                    self._show_mobile_section("Selection")
-            elif hasattr(self, '_show_desktop_right_section') and platform != 'android':
+            if hasattr(self, '_show_desktop_right_section') and platform != 'android':
                 self._show_desktop_right_section('Selection')
         except Exception:
             pass
@@ -10009,7 +12216,8 @@ class FormAlchemistApp(MDApp):
             map_txt = hit.get("mapping") or "Unmapped"
             verb = "Selected" if getattr(self, "ui_mobile", False) else "Hover"
             title = f"{verb} • Box {box_id}"
-            detail = f"Type: {hit.get('t', 'field')} • Rect: {rect_txt}"
+            group_txt = str(hit.get("group", "") or "").strip()
+            detail = f"Type: {self._friendly_box_type_label(hit.get('t', 'field'))} • Rect: {rect_txt}" + (f" • {group_txt}" if group_txt else "")
             mapping = f"Mapping: {map_txt}"
         elif sel_ids:
             first = sel_ids[0]
@@ -10020,7 +12228,8 @@ class FormAlchemistApp(MDApp):
                 rect_txt = f"{int(rect.x0)},{int(rect.y0)} → {int(rect.x1)},{int(rect.y1)}"
             map_txt = self.engine.describe_box_mapping(first, self.current_page_idx())
             title = f"Selected • {len(sel_ids)} box{'es' if len(sel_ids) != 1 else ''}"
-            detail = f"Focus: {first} • {box_type} • {rect_txt}"
+            group_txt = self.engine.describe_box_group(first)
+            detail = f"Focus: {first} • {self._friendly_box_type_label(box_type)} • {rect_txt}" + (f" • {group_txt}" if group_txt else "")
             mapping = f"Mapping: {map_txt if map_txt and map_txt != 'EMPTY' else 'Unmapped'}"
         else:
             title = "Preview HUD"
@@ -10064,6 +12273,247 @@ class FormAlchemistApp(MDApp):
                 Clock.schedule_once(lambda dt, dx=pan_dx, dy=pan_dy: self._scroll_preview_by_pixels(dx, dy), 0)
         elif action == "gesture_end":
             self._schedule_preview_resync()
+
+    def _normalized_text_tuning_ui(self, tuning=None):
+        src = tuning if tuning is not None else getattr(self, "text_tuning_ui", None)
+        return self.engine._normalized_text_tuning(src if isinstance(src, dict) else None)
+
+    def _update_text_tuning_summary(self):
+        tuning = self._normalized_text_tuning_ui()
+        self.text_tuning_ui = dict(tuning)
+        preset_label = os.path.basename(DEFAULT_PROFILE_SOURCE or '').strip() or 'embedded default'
+        summary = (
+            f"FIT INSIDE • CENTERED • {'UPPERCASE' if tuning.get('uppercase', True) else 'ORIGINAL CASE'}\n"
+            f"Overall {tuning['overall_scale']:.2f} • Box {tuning['box_scale']:.2f} • Line {tuning['line_scale']:.2f} • Grid {tuning['grid_scale']:.2f}\n"
+            f"Inset X {tuning['content_inset_x']:.2f} • Inset Y {tuning['content_inset_y']:.2f} • Line height {tuning['line_expand_h_mul']:.2f}x / min {int(tuning['line_min_effective_h_px'])} px\n"
+            f"Preset base: {preset_label}"
+        )
+        lbl = getattr(self, "text_tuning_summary_lbl", None)
+        if lbl is not None:
+            lbl.text = summary
+
+    def open_text_tuning_popup(self, *_):
+        palette = getattr(self, "ui_palette", {}) or {}
+        base = self._normalized_text_tuning_ui()
+        outer = BoxLayout(orientation="vertical", spacing=dp(10), padding=[dp(14), dp(14), dp(14), dp(14)])
+        self._style_popup_card(outer, palette.get("surface", (0.085, 0.105, 0.145, 1)), radius=dp(22))
+
+        head = BoxLayout(orientation="vertical", spacing=dp(6), size_hint_y=None)
+        head.bind(minimum_height=head.setter("height"))
+        title_lbl = Label(text="Text Fit & Font Console", color=palette.get("text", (0.93, 0.96, 1.0, 1)), size_hint_y=None, height=dp(28), halign="left", valign="middle", font_size=dp(18), bold=True)
+        title_lbl.bind(size=self._sync_label_text_size)
+        self._bind_auto_height_label(title_lbl, min_height=dp(28), extra_pad=dp(4))
+        preset_hint = os.path.basename(DEFAULT_PROFILE_SOURCE or "").strip() or "embedded default"
+        sub_lbl = Label(text=f"Adjust font fitting, centering, and line height. Apply now refreshes the current preview and also affects export. Default base: {preset_hint}", color=palette.get("muted", (0.60, 0.68, 0.80, 1)), size_hint_y=None, height=dp(20), halign="left", valign="middle", font_size=dp(11))
+        sub_lbl.bind(size=self._sync_label_text_size)
+        self._bind_auto_height_label(sub_lbl, min_height=dp(20), extra_pad=dp(6))
+        head.add_widget(title_lbl)
+        head.add_widget(sub_lbl)
+        outer.add_widget(head)
+
+        scroll = ScrollView(do_scroll_x=False, do_scroll_y=True, bar_width=dp(6), bar_margin=dp(10))
+        content = GridLayout(cols=1, spacing=dp(10), size_hint_y=None)
+        content.bind(minimum_height=content.setter("height"))
+        scroll.add_widget(content)
+
+        def _slider_spec(key, label, min_v, max_v, step=0.01, decimals=2, helper="", widget_type="float"):
+            return {"key": key, "label": label, "min": min_v, "max": max_v, "step": step, "decimals": decimals, "helper": helper, "widget_type": widget_type}
+
+        groups = [
+            ("Scale", [
+                _slider_spec("overall_scale", "Overall Size", 0.60, 1.50, 0.01, 2, "Master size control used by preview and export."),
+                _slider_spec("box_scale", "Box Size", 0.60, 1.60, 0.01, 2, "How large text appears inside normal green/box fields."),
+                _slider_spec("line_scale", "Yellow Line Size", 0.60, 1.60, 0.01, 2, "How large text appears inside thin yellow answer lines."),
+                _slider_spec("grid_scale", "Grid Cell Size", 0.60, 1.40, 0.01, 2, "How large one character appears inside split/grid cells."),
+            ]),
+            ("Centering", [
+                _slider_spec("content_inset_x", "Horizontal Safe Padding", 0.00, 0.22, 0.01, 2, "Raises left/right padding so text stays inside the box."),
+                _slider_spec("content_inset_y", "Vertical Safe Padding", 0.00, 0.28, 0.01, 2, "Raises top/bottom padding so text stays clear of the box edges."),
+                _slider_spec("box_vshift", "Box Vertical Nudge", -0.30, 0.20, 0.01, 2, "Negative values move box text upward."),
+                _slider_spec("line_vshift", "Yellow Line Vertical Nudge", -0.30, 0.20, 0.01, 2, "Negative values move yellow line text upward."),
+                _slider_spec("grid_vshift", "Grid Vertical Nudge", -0.30, 0.20, 0.01, 2, "Negative values move grid-cell text upward."),
+            ]),
+            ("Yellow Line Readability", [
+                _slider_spec("line_expand_h_mul", "Yellow Height Boost", 1.00, 3.50, 0.05, 2, "Creates a virtual taller area so yellow line text can stay readable."),
+                _slider_spec("line_min_effective_h_px", "Yellow Minimum Height", 0, 80, 1, 0, "Minimum effective height in preview pixels for yellow line text.", "int"),
+            ]),
+        ]
+
+        controls = {}
+
+        def _format_slider_value(val, decimals=0, as_int=False):
+            return str(int(round(float(val)))) if as_int else f"{float(val):.{int(decimals)}f}"
+
+        def _make_slider_control(spec):
+            is_mobile = bool(getattr(self, "ui_mobile", False))
+            start_val = float(base.get(spec["key"], spec["min"]))
+            row = BoxLayout(orientation="vertical", spacing=dp(4), size_hint_y=None)
+            row.bind(minimum_height=row.setter("height"))
+            top = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint_y=None, height=dp(18 if is_mobile else 20))
+            lbl = Label(text=spec["label"], color=palette.get("text", (0.93, 0.96, 1.0, 1)), halign="left", valign="middle", font_size=dp(11))
+            lbl.bind(size=self._sync_label_text_size)
+            top.add_widget(lbl)
+            val_lbl = None
+            if not is_mobile:
+                val_lbl = Label(text=_format_slider_value(start_val, spec["decimals"], spec["widget_type"] == "int"), color=palette.get("accent", (0.10, 0.78, 0.63, 1)), halign="right", valign="middle", font_size=dp(11))
+                val_lbl.bind(size=self._sync_label_text_size)
+                top.add_widget(val_lbl)
+            slider = Slider(min=spec["min"], max=spec["max"], value=start_val, step=spec["step"], size_hint_y=None, height=dp(28 if is_mobile else 30))
+            input_widget = TextInput(
+                text=_format_slider_value(start_val, spec["decimals"], spec["widget_type"] == "int"),
+                multiline=False,
+                size_hint_y=None,
+                height=dp(28 if is_mobile else 28),
+                input_filter=("int" if spec["widget_type"] == "int" else None),
+                background_normal="",
+                background_active="",
+                background_color=palette.get("surface_soft", (0.135, 0.16, 0.215, 1)),
+                foreground_color=palette.get("text", (0.93, 0.96, 1.0, 1)),
+                cursor_color=palette.get("accent", (0.10, 0.78, 0.63, 1)),
+                padding=[dp(8), dp(6), dp(8), dp(6)],
+            )
+
+            def _sync_from_slider(_instance, value):
+                formatted = _format_slider_value(value, spec["decimals"], spec["widget_type"] == "int")
+                if val_lbl is not None:
+                    val_lbl.text = formatted
+                if input_widget.text != formatted:
+                    input_widget.text = formatted
+
+            def _sync_from_input(_instance=None):
+                try:
+                    value = float(input_widget.text.strip())
+                    value = max(float(spec["min"]), min(float(spec["max"]), value))
+                    slider.value = value
+                except Exception:
+                    pass
+
+            slider.bind(value=_sync_from_slider)
+            input_widget.bind(on_text_validate=_sync_from_input, focus=lambda inst, focused: (None if focused else _sync_from_input(inst)))
+            row.add_widget(top)
+            if is_mobile:
+                control_row = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint_y=None, height=dp(34))
+                slider.size_hint_x = 1
+                input_widget.size_hint_x = None
+                input_widget.width = dp(72)
+                control_row.add_widget(slider)
+                control_row.add_widget(input_widget)
+                row.add_widget(control_row)
+            else:
+                row.add_widget(slider)
+                row.add_widget(input_widget)
+            if spec.get("helper"):
+                helper = Label(text=spec["helper"], color=palette.get("muted", (0.60, 0.68, 0.80, 0.92)), size_hint_y=None, height=dp(16), halign="left", valign="middle", font_size=dp(9.2))
+                helper.bind(size=self._sync_label_text_size)
+                self._bind_auto_height_label(helper, min_height=dp(14), extra_pad=dp(2))
+                row.add_widget(helper)
+            controls[spec["key"]] = {"slider": slider, "input": input_widget, "spec": spec}
+            return row
+
+        for group_name, specs in groups:
+            card = GridLayout(cols=1, spacing=dp(8), size_hint_y=None, padding=[dp(12), dp(10), dp(12), dp(12)])
+            card.bind(minimum_height=card.setter("height"))
+            title = Label(text=group_name, color=palette.get("text", (0.93, 0.96, 1.0, 1)), size_hint_y=None, height=dp(18 if getattr(self, "ui_mobile", False) else 20), halign="left", valign="middle", font_size=dp(12 if getattr(self, "ui_mobile", False) else 13), bold=True)
+            title.bind(size=self._sync_label_text_size)
+            grid = GridLayout(cols=1 if getattr(self, "ui_mobile", False) else 2, spacing=dp(10), size_hint_y=None)
+            grid.bind(minimum_height=grid.setter("height"))
+            for spec in specs:
+                grid.add_widget(_make_slider_control(spec))
+            card.add_widget(title)
+            card.add_widget(grid)
+            self._style_popup_card(card, palette.get("surface_alt", (0.11, 0.135, 0.185, 1)), radius=dp(18))
+            content.add_widget(card)
+
+        uppercase_toggle = CheckBox(active=bool(base.get("uppercase", True)))
+        toggle_row = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint_y=None, height=dp(42))
+        toggle_lbl = Label(text="Force uppercase", color=palette.get("text", (0.93, 0.96, 1.0, 1)), halign="left", valign="middle", font_size=dp(11))
+        toggle_lbl.bind(size=self._sync_label_text_size)
+        toggle_row.add_widget(toggle_lbl)
+        toggle_slot = AnchorLayout(anchor_x="right", anchor_y="center", size_hint=(None, None), width=dp(56), height=dp(42), padding=(0, 0, dp(10), 0))
+        uppercase_toggle.size_hint = (None, None)
+        uppercase_toggle.size = (dp(24), dp(18))
+        toggle_slot.add_widget(uppercase_toggle)
+        toggle_row.add_widget(toggle_slot)
+        toggle_wrap = BoxLayout(orientation="vertical", spacing=dp(3), padding=[dp(10), dp(8), dp(10), dp(8)], size_hint_y=None)
+        toggle_wrap.bind(minimum_height=toggle_wrap.setter("height"))
+        self._style_popup_card(toggle_wrap, palette.get("surface_alt", (0.11, 0.135, 0.185, 1)), radius=dp(16))
+        toggle_wrap.add_widget(toggle_row)
+        toggle_help = Label(text="Keep this on if you want the whole form to stay visually uniform.", color=palette.get("muted", (0.60, 0.68, 0.80, 0.96)), halign="left", valign="middle", font_size=dp(9.5), size_hint_y=None)
+        toggle_help.bind(size=self._sync_label_text_size)
+        self._bind_auto_height_label(toggle_help, min_height=dp(18), extra_pad=dp(4))
+        toggle_wrap.add_widget(toggle_help)
+        content.add_widget(toggle_wrap)
+
+        outer.add_widget(scroll)
+
+        if getattr(self, "ui_mobile", False):
+            btn_row = BoxLayout(orientation="vertical", spacing=dp(8), size_hint_y=None)
+            btn_row.bind(minimum_height=btn_row.setter("height"))
+            top_actions = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=dp(44))
+            btn_defaults = self._make_compact_action_button("Reset", tone="ghost")
+            btn_apply = self._make_compact_action_button("Apply", tone="primary")
+            for btn in [btn_defaults, btn_apply]:
+                top_actions.add_widget(btn)
+            btn_close = self._make_compact_action_button("Close", tone="ghost")
+            btn_close.size_hint_y = None
+            btn_close.height = dp(42)
+            btn_row.add_widget(top_actions)
+            btn_row.add_widget(btn_close)
+        else:
+            btn_row = GridLayout(cols=3, spacing=dp(8), size_hint_y=None, height=dp(46))
+            btn_defaults = self._make_compact_action_button("Defaults", tone="ghost")
+            btn_apply = self._make_compact_action_button("Apply", tone="primary")
+            btn_close = self._make_compact_action_button("Close", tone="plain")
+            for btn in [btn_defaults, btn_apply, btn_close]:
+                btn_row.add_widget(btn)
+        outer.add_widget(btn_row)
+
+        popup = Popup(
+            title="",
+            separator_height=0,
+            background="",
+            background_color=(0, 0, 0, 0.80),
+            content=outer,
+            size_hint=(0.96 if getattr(self, "ui_mobile", False) else 0.86, 0.92 if getattr(self, "ui_mobile", False) else 0.88),
+            auto_dismiss=True,
+        )
+        self._bind_popup_background_softening(popup)
+
+        def _apply_text_settings(*_):
+            try:
+                updated = dict(base)
+                for key, payload in controls.items():
+                    slider = payload["slider"]
+                    spec = payload["spec"]
+                    if spec["widget_type"] == "int":
+                        updated[key] = int(round(float(slider.value)))
+                    else:
+                        updated[key] = float(slider.value)
+                updated["uppercase"] = bool(uppercase_toggle.active)
+                self.text_tuning_ui = self._normalized_text_tuning_ui(updated)
+                self.apply_ui_settings_to_engine()
+                self._update_text_tuning_summary()
+                popup.dismiss()
+                if not self.engine.pdf_path:
+                    self.set_status("Text tuning applied. Load a PDF to see the updated fit and centering.", kind="action", hold_seconds=2.0, force=True)
+                    return
+                self.set_status("Text tuning applied. Refreshing preview with the new fit and centering rules...", kind="action", hold_seconds=2.5, force=True)
+                Clock.schedule_once(lambda dt: self.on_preview(None), 0)
+            except Exception as e:
+                traceback.print_exc()
+                self.set_status(f"Text tuning error:\n{e}", kind="error", force=True)
+
+        def _restore_text_defaults(*_):
+            defaults = self._normalized_text_tuning_ui(TEXT_TUNING_DEFAULTS)
+            for key, payload in controls.items():
+                if key in defaults:
+                    payload["slider"].value = float(defaults[key])
+            uppercase_toggle.active = bool(defaults.get("uppercase", True))
+
+        btn_defaults.bind(on_release=_restore_text_defaults)
+        btn_apply.bind(on_release=_apply_text_settings)
+        btn_close.bind(on_release=lambda *_: popup.dismiss())
+        popup.open()
 
     def open_detection_settings_popup(self, *_):
         palette = getattr(self, "ui_palette", {}) or {}
@@ -10960,6 +13410,8 @@ class FormAlchemistApp(MDApp):
             "session_preview_mode": str(self._session_preview_mode(page_idx)),
             "status_kind": str(getattr(self, "_status_kind", "info") or "info"),
             "mobile_sidebar_open": bool(getattr(self, "_mobile_sidebar_open", False)),
+            "learning_auto_apply": bool(self._learning_auto_apply_enabled()),
+            "section_automation_enabled": bool(getattr(self.engine, "section_automation_enabled", True)),
         }
         if hasattr(self, "_page_selected_box_ids"):
             try:
@@ -10982,6 +13434,9 @@ class FormAlchemistApp(MDApp):
     def _reset_config_runtime_state(self):
         self.engine.all_boxes = []
         self.engine.box_types = []
+        self.engine.option_groups = []
+        self.engine.unknown_fillables = []
+        self.engine.compound_sections = []
         self.engine.geom = self.engine._empty_geom()
         self.engine.semantic_targets = self.engine._empty_semantic_targets()
         self.engine.selected_box_ids = []
@@ -10989,6 +13444,9 @@ class FormAlchemistApp(MDApp):
         self.engine.detected_settings_signature = None
         self.engine.boxes_by_page = {}
         self.engine.box_types_by_page = {}
+        self.engine.option_groups_by_page = {}
+        self.engine.unknown_fillables_by_page = {}
+        self.engine.compound_sections_by_page = {}
         self.engine.geom_by_page = {}
         self.engine.semantic_targets_by_page = {}
         self.engine.boxes_settings_signature_by_page = {}
@@ -11105,6 +13563,20 @@ class FormAlchemistApp(MDApp):
         selected_record_label = str(ui_state.get("selected_record_label", cfg.get("selected_record_label", "") if isinstance(cfg, dict) else "") or "").strip()
         selected_record_key = str(ui_state.get("selected_record_key", cfg.get("selected_record_key", "") if isinstance(cfg, dict) else "") or "").strip()
         restored_record_label_source = str(ui_state.get("record_label_source_column", cfg.get("record_label_source_column", "") if isinstance(cfg, dict) else "") or "").strip()
+        restored_learning_auto_apply = bool(ui_state.get("learning_auto_apply", True))
+        restored_section_automation_enabled = bool(ui_state.get("section_automation_enabled", True))
+        self.learning_auto_apply = restored_learning_auto_apply
+        try:
+            self.engine.section_automation_enabled = restored_section_automation_enabled
+        except Exception:
+            pass
+        if hasattr(self, "learning_auto_apply_chk"):
+            try:
+                self.learning_auto_apply_chk.unbind(active=self.on_learning_auto_apply_change)
+            except Exception:
+                pass
+            self.learning_auto_apply_chk.active = restored_learning_auto_apply
+            self.learning_auto_apply_chk.bind(active=self.on_learning_auto_apply_change)
         if restored_record_label_source and getattr(self.engine, "df", None) is not None and not self.engine.df.empty and restored_record_label_source in list(self.engine.df.columns):
             try:
                 self.engine.rebuild_record_labels(source_column=restored_record_label_source)
@@ -11287,9 +13759,12 @@ class FormAlchemistApp(MDApp):
             self.apply_ui_settings_to_engine()
             page_idx = self.current_page_idx()
             prev_count = len(getattr(self.engine, "all_boxes", []) or []) if getattr(self.engine, "detected_page_idx", None) == page_idx else 0
-            ctx = self.engine.prepare_learning_for_detection(page_idx=page_idx, allow_profile_apply=False)
+            auto_apply = self._learning_auto_apply_enabled()
+            ctx = self.engine.prepare_learning_for_detection(page_idx=page_idx, allow_profile_apply=auto_apply)
             profile_applied = bool((ctx or {}).get("profile_applied", False))
             profile_matched = bool((ctx or {}).get("matched_profile"))
+            if profile_applied:
+                self.push_engine_settings_to_ui()
             self.engine.invalidate_detection_cache(page_idx=page_idx, clear_current=True)
             self.engine.run_detection(page_idx=page_idx)
             self.engine.finalize_learning_after_detection(page_idx=page_idx)
@@ -11302,11 +13777,20 @@ class FormAlchemistApp(MDApp):
                 profile_msg = "\nLearned profile: matched but skipped (manual tuning kept)"
             else:
                 profile_msg = "\nLearned profile: no match"
+            contextual_sections = sum(
+                1 for s in list(getattr(self.engine, 'compound_sections', []) or [])
+                if str((s or {}).get('label_text', '') or '').strip()
+            )
             summary = (
                 f"Detection done.\n"
                 f"Page: {page_idx}\n"
                 f"Boxes: {prev_count} -> {len(self.engine.all_boxes)}"
                 f"\nChecks: {counts.get('check', 0)}"
+                f"\nCircles: {counts.get('radio', 0)}"
+                f"\nOption Groups: {len(getattr(self.engine, 'option_groups', []) or [])}"
+                f"\nCompound Sections: {len(getattr(self.engine, 'compound_sections', []) or [])}"
+                f"\nContext-Labeled Sections: {contextual_sections}"
+                f"\nUnknown / Custom: {counts.get('unknown', 0)}"
                 f"\nLines: {counts.get('line', 0)}"
                 f"\nFields: {counts.get('field', 0)}"
                 f"\nCache: refreshed{profile_msg}"
@@ -11325,6 +13809,109 @@ class FormAlchemistApp(MDApp):
         except Exception as e:
             traceback.print_exc()
             self.set_status(f"Preview error:\n{e}")
+
+    def on_section_automation_toggle(self, instance, value):
+        try:
+            self.engine.section_automation_enabled = bool(value)
+            self._persist_runtime_session_state(current_page_idx=self.current_page_idx())
+            self.set_status("Section helpers enabled." if bool(value) else "Section helpers disabled.")
+        except Exception as e:
+            self.set_status(f"Section helper toggle error:\n{e}", kind="error", force=True)
+
+    def _selected_section_context(self):
+        ids = sorted(set(int(x) for x in getattr(self.engine, "selected_box_ids", []) if isinstance(x, int) or str(x).isdigit()))
+        if not ids:
+            return None, None
+        first = ids[0]
+        section = self.engine.get_compound_section_for_box(first)
+        return first, section
+
+    def on_section_assist(self, instance):
+        try:
+            first, section = self._selected_section_context()
+            if first is None or not section:
+                self.set_status("Select a box inside a recognized section first.")
+                return
+            page_idx = self.current_page_idx()
+            columns = []
+            try:
+                columns = [str(c) for c in list(getattr(self.engine, 'df', None).columns)] if getattr(self.engine, 'df', None) is not None else []
+            except Exception:
+                columns = []
+            palette = getattr(self, 'theme_palette', {}) or {}
+            popup_body = BoxLayout(orientation='vertical', spacing=dp(8), padding=[dp(12), dp(12), dp(12), dp(12)])
+            title = Label(text='Section Assist', color=palette.get('text', (1,1,1,1)), size_hint_y=None, height=dp(24), halign='left', valign='middle', font_size=dp(15), bold=True)
+            title.bind(size=self._sync_label_text_size)
+            popup_body.add_widget(title)
+            section_desc = self.engine.describe_box_section(first) or 'Section detected'
+            desc_lbl = Label(text=section_desc, color=palette.get('muted', (0.8,0.8,0.8,1)), size_hint_y=None, halign='left', valign='middle', font_size=dp(11))
+            desc_lbl.bind(size=self._sync_label_text_size)
+            self._bind_auto_height_label(desc_lbl, min_height=dp(34), extra_pad=dp(4))
+            popup_body.add_widget(desc_lbl)
+            sugg_lbl = Label(text='', color=palette.get('text', (1,1,1,1)), size_hint_y=None, halign='left', valign='top', font_size=dp(11))
+            sugg_lbl.bind(size=self._sync_label_text_size)
+            self._bind_auto_height_label(sugg_lbl, min_height=dp(78), extra_pad=dp(6))
+            popup_body.add_widget(sugg_lbl)
+            toggle_row = BoxLayout(orientation='horizontal', spacing=dp(8), size_hint_y=None, height=dp(40))
+            chk = CheckBox(active=bool(getattr(self.engine, 'section_automation_enabled', True)))
+            def _toggle_local(_, value):
+                self.engine.section_automation_enabled = bool(value)
+                if hasattr(self, 'section_auto_chk') and self.section_auto_chk is not None:
+                    try:
+                        self.section_auto_chk.unbind(active=self.on_section_automation_toggle)
+                    except Exception:
+                        pass
+                    self.section_auto_chk.active = bool(value)
+                    self.section_auto_chk.bind(active=self.on_section_automation_toggle)
+            chk.bind(active=_toggle_local)
+            toggle_row.add_widget(chk)
+            toggle_row.add_widget(Label(text='Enable section helpers for preview/export', color=palette.get('text', (1,1,1,1)), halign='left', valign='middle', font_size=dp(11)))
+            popup_body.add_widget(toggle_row)
+
+            btn_row = GridLayout(cols=1 if getattr(self, 'ui_mobile', False) else 3, spacing=dp(8), size_hint_y=None, height=dp(128) if getattr(self, 'ui_mobile', False) else dp(42))
+            btn_refresh = Button(text='Refresh Suggestions', size_hint_y=None, height=dp(42), background_normal='', background_color=palette.get('surface_alt', (0.2,0.2,0.2,1)), color=palette.get('text', (1,1,1,1)))
+            btn_apply = Button(text='Auto-Link Unmapped Fields', size_hint_y=None, height=dp(42), background_normal='', background_color=palette.get('primary', (0.2,0.6,0.9,1)), color=(1,1,1,1))
+            btn_close = Button(text='Close', size_hint_y=None, height=dp(42), background_normal='', background_color=palette.get('surface_alt', (0.2,0.2,0.2,1)), color=palette.get('text', (1,1,1,1)))
+            btn_row.add_widget(btn_refresh)
+            btn_row.add_widget(btn_apply)
+            btn_row.add_widget(btn_close)
+            popup_body.add_widget(btn_row)
+            popup = Popup(title='', content=popup_body, size_hint=(0.92, 0.82) if getattr(self, 'ui_mobile', False) else (0.74, 0.72), auto_dismiss=True)
+
+            def _render_suggestions(*_):
+                suggestions = self.engine.preview_section_auto_links(section, page_idx=page_idx, available_columns=columns)
+                action_hints = self.engine.get_section_action_suggestions(first)
+                lines = []
+                if action_hints:
+                    lines.append('Hints: ' + ' | '.join(action_hints))
+                if suggestions:
+                    lines.append('Suggested auto-links:')
+                    for item in suggestions[:8]:
+                        lines.append(f"• Box {item.get('box_idx')} → {item.get('column')}  (score {item.get('score', 0):.1f})")
+                else:
+                    lines.append('No safe auto-links found for this section yet.')
+                sugg_lbl.text = '\n'.join(lines)
+
+            def _apply_links(*_):
+                result = self.engine.apply_section_auto_links(section, page_idx=page_idx, available_columns=columns)
+                applied = int(result.get('applied', 0))
+                suggested = int(result.get('suggested', 0))
+                errs = list(result.get('errors', []) or [])
+                self._sync_box_selection_ui()
+                self.on_preview(None)
+                self._persist_runtime_session_state(current_page_idx=page_idx)
+                extra = ('\nErrors: ' + '; '.join(errs)) if errs else ''
+                self.set_status(f"Section assist finished. Applied {applied} of {suggested} suggested links.{extra}")
+                _render_suggestions()
+
+            btn_refresh.bind(on_release=_render_suggestions)
+            btn_apply.bind(on_release=_apply_links)
+            btn_close.bind(on_release=lambda *_: popup.dismiss())
+            _render_suggestions()
+            popup.open()
+        except Exception as e:
+            traceback.print_exc()
+            self.set_status(f"Section assist error:\n{e}", kind="error", force=True)
 
     def on_assign_mapping(self, instance):
         try:
