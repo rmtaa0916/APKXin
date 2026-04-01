@@ -128,49 +128,6 @@ class RectCompat:
     def __repr__(self):
         return f"RectCompat({self.x0}, {self.y0}, {self.x1}, {self.y1})"
 
-    @property
-    def is_empty(self):
-        return self.width <= 0 or self.height <= 0
-
-    def get_area(self):
-        if self.is_empty:
-            return 0.0
-        return float(self.width * self.height)
-
-    def intersect(self, other):
-        other = RectCompat(other)
-        x0 = max(self.x0, other.x0)
-        y0 = max(self.y0, other.y0)
-        x1 = min(self.x1, other.x1)
-        y1 = min(self.y1, other.y1)
-        if x1 <= x0 or y1 <= y0:
-            return RectCompat(0.0, 0.0, 0.0, 0.0)
-        return RectCompat(x0, y0, x1, y1)
-
-    def __and__(self, other):
-        return self.intersect(other)
-
-    def union(self, other):
-        other = RectCompat(other)
-        if self.is_empty:
-            return RectCompat(other)
-        if other.is_empty:
-            return RectCompat(self)
-        return RectCompat(
-            min(self.x0, other.x0),
-            min(self.y0, other.y0),
-            max(self.x1, other.x1),
-            max(self.y1, other.y1),
-        )
-
-    def __or__(self, other):
-        return self.union(other)
-
-    def __ior__(self, other):
-        u = self.union(other)
-        self.x0, self.y0, self.x1, self.y1 = u.x0, u.y0, u.x1, u.y1
-        return self
-
 if fitz is None:
     fitz = SimpleNamespace(Rect=RectCompat)
 elif not hasattr(fitz, "Rect"):
@@ -1012,7 +969,7 @@ else:
     ZOOM = 4.0
     PREVIEW_SCALE = 2.2
 
-DEFAULTS_BASE = {
+DEFAULTS = {
     "F_Area": 500,
     "F_MinW": 15,
     "F_MinH": 35,
@@ -1037,7 +994,7 @@ DEFAULTS_BASE = {
     "Grid_N": 1,
 }
 
-TEXT_TUNING_DEFAULTS_BASE = {
+TEXT_TUNING_DEFAULTS = {
     "uppercase": True,
     "overall_scale": 0.92,
     "box_scale": 1.00,
@@ -1052,118 +1009,13 @@ TEXT_TUNING_DEFAULTS_BASE = {
     "line_min_effective_h_px": 28,
 }
 
-EMBEDDED_DEFAULT_PROFILE = {
-    "version": 7,
-    "text_tuning": {
-        "uppercase": True,
-        "overall_scale": 0.71,
-        "box_scale": 1.0,
-        "line_scale": 0.6,
-        "grid_scale": 0.92,
-        "content_inset_x": 0.22,
-        "content_inset_y": 0.26,
-        "box_vshift": 0.0,
-        "line_vshift": 0.0,
-        "grid_vshift": 0.0,
-        "line_expand_h_mul": 1.95,
-        "line_min_effective_h_px": 12,
-    },
-    "defaults": {
-        "F_Area": 500,
-        "F_MinW": 15,
-        "F_MinH": 35,
-        "F_Close": 1,
-        "Line_MinW": 100,
-        "Line_MaxW": 1680,
-        "C_Strict": 40,
-        "C_Size": [14, 65],
-        "C_Border": 0.1,
-        "C_Inner": 0.4,
-        "ROI_Max": 200,
-        "C_Open": 1,
-        "C_Close": 0,
-        "C_BandPct": 0.18,
-        "C_AspectTol": 0.1,
-        "Ext_Low": 0.04,
-        "Ext_High": 0.6,
-        "C_FillMin": 0.45,
-        "C_Eps": 0.04,
-        "Use_Extent": False,
-        "Is_Grid": False,
-        "Grid_N": 1,
-    },
+CANDIDATE_TUNING_DEFAULTS = {
+    "min_candidate_score": 0.34,
+    "moderate_score": 0.58,
+    "strong_score": 0.76,
+    "auto_check_add_score": 0.58,
+    "auto_check_remove_score": 0.76,
 }
-
-
-def _candidate_default_profile_paths():
-    roots = []
-    try:
-        roots.append(os.path.dirname(os.path.abspath(__file__)))
-    except Exception:
-        pass
-    try:
-        roots.append(os.getcwd())
-    except Exception:
-        pass
-    roots.append('/mnt/data')
-
-    seen = set()
-    ordered_roots = []
-    for root in roots:
-        root = str(root or '').strip()
-        if root and root not in seen:
-            seen.add(root)
-            ordered_roots.append(root)
-
-    names = ['default_profile.json', 'TESTMAPPING.json', CONFIG_FILENAME]
-    paths = []
-    for root in ordered_roots:
-        for name in names:
-            candidate = os.path.join(root, name)
-            if candidate not in paths:
-                paths.append(candidate)
-    return paths
-
-
-def _load_builtin_default_profile():
-    for path in _candidate_default_profile_paths():
-        try:
-            if not os.path.exists(path):
-                continue
-            with open(path, 'r', encoding='utf-8') as fh:
-                payload = json.load(fh)
-            if isinstance(payload, dict) and (isinstance(payload.get('text_tuning'), dict) or isinstance(payload.get('defaults'), dict)):
-                payload = dict(payload)
-                payload['_source_path'] = path
-                payload['_source_kind'] = 'file'
-                return payload
-        except Exception:
-            continue
-    payload = dict(EMBEDDED_DEFAULT_PROFILE)
-    payload['_source_path'] = 'embedded:TESTMAPPING'
-    payload['_source_kind'] = 'embedded'
-    return payload
-
-
-def _merge_defaults(base_defaults, override_defaults):
-    merged = dict(base_defaults or {})
-    if not isinstance(override_defaults, dict):
-        return merged
-    for key, value in override_defaults.items():
-        if key not in merged:
-            continue
-        if key == 'C_Size' and isinstance(value, (list, tuple)) and len(value) == 2:
-            merged[key] = (int(value[0]), int(value[1]))
-        else:
-            merged[key] = value
-    return merged
-
-
-BUILTIN_DEFAULT_PROFILE = _load_builtin_default_profile()
-DEFAULT_PROFILE_SOURCE = str(BUILTIN_DEFAULT_PROFILE.get('_source_path', '') or '')
-DEFAULT_PROFILE_SOURCE_KIND = str(BUILTIN_DEFAULT_PROFILE.get('_source_kind', '') or '')
-DEFAULTS = _merge_defaults(DEFAULTS_BASE, BUILTIN_DEFAULT_PROFILE.get('defaults', {}))
-TEXT_TUNING_DEFAULTS = _merge_defaults(TEXT_TUNING_DEFAULTS_BASE, BUILTIN_DEFAULT_PROFILE.get('text_tuning', {}))
 
 
 DETECTION_UI_META = {
@@ -2020,31 +1872,31 @@ class FormAlchemistEngine:
         self.geom = {"names": [], "dob": [], "phil": []}
         self.all_boxes = []
         self.box_types = []
-        self.option_groups = []
-        self.unknown_fillables = []
-        self.compound_sections = []
-        self.option_groups = []
-        self.option_groups_by_page = {}
-        self.unknown_fillables = []
-        self.unknown_fillables_by_page = {}
-        self.compound_sections = []
-        self.compound_sections_by_page = {}
         self.custom_mappings = {}
         self.selected_box_ids = []
 
         self.settings = dict(DEFAULTS)
         self.settings["C_Size"] = list(DEFAULTS["C_Size"])
         self.text_tuning = dict(TEXT_TUNING_DEFAULTS)
+        self.candidate_tuning = dict(CANDIDATE_TUNING_DEFAULTS)
         self.pdf_source = PdfPageSource()
         self.detected_page_idx = None
         self.detected_settings_signature = None
         self.boxes_by_page = {}
         self.box_types_by_page = {}
-        self.option_groups_by_page = {}
-        self.unknown_fillables_by_page = {}
-        self.compound_sections_by_page = {}
         self.geom_by_page = {}
         self.boxes_settings_signature_by_page = {}
+        self.candidate_boxes_by_page = {}
+        self.candidate_types_by_page = {}
+        self.candidate_scores_by_page = {}
+        self.candidate_sources_by_page = {}
+        self.candidate_review_state_by_page = {}
+        self.candidate_meta_by_page = {}
+        self.candidate_payloads_by_scope = {}
+        self.area_templates_by_page = {}
+        self.area_template_match_cache = {}
+        self.area_template_match_review_state = {}
+        self.area_template_index = {}
 
         self.learning_storage = LearningStorage(app_name="form_alchemist")
         self.learning_enabled = True
@@ -2059,7 +1911,6 @@ class FormAlchemistEngine:
         self.semantic_targets = self._empty_semantic_targets()
         self.semantic_targets_by_page = {}
         self.semantic_target_overrides = {}
-        self.section_automation_enabled = True
 
     def _normalized_text_tuning(self, tuning=None):
         base = dict(TEXT_TUNING_DEFAULTS)
@@ -2113,6 +1964,860 @@ class FormAlchemistEngine:
         base["line_expand_h_mul"] = _to_float(base.get("line_expand_h_mul", 2.10), 2.10, 1.00, 3.50)
         base["line_min_effective_h_px"] = _to_int(base.get("line_min_effective_h_px", 28), 28, 0, 80)
         return base
+
+    def _normalized_candidate_tuning(self, tuning=None):
+        base = dict(CANDIDATE_TUNING_DEFAULTS)
+        if isinstance(tuning, dict):
+            for key, value in tuning.items():
+                if key in base:
+                    base[key] = value
+
+        def _to_float(value, default, lo=None, hi=None):
+            try:
+                out = float(value)
+            except Exception:
+                out = float(default)
+            if lo is not None:
+                out = max(float(lo), out)
+            if hi is not None:
+                out = min(float(hi), out)
+            return float(out)
+
+        base["min_candidate_score"] = _to_float(base.get("min_candidate_score", 0.34), 0.34, 0.0, 0.95)
+        base["moderate_score"] = _to_float(base.get("moderate_score", 0.58), 0.58, 0.0, 0.98)
+        base["strong_score"] = _to_float(base.get("strong_score", 0.76), 0.76, 0.0, 0.99)
+        if base["strong_score"] < base["moderate_score"]:
+            base["strong_score"] = base["moderate_score"]
+        base["auto_check_add_score"] = _to_float(base.get("auto_check_add_score", 0.58), 0.58, 0.0, 0.99)
+        base["auto_check_remove_score"] = _to_float(base.get("auto_check_remove_score", 0.76), 0.76, 0.0, 0.99)
+        return base
+
+    def get_candidate_tuning(self):
+        tuning = getattr(self, "candidate_tuning", None)
+        normalized = self._normalized_candidate_tuning(tuning)
+        self.candidate_tuning = dict(normalized)
+        return normalized
+
+    def _serialize_area_templates(self):
+        payload = {}
+        for page_key, items in (getattr(self, 'area_templates_by_page', {}) or {}).items():
+            serial = []
+            for item in (items or []):
+                if not isinstance(item, dict):
+                    continue
+                serial.append({
+                    'template_id': str(item.get('template_id', '') or ''),
+                    'page': int(item.get('page', page_key) or page_key),
+                    'source_rect': self._serialize_rect(item.get('source_rect')) if item.get('source_rect') is not None else None,
+                    'resolved_rects': self._serialize_rects(item.get('resolved_rects', [])),
+                    'resolved_types': list(item.get('resolved_types', []) or []),
+                    'needs_split': bool(item.get('needs_split', False)),
+                    'template_kind': str(item.get('template_kind', '') or ''),
+                    'split_count': int(item.get('split_count', 0) or 0),
+                    'source_text_overlap': float(item.get('source_text_overlap', 0.0) or 0.0),
+                    'features': dict(item.get('features', {}) or {}),
+                    'created_at': str(item.get('created_at', '') or ''),
+                })
+            if serial:
+                payload[str(int(page_key))] = serial
+        return payload
+
+    def _deserialize_area_templates(self, payload):
+        self.area_templates_by_page = {}
+        self.area_template_index = {}
+        self.area_template_match_cache = {}
+        self.area_template_match_review_state = {}
+        if not isinstance(payload, dict):
+            return
+        for page_key, items in payload.items():
+            try:
+                page_idx = int(page_key)
+            except Exception:
+                continue
+            page_items = []
+            for item in (items or []):
+                if not isinstance(item, dict):
+                    continue
+                source_rect = item.get('source_rect')
+                try:
+                    source_rect = fitz.Rect(source_rect) if source_rect is not None else None
+                except Exception:
+                    source_rect = None
+                resolved_rects = []
+                for rect in (item.get('resolved_rects', []) or []):
+                    try:
+                        resolved_rects.append(fitz.Rect(rect))
+                    except Exception:
+                        pass
+                template = {
+                    'template_id': str(item.get('template_id', '') or uuid.uuid4().hex[:12]),
+                    'page': page_idx,
+                    'source_rect': source_rect,
+                    'resolved_rects': resolved_rects,
+                    'resolved_types': [str(v) for v in (item.get('resolved_types', []) or [])],
+                    'needs_split': bool(item.get('needs_split', False)),
+                    'template_kind': str(item.get('template_kind', '') or ''),
+                    'split_count': int(item.get('split_count', len(resolved_rects)) or len(resolved_rects)),
+                    'source_text_overlap': float(item.get('source_text_overlap', 0.0) or 0.0),
+                    'features': dict(item.get('features', {}) or {}),
+                    'created_at': str(item.get('created_at', '') or _utc_now_iso()),
+                }
+                page_items.append(template)
+                self.area_template_index[template['template_id']] = template
+            if page_items:
+                self.area_templates_by_page[page_idx] = page_items
+
+    def analyze_manual_area_template(self, page_idx, source_rect):
+        page_idx = int(page_idx or 0)
+        source_rect = source_rect if isinstance(source_rect, fitz.Rect) else fitz.Rect(source_rect)
+        if source_rect.width <= 2 or source_rect.height <= 2:
+            return None
+        img = self._render_pdf_page_bgr(self.pdf_path, page_idx=page_idx, preview_zoom=ZOOM)
+        if img is None or getattr(img, 'size', 0) == 0:
+            return None
+        h_img, w_img = img.shape[:2]
+        x0 = max(0, min(int(math.floor(source_rect.x0 * ZOOM)), w_img - 1))
+        y0 = max(0, min(int(math.floor(source_rect.y0 * ZOOM)), h_img - 1))
+        x1 = max(x0 + 1, min(int(math.ceil(source_rect.x1 * ZOOM)), w_img))
+        y1 = max(y0 + 1, min(int(math.ceil(source_rect.y1 * ZOOM)), h_img))
+        crop = img[y0:y1, x0:x1].copy()
+        if crop.size == 0:
+            return None
+        text_mask, _ = self.build_text_like_mask(crop, header_band_pct=0.10)
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        base_bin = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
+        field_close_k = max(0, int(self.settings.get('F_Close', 1) or 0))
+        bin_fields = cv2.morphologyEx(base_bin, cv2.MORPH_CLOSE, np.ones((field_close_k, field_close_k), np.uint8)) if field_close_k > 0 else base_bin
+        bin_checks = base_bin.copy()
+        red_close_k = max(0, int(self.settings.get('C_Close', 0) or 0))
+        red_open_k = max(0, int(self.settings.get('C_Open', 1) or 0))
+        if red_close_k > 0:
+            bin_checks = cv2.morphologyEx(bin_checks, cv2.MORPH_CLOSE, np.ones((red_close_k, red_close_k), np.uint8))
+        if red_open_k > 0:
+            bin_checks = cv2.morphologyEx(bin_checks, cv2.MORPH_OPEN, np.ones((red_open_k, red_open_k), np.uint8))
+
+        local_rects = []
+        local_types = []
+        # lines
+        min_line_w = max(18, min(int(self.settings.get('Line_MinW', 100) or 100), int(crop.shape[1] * 0.85)))
+        max_line_w = max(min_line_w + 8, int(crop.shape[1] * 0.98))
+        for lr in self.find_answer_lines(crop, zoom_factor=1.0, min_line_w=min_line_w, max_line_w=max_line_w):
+            local_rect = fitz.Rect(lr)
+            rect = fitz.Rect(local_rect.x0 + x0, local_rect.y0 + y0, local_rect.x1 + x0, local_rect.y1 + y0)
+            if not self.should_suppress_text_like_rect(local_rect, text_mask, preview_zoom=1.0, header_cut=int(crop.shape[0] * 0.08), overlap_thresh=0.18):
+                local_rects.append(rect)
+                local_types.append('line')
+        # checks
+        nf, _, stats, _ = cv2.connectedComponentsWithStats(bin_checks)
+        checkbox_min_sz = max(7, int(self.settings.get('C_Size', [14,65])[0]) - 5)
+        checkbox_max_sz = int(self.settings.get('C_Size', [14,65])[1])
+        for i in range(1, nf):
+            xx, yy, ww, hh, area = stats[i]
+            if not (checkbox_min_sz <= ww <= checkbox_max_sz and checkbox_min_sz <= hh <= checkbox_max_sz):
+                continue
+            if self.looks_like_checkbox(bin_checks, xx, yy, ww, hh, area):
+                local_rect = fitz.Rect(xx, yy, xx + ww, yy + hh)
+                rect = fitz.Rect((xx + x0), (yy + y0), (xx + ww + x0), (yy + hh + y0))
+                if not self.should_suppress_text_like_rect(local_rect, text_mask, preview_zoom=1.0, header_cut=int(crop.shape[0] * 0.08), overlap_thresh=0.22):
+                    local_rects.append(rect)
+                    local_types.append('check')
+        # fields
+        nf2, _, stats2, _ = cv2.connectedComponentsWithStats(bin_fields)
+        field_area_thresh = max(30, int(self.settings.get('F_Area', 500) or 500) // 3)
+        field_min_w = max(8, int(self.settings.get('F_MinW', 15) or 15))
+        field_min_h = max(10, int(self.settings.get('F_MinH', 35) or 35) // 2)
+        for i in range(1, nf2):
+            xx, yy, ww, hh, area = stats2[i]
+            if hh < field_min_h or ww < field_min_w or area < field_area_thresh:
+                continue
+            if ww >= crop.shape[1] * 0.96 or hh >= crop.shape[0] * 0.90:
+                continue
+            refined = self._refine_field_rect_from_mask(bin_fields, xx, yy, ww, hh, zoom_factor=1.0, row_frac_thresh=0.40, col_frac_thresh=0.14, min_inner_h=max(8, field_min_h // 2), pad_px=1)
+            local_rect = fitz.Rect(refined)
+            rect = fitz.Rect(local_rect.x0 + x0, local_rect.y0 + y0, local_rect.x1 + x0, local_rect.y1 + y0)
+            if not self.should_suppress_text_like_rect(local_rect, text_mask, preview_zoom=1.0, header_cut=int(crop.shape[0] * 0.08), overlap_thresh=0.16):
+                local_rects.append(rect)
+                local_types.append('field')
+
+        # dedupe/local cleanup
+        dedup_rects = []
+        dedup_types = []
+        for rect, kind in sorted(zip(local_rects, local_types), key=lambda rt: (rt[0].y0, rt[0].x0, rt[0].width * rt[0].height)):
+            duplicate = False
+            for ex_rect, ex_kind in zip(dedup_rects, dedup_types):
+                if ex_kind != kind:
+                    continue
+                if self._rect_iou(rect, ex_rect) >= 0.60 or self._rects_refer_to_same_target(rect, ex_rect, tol=0.60):
+                    duplicate = True
+                    break
+            if not duplicate:
+                dedup_rects.append(rect)
+                dedup_types.append(kind)
+
+        source_text_overlap = 0.0
+        try:
+            source_text_overlap = float(self.rect_text_overlap_ratio(fitz.Rect(0, 0, max(1, x1 - x0), max(1, y1 - y0)), text_mask, preview_zoom=1.0) or 0.0)
+        except Exception:
+            source_text_overlap = 0.0
+
+        union_cover = 0.0
+        if dedup_rects:
+            union = fitz.Rect(min(r.x0 for r in dedup_rects), min(r.y0 for r in dedup_rects), max(r.x1 for r in dedup_rects), max(r.y1 for r in dedup_rects))
+            union_cover = (union.width * union.height) / float(max(source_rect.width * ZOOM * source_rect.height * ZOOM, 1.0))
+        needs_split = len(dedup_rects) >= 2
+        if len(dedup_rects) <= 0:
+            resolved_rects = [fitz.Rect(source_rect)]
+            resolved_types = ['field']
+        elif needs_split:
+            resolved_rects = [fitz.Rect(r.x0 / ZOOM, r.y0 / ZOOM, r.x1 / ZOOM, r.y1 / ZOOM) for r in dedup_rects]
+            resolved_types = list(dedup_types)
+        else:
+            resolved_rects = [fitz.Rect(source_rect)]
+            resolved_types = [dedup_types[0] if dedup_types else 'field']
+        type_counts = {}
+        for kind in resolved_types:
+            type_counts[kind] = int(type_counts.get(kind, 0) or 0) + 1
+        template_kind = max(type_counts, key=type_counts.get) if type_counts else 'field'
+        if needs_split:
+            template_kind = f"split_{template_kind}"
+        return {
+            'page': page_idx,
+            'source_rect': fitz.Rect(source_rect),
+            'resolved_rects': resolved_rects,
+            'resolved_types': resolved_types,
+            'needs_split': bool(needs_split),
+            'split_count': len(resolved_rects),
+            'template_kind': template_kind,
+            'source_text_overlap': float(round(source_text_overlap, 6)),
+            'features': {
+                'crop_width_px': int(crop.shape[1]),
+                'crop_height_px': int(crop.shape[0]),
+                'raw_internal_count': int(len(dedup_rects)),
+                'union_cover_ratio': float(round(union_cover, 6)),
+                'type_counts': type_counts,
+            },
+        }
+
+    def _page_detection_cache_token(self, page_idx):
+        try:
+            page_idx = int(page_idx or 0)
+        except Exception:
+            page_idx = 0
+        if int(getattr(self, 'detected_page_idx', -1) or -1) == page_idx and bool(getattr(self, 'all_boxes', []) or []):
+            boxes = list(getattr(self, 'all_boxes', []) or [])
+            types = list(getattr(self, 'box_types', []) or [])
+        else:
+            boxes = list((getattr(self, 'boxes_by_page', {}) or {}).get(page_idx, []) or [])
+            types = list((getattr(self, 'box_types_by_page', {}) or {}).get(page_idx, []) or [])
+        payload = {
+            'page': int(page_idx),
+            'boxes': [self._serialize_rect(r) for r in boxes],
+            'types': [str(t) for t in types],
+            'settings_signature': str(self._settings_signature() or ''),
+        }
+        return _sha1_json(payload)
+
+    def _area_template_match_scope_key(self, page_idx, template_id):
+        try:
+            page_idx = int(page_idx or 0)
+        except Exception:
+            page_idx = 0
+        sig = str(self._settings_signature() or '')
+        detect_token = self._page_detection_cache_token(page_idx)
+        return f"{page_idx}|{str(template_id or '').strip()}|{sig}|{detect_token}"
+
+    def cache_area_template_matches(self, page_idx, template_id, matches):
+        key = self._area_template_match_scope_key(page_idx, template_id)
+        payload = []
+        for item in (matches or []):
+            if not isinstance(item, dict):
+                continue
+            payload.append({
+                'match_id': str(item.get('match_id', '') or ''),
+                'template_id': str(item.get('template_id', '') or ''),
+                'page': int(item.get('page', page_idx) or page_idx),
+                'rect': self._serialize_rect(item.get('rect')) if item.get('rect') is not None else None,
+                'score': float(item.get('score', 0.0) or 0.0),
+                'reason': str(item.get('reason', '') or ''),
+                'resolved_rects': self._serialize_rects(item.get('resolved_rects', []) or []),
+                'resolved_types': [str(v) for v in (item.get('resolved_types', []) or [])],
+                'split_count': int(item.get('split_count', 0) or 0),
+            })
+        self.area_template_match_cache[key] = payload
+        return key
+
+    def get_cached_area_template_matches(self, page_idx, template_id):
+        key = self._area_template_match_scope_key(page_idx, template_id)
+        payload = list((self.area_template_match_cache or {}).get(key, []) or [])
+        matches = []
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            matches.append({
+                'match_id': str(item.get('match_id', '') or ''),
+                'template_id': str(item.get('template_id', '') or ''),
+                'page': int(item.get('page', page_idx) or page_idx),
+                'rect': fitz.Rect(item.get('rect')) if item.get('rect') is not None else None,
+                'score': float(item.get('score', 0.0) or 0.0),
+                'reason': str(item.get('reason', '') or ''),
+                'resolved_rects': [fitz.Rect(r) for r in (item.get('resolved_rects', []) or [])],
+                'resolved_types': [str(v) for v in (item.get('resolved_types', []) or [])],
+                'split_count': int(item.get('split_count', 0) or 0),
+            })
+        return matches
+
+    def update_area_template_match_review_state(self, page_idx, template_id, review_state=None):
+        key = self._area_template_match_scope_key(page_idx, template_id)
+        state = {}
+        for rk, rv in dict(review_state or {}).items():
+            state[str(rk)] = bool(rv)
+        self.area_template_match_review_state[key] = state
+        return state
+
+    def get_area_template_match_review_state(self, page_idx, template_id):
+        key = self._area_template_match_scope_key(page_idx, template_id)
+        return dict((self.area_template_match_review_state or {}).get(key, {}) or {})
+
+    def invalidate_area_template_match_cache(self, page_idx=None, template_id=None):
+        cache = dict(getattr(self, 'area_template_match_cache', {}) or {})
+        review = dict(getattr(self, 'area_template_match_review_state', {}) or {})
+        if page_idx is None and not str(template_id or '').strip():
+            self.area_template_match_cache = {}
+            self.area_template_match_review_state = {}
+            return
+        try:
+            page_idx_norm = None if page_idx is None else int(page_idx)
+        except Exception:
+            page_idx_norm = None
+        template_norm = str(template_id or '').strip()
+        def _keep(scope_key):
+            parts = str(scope_key or '').split('|')
+            key_page_raw = parts[0] if parts else ''
+            try:
+                key_page = int(key_page_raw)
+            except Exception:
+                key_page = None
+            key_template = parts[1] if len(parts) > 1 else ''
+            if page_idx_norm is not None and key_page_raw != 'FORM' and key_page != page_idx_norm:
+                return True
+            if template_norm and key_template != template_norm:
+                return True
+            return False
+        self.area_template_match_cache = {k: v for k, v in cache.items() if _keep(k)}
+        self.area_template_match_review_state = {k: v for k, v in review.items() if _keep(k)}
+
+    def _form_detection_cache_token(self):
+        try:
+            total_pages = int(self.total_pages() or 0)
+        except Exception:
+            total_pages = 0
+        payload = {
+            'pdf_path': str(getattr(self, 'pdf_path', '') or ''),
+            'settings_signature': str(self._settings_signature() or ''),
+            'page_tokens': [self._page_detection_cache_token(page_idx) for page_idx in range(max(total_pages, 0))],
+        }
+        return _sha1_json(payload)
+
+    def _form_area_template_match_scope_key(self, template_id):
+        template_norm = str(template_id or '').strip()
+        return f"FORM|{template_norm}|{self._settings_signature()}|{self._form_detection_cache_token()}"
+
+    def cache_form_area_template_matches(self, template_id, matches):
+        key = self._form_area_template_match_scope_key(template_id)
+        payload = []
+        for item in (matches or []):
+            if not isinstance(item, dict):
+                continue
+            payload.append({
+                'match_id': str(item.get('match_id', '') or ''),
+                'template_id': str(item.get('template_id', '') or ''),
+                'page': int(item.get('page', 0) or 0),
+                'rect': self._serialize_rect(item.get('rect')) if item.get('rect') is not None else None,
+                'score': float(item.get('score', 0.0) or 0.0),
+                'reason': str(item.get('reason', '') or ''),
+                'resolved_rects': self._serialize_rects(item.get('resolved_rects', []) or []),
+                'resolved_types': [str(v) for v in (item.get('resolved_types', []) or [])],
+                'split_count': int(item.get('split_count', 0) or 0),
+            })
+        self.area_template_match_cache[key] = payload
+        return payload
+
+    def get_cached_form_area_template_matches(self, template_id):
+        key = self._form_area_template_match_scope_key(template_id)
+        payload = list((self.area_template_match_cache or {}).get(key, []) or [])
+        restored = []
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            rect = item.get('rect')
+            try:
+                rect = fitz.Rect(rect) if rect is not None else None
+            except Exception:
+                rect = None
+            restored.append({
+                'match_id': str(item.get('match_id', '') or ''),
+                'template_id': str(item.get('template_id', '') or ''),
+                'page': int(item.get('page', 0) or 0),
+                'rect': rect,
+                'score': float(item.get('score', 0.0) or 0.0),
+                'reason': str(item.get('reason', '') or ''),
+                'resolved_rects': [fitz.Rect(r) for r in (item.get('resolved_rects', []) or [])],
+                'resolved_types': [str(v) for v in (item.get('resolved_types', []) or [])],
+                'split_count': int(item.get('split_count', 0) or 0),
+            })
+        return restored
+
+    def update_form_area_template_match_review_state(self, template_id, review_state=None):
+        key = self._form_area_template_match_scope_key(template_id)
+        state = {}
+        for rk, rv in dict(review_state or {}).items():
+            state[str(rk)] = bool(rv)
+        self.area_template_match_review_state[key] = state
+        return state
+
+    def get_form_area_template_match_review_state(self, template_id):
+        key = self._form_area_template_match_scope_key(template_id)
+        return dict((self.area_template_match_review_state or {}).get(key, {}) or {})
+
+    def save_area_template(self, analysis):
+        if not isinstance(analysis, dict):
+            return None
+        page_idx = int(analysis.get('page', 0) or 0)
+        template = {
+            'template_id': str(uuid.uuid4().hex[:12]),
+            'page': page_idx,
+            'source_rect': fitz.Rect(analysis.get('source_rect')),
+            'resolved_rects': [fitz.Rect(r) for r in (analysis.get('resolved_rects', []) or [])],
+            'resolved_types': [str(v) for v in (analysis.get('resolved_types', []) or [])],
+            'needs_split': bool(analysis.get('needs_split', False)),
+            'template_kind': str(analysis.get('template_kind', '') or ''),
+            'split_count': int(analysis.get('split_count', 0) or 0),
+            'source_text_overlap': float(analysis.get('source_text_overlap', 0.0) or 0.0),
+            'features': dict(analysis.get('features', {}) or {}),
+            'created_at': _utc_now_iso(),
+        }
+        self.area_templates_by_page.setdefault(page_idx, []).append(template)
+        self.area_template_index[template['template_id']] = template
+        return template
+
+    def merge_area_template_into_detections(self, page_idx, template):
+        page_idx = int(page_idx or 0)
+        if not isinstance(template, dict):
+            return {'added_refs': [], 'selected_ids': []}
+        resolved_rects = [fitz.Rect(r) for r in (template.get('resolved_rects', []) or [])]
+        resolved_types = [str(v) for v in (template.get('resolved_types', []) or [])]
+        if not resolved_rects:
+            return {'added_refs': [], 'selected_ids': []}
+        return self._merge_manual_rect_type_pairs(page_idx, list(zip(resolved_rects, resolved_types or ['field'] * len(resolved_rects))))
+
+    def _merge_manual_rect_type_pairs(self, page_idx, rect_type_pairs):
+        page_idx = int(page_idx or 0)
+        added_refs = []
+        for rect, kind in (rect_type_pairs or []):
+            try:
+                rect = fitz.Rect(rect)
+            except Exception:
+                continue
+            kind = str(kind or 'field')
+            kind = kind if kind in {'field', 'line', 'check'} else 'field'
+            before = len(self.all_boxes)
+            if kind == 'check':
+                self._append_box_unique(rect, kind, iou_thresh=0.50)
+            else:
+                self._append_box_unique(rect, kind, iou_thresh=0.62)
+            if len(self.all_boxes) > before:
+                added_refs.append((fitz.Rect(rect), kind))
+        selected_ids = []
+        if added_refs:
+            try:
+                self._cleanup_field_fragments()
+                self._cleanup_line_field_conflicts()
+            except Exception:
+                pass
+            self.detected_page_idx = int(page_idx)
+            self.detected_settings_signature = self._settings_signature()
+            self._cache_detection_for_page(page_idx)
+            used = set()
+            for rect, kind in added_refs:
+                best_idx = -1
+                best_score = 0.0
+                for idx_existing, existing in enumerate(self.all_boxes):
+                    if idx_existing in used:
+                        continue
+                    existing_kind = str(self.box_types[idx_existing] if idx_existing < len(self.box_types) else '')
+                    if kind and existing_kind != str(kind):
+                        continue
+                    score = self._mobile_repair_overlap_score(rect, existing)
+                    if score > best_score:
+                        best_idx = idx_existing
+                        best_score = score
+                if best_idx >= 0 and best_score >= 0.45:
+                    used.add(best_idx)
+                    selected_ids.append(best_idx)
+        return {'added_refs': added_refs, 'selected_ids': sorted(set(int(x) for x in selected_ids if isinstance(x, int) or str(x).isdigit()))}
+
+    def _build_manual_area_structural_signature(self, page_idx, rect, out_size=(40, 40), page_img=None):
+        try:
+            rect = fitz.Rect(rect)
+        except Exception:
+            return None
+        if rect.width <= 1 or rect.height <= 1:
+            return None
+        img = page_img if page_img is not None else self._render_pdf_page_bgr(self.pdf_path, page_idx=page_idx, preview_zoom=ZOOM)
+        if img is None or getattr(img, 'size', 0) == 0:
+            return None
+        h_img, w_img = img.shape[:2]
+        x0 = max(0, min(int(math.floor(rect.x0 * ZOOM)), w_img - 1))
+        y0 = max(0, min(int(math.floor(rect.y0 * ZOOM)), h_img - 1))
+        x1 = max(x0 + 1, min(int(math.ceil(rect.x1 * ZOOM)), w_img))
+        y1 = max(y0 + 1, min(int(math.ceil(rect.y1 * ZOOM)), h_img))
+        crop = img[y0:y1, x0:x1].copy()
+        if crop.size == 0:
+            return None
+        text_mask, _ = self.build_text_like_mask(crop, header_band_pct=0.10)
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        struct = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
+        try:
+            text_dilate = cv2.dilate(text_mask, np.ones((3, 3), np.uint8), iterations=1)
+            struct = cv2.bitwise_and(struct, cv2.bitwise_not(text_dilate))
+        except Exception:
+            pass
+        struct = cv2.morphologyEx(struct, cv2.MORPH_CLOSE, np.ones((2, 2), np.uint8))
+        small = cv2.resize(struct, out_size, interpolation=cv2.INTER_AREA)
+        small = (small > 48).astype(np.uint8)
+        return {
+            'mask': small,
+            'aspect': float(rect.width) / float(max(rect.height, 1e-6)),
+            'density': float(np.mean(small)),
+            'pixel_size': (int(crop.shape[1]), int(crop.shape[0])),
+        }
+
+    def _prune_area_template_match_redundancy(self, matches, max_matches=18):
+        kept = []
+        for match in list(matches or []):
+            if not isinstance(match, dict):
+                continue
+            rect = match.get('rect')
+            if rect is None:
+                continue
+            try:
+                rect = rect if isinstance(rect, fitz.Rect) else fitz.Rect(rect)
+            except Exception:
+                continue
+            resolved_rects = []
+            for rr in (match.get('resolved_rects', []) or []):
+                try:
+                    resolved_rects.append(rr if isinstance(rr, fitz.Rect) else fitz.Rect(rr))
+                except Exception:
+                    continue
+            duplicate = False
+            for ex in kept:
+                try:
+                    ex_rect = ex.get('rect') if isinstance(ex.get('rect'), fitz.Rect) else fitz.Rect(ex.get('rect'))
+                except Exception:
+                    ex_rect = None
+                if ex_rect is not None and self._rect_iou(rect, ex_rect) >= 0.62:
+                    duplicate = True
+                    break
+                ex_resolved = []
+                for rr in (ex.get('resolved_rects', []) or []):
+                    try:
+                        ex_resolved.append(rr if isinstance(rr, fitz.Rect) else fitz.Rect(rr))
+                    except Exception:
+                        continue
+                if resolved_rects and ex_resolved:
+                    overlap_hits = 0
+                    for a in resolved_rects:
+                        best = 0.0
+                        for b in ex_resolved:
+                            best = max(best, self._rect_iou(a, b))
+                        if best >= 0.55:
+                            overlap_hits += 1
+                    overlap_ratio = overlap_hits / float(max(len(resolved_rects), len(ex_resolved), 1))
+                    if overlap_ratio >= 0.60:
+                        duplicate = True
+                        break
+            if not duplicate:
+                kept.append(match)
+            if len(kept) >= max(1, int(max_matches or 18)):
+                break
+        return kept
+
+    def find_similar_area_templates_on_page(self, page_idx, template, max_matches=18):
+        page_idx = int(page_idx or 0)
+        if not isinstance(template, dict):
+            return []
+        try:
+            source_rect = fitz.Rect(template.get('source_rect')) if template.get('source_rect') is not None else None
+        except Exception:
+            source_rect = None
+        if source_rect is None or source_rect.width <= 1 or source_rect.height <= 1:
+            return []
+        page_img = self._render_pdf_page_bgr(self.pdf_path, page_idx=page_idx, preview_zoom=ZOOM)
+        if page_img is None or getattr(page_img, 'size', 0) == 0:
+            return []
+        tpl_sig = self._build_manual_area_structural_signature(page_idx, source_rect, page_img=page_img)
+        if not tpl_sig:
+            return []
+        tw = max(24.0, float(source_rect.width * ZOOM))
+        th = max(24.0, float(source_rect.height * ZOOM))
+        gray = cv2.cvtColor(page_img, cv2.COLOR_BGR2GRAY)
+        base_bin = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
+        n, _, stats, _ = cv2.connectedComponentsWithStats(base_bin)
+        candidate_rects = []
+        def _add_candidate(rr):
+            rr = fitz.Rect(rr)
+            if rr.width < max(source_rect.width * 0.55, 6.0) or rr.height < max(source_rect.height * 0.55, 6.0):
+                return
+            if self._rect_iou(rr, source_rect) >= 0.55:
+                return
+            for ex in candidate_rects:
+                if self._rect_iou(rr, ex) >= 0.65:
+                    return
+            candidate_rects.append(rr)
+        for i in range(1, n):
+            xx, yy, ww, hh, area = stats[i]
+            if area < 18 or ww < 4 or hh < 4:
+                continue
+            cx = xx + (ww * 0.5)
+            cy = yy + (hh * 0.5)
+            rx0 = max(0.0, (cx - (tw * 0.5)) / ZOOM)
+            ry0 = max(0.0, (cy - (th * 0.5)) / ZOOM)
+            rx1 = min(float(page_img.shape[1]) / ZOOM, (cx + (tw * 0.5)) / ZOOM)
+            ry1 = min(float(page_img.shape[0]) / ZOOM, (cy + (th * 0.5)) / ZOOM)
+            _add_candidate(fitz.Rect(rx0, ry0, rx1, ry1))
+        matches = []
+        existing_boxes = [fitz.Rect(r) for r in (self.all_boxes or [])] if int(getattr(self, 'detected_page_idx', -1) or -1) == page_idx else []
+        existing_types = [str(t) for t in (self.box_types or [])] if existing_boxes else []
+        template_type_counts = dict((template.get('features', {}) or {}).get('type_counts', {}) or {})
+        for cand_rect in candidate_rects[:240]:
+            cand_sig = self._build_manual_area_structural_signature(page_idx, cand_rect, page_img=page_img)
+            if not cand_sig:
+                continue
+            mask_a = tpl_sig.get('mask')
+            mask_b = cand_sig.get('mask')
+            inter = float(np.logical_and(mask_a > 0, mask_b > 0).sum())
+            union = float(np.logical_or(mask_a > 0, mask_b > 0).sum())
+            mask_iou = (inter / union) if union > 0 else 0.0
+            aspect_sim = max(0.0, 1.0 - min(abs(float(tpl_sig.get('aspect', 1.0)) - float(cand_sig.get('aspect', 1.0))) / 1.1, 1.0))
+            density_sim = max(0.0, 1.0 - min(abs(float(tpl_sig.get('density', 0.0)) - float(cand_sig.get('density', 0.0))) / 0.45, 1.0))
+            analysis = self.analyze_manual_area_template(page_idx, cand_rect)
+            if not analysis:
+                continue
+            cand_type_counts = dict((analysis.get('features', {}) or {}).get('type_counts', {}) or {})
+            type_overlap = 0.0
+            if template_type_counts and cand_type_counts:
+                shared = 0
+                total = max(sum(template_type_counts.values()), sum(cand_type_counts.values()), 1)
+                for key, val in template_type_counts.items():
+                    shared += min(int(val or 0), int(cand_type_counts.get(key, 0) or 0))
+                type_overlap = float(shared) / float(total)
+            existing_cover = 0.0
+            if existing_boxes:
+                cover_hits = 0
+                for ex_rect, ex_kind in zip(existing_boxes, existing_types):
+                    if self._rect_iou(cand_rect, ex_rect) >= 0.52:
+                        cover_hits += 1
+                existing_cover = min(1.0, cover_hits / float(max(len(analysis.get('resolved_rects', []) or []), 1)))
+            score = (mask_iou * 0.52) + (aspect_sim * 0.14) + (density_sim * 0.12) + (type_overlap * 0.16) - (existing_cover * 0.10)
+            score = max(0.0, min(0.98, score))
+            if existing_cover >= 0.95:
+                continue
+            if score < 0.46:
+                continue
+            matches.append({
+                'match_id': str(uuid.uuid4().hex[:12]),
+                'template_id': str(template.get('template_id', '') or ''),
+                'page': page_idx,
+                'rect': fitz.Rect(cand_rect),
+                'score': float(round(score, 6)),
+                'reason': f'structure {mask_iou:.2f} • type {type_overlap:.2f} • density {density_sim:.2f} • existing {existing_cover:.2f}',
+                'resolved_rects': [fitz.Rect(r) for r in (analysis.get('resolved_rects', []) or [])],
+                'resolved_types': [str(v) for v in (analysis.get('resolved_types', []) or [])],
+                'split_count': int(analysis.get('split_count', 0) or 0),
+            })
+        matches.sort(key=lambda item: float(item.get('score', 0.0) or 0.0), reverse=True)
+        kept = self._prune_area_template_match_redundancy(matches, max_matches=max_matches)
+        return kept
+
+    def find_similar_area_templates_in_form(self, template, max_total=36, per_page_max=10):
+        if not isinstance(template, dict):
+            return []
+        try:
+            total_pages = int(self.total_pages() or 0)
+        except Exception:
+            total_pages = 0
+        if total_pages <= 0:
+            return []
+        all_matches = []
+        for page_idx in range(total_pages):
+            page_matches = self.find_similar_area_templates_on_page(page_idx, template, max_matches=per_page_max)
+            for item in (page_matches or []):
+                if not isinstance(item, dict):
+                    continue
+                payload = dict(item)
+                payload['page'] = int(page_idx)
+                reason = str(payload.get('reason', '') or '')
+                payload['reason'] = f"page {page_idx} • {reason}" if reason else f"page {page_idx}"
+                all_matches.append(payload)
+        all_matches.sort(key=lambda item: float(item.get('score', 0.0) or 0.0), reverse=True)
+        kept = []
+        per_page_seen = {}
+        for item in all_matches:
+            page_idx = int(item.get('page', 0) or 0)
+            if per_page_seen.get(page_idx, 0) >= max(1, int(per_page_max or 10)):
+                continue
+            kept.append(item)
+            per_page_seen[page_idx] = int(per_page_seen.get(page_idx, 0) or 0) + 1
+            if len(kept) >= max(1, int(max_total or 36)):
+                break
+        return kept
+
+    def merge_area_template_matches_into_detections(self, page_idx, matches):
+        page_idx = int(page_idx or 0)
+        rect_type_pairs = []
+        for item in (matches or []):
+            if not isinstance(item, dict):
+                continue
+            rects = [fitz.Rect(r) for r in (item.get('resolved_rects', []) or [])]
+            types = [str(v) for v in (item.get('resolved_types', []) or [])]
+            for rect, kind in zip(rects, types or ['field'] * len(rects)):
+                rect_type_pairs.append((rect, kind))
+        return self._merge_manual_rect_type_pairs(page_idx, rect_type_pairs)
+
+    def auto_apply_saved_area_templates_after_detection(self, page_idx, max_matches_per_template=18, min_score=0.58):
+        page_idx = int(page_idx or 0)
+        templates = list((self.area_templates_by_page or {}).get(page_idx, []) or [])
+        if not templates:
+            return {'template_count': 0, 'match_count': 0, 'added_count': 0, 'selected_ids': []}
+        has_live = bool(getattr(self, 'all_boxes', [])) and int(getattr(self, 'detected_page_idx', -1) or -1) == page_idx
+        if not has_live:
+            restored = bool(self._restore_detection_for_page(page_idx, required_signature=self._settings_signature()))
+            if not restored:
+                return {'template_count': len(templates), 'match_count': 0, 'added_count': 0, 'selected_ids': []}
+        selected_ids = []
+        total_matches = 0
+        total_added = 0
+        used_template_ids = set()
+        for template in templates:
+            if not isinstance(template, dict):
+                continue
+            template_id = str(template.get('template_id', '') or '')
+            matches = self.find_similar_area_templates_on_page(page_idx, template, max_matches=max_matches_per_template)
+            strong_matches = [m for m in (matches or []) if float((m or {}).get('score', 0.0) or 0.0) >= float(min_score)]
+            if not strong_matches:
+                continue
+            total_matches += len(strong_matches)
+            merge_result = self.merge_area_template_matches_into_detections(page_idx, strong_matches) or {}
+            page_selected = list(merge_result.get('selected_ids', []) or [])
+            if not page_selected:
+                page_selected = []
+                for rect_ref, kind in (merge_result.get('added_refs', []) or []):
+                    best_idx = -1
+                    best_score = 0.0
+                    for idx_existing, existing in enumerate(self.all_boxes):
+                        existing_kind = str(self.box_types[idx_existing] if idx_existing < len(self.box_types) else '')
+                        if kind and existing_kind != str(kind):
+                            continue
+                        score = self._mobile_repair_overlap_score(rect_ref, existing)
+                        if score > best_score:
+                            best_idx = idx_existing
+                            best_score = score
+                    if best_idx >= 0 and best_score >= 0.45:
+                        page_selected.append(best_idx)
+            added_now = len(list(merge_result.get('added_refs', []) or []))
+            total_added += int(added_now)
+            selected_ids.extend(int(x) for x in page_selected if isinstance(x, int) or str(x).isdigit())
+            if template_id:
+                used_template_ids.add(template_id)
+        if total_added > 0:
+            self.detected_page_idx = int(page_idx)
+            self.detected_settings_signature = self._settings_signature()
+            self._cache_detection_for_page(page_idx)
+        for template_id in used_template_ids:
+            try:
+                self.invalidate_area_template_match_cache(page_idx=page_idx, template_id=template_id)
+            except Exception:
+                pass
+        return {
+            'template_count': len(templates),
+            'match_count': int(total_matches),
+            'added_count': int(total_added),
+            'selected_ids': sorted(set(int(x) for x in selected_ids if isinstance(x, int) or str(x).isdigit())),
+        }
+
+
+    def get_candidate_learning_priors(self, page_idx=0, max_events=600):
+        try:
+            page_idx = int(page_idx or 0)
+        except Exception:
+            page_idx = 0
+        current_fp = ""
+        try:
+            current_fp = str(((self.current_detection_context or {}).get('fingerprint') or {}).get('fingerprint_key', '') or '')
+        except Exception:
+            current_fp = ""
+        if not current_fp and self.pdf_path:
+            try:
+                current_fp = str((self.build_page_fingerprint(page_idx=page_idx) or {}).get('fingerprint_key', '') or '')
+            except Exception:
+                current_fp = ""
+
+        events = list(((self.correction_log or {}).get('events', []) or []))[-max_events:]
+        same_fp = {}
+        global_stats = {}
+        used = 0
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            if str(event.get('event_type', '') or '') != 'candidate_review_item':
+                continue
+            kind = str(event.get('kind', '') or '').strip().lower()
+            source = str(event.get('source', '') or '').strip().lower()
+            if not kind or not source:
+                continue
+            key = (kind, source)
+            accepted = bool(event.get('accepted', False))
+            bucket = global_stats.setdefault(key, {'accepted': 0, 'rejected': 0})
+            bucket['accepted' if accepted else 'rejected'] += 1
+            event_fp = str(event.get('fingerprint_key', '') or '')
+            if current_fp and event_fp and event_fp == current_fp:
+                bucket_fp = same_fp.setdefault(key, {'accepted': 0, 'rejected': 0})
+                bucket_fp['accepted' if accepted else 'rejected'] += 1
+                used += 1
+
+        priors = {}
+        for key in set(list(global_stats.keys()) + list(same_fp.keys())):
+            g = global_stats.get(key, {})
+            s = same_fp.get(key, {})
+            g_total = int(g.get('accepted', 0) or 0) + int(g.get('rejected', 0) or 0)
+            s_total = int(s.get('accepted', 0) or 0) + int(s.get('rejected', 0) or 0)
+            g_balance = 0.0 if g_total <= 0 else (float(int(g.get('accepted', 0) or 0) - int(g.get('rejected', 0) or 0)) / float(g_total))
+            s_balance = 0.0 if s_total <= 0 else (float(int(s.get('accepted', 0) or 0) - int(s.get('rejected', 0) or 0)) / float(s_total))
+            adjustment = max(-0.18, min(0.18, (s_balance * 0.14) + (g_balance * 0.08)))
+            priors[key] = {
+                'adjustment': round(float(adjustment), 4),
+                'same_fp_total': int(s_total),
+                'global_total': int(g_total),
+            }
+        return {
+            'fingerprint_key': current_fp,
+            'pairs': priors,
+            'same_fp_events': int(used),
+        }
+
+    def candidate_learning_adjustment(self, kind, source, page_idx=0, priors=None):
+        kind = str(kind or '').strip().lower()
+        source = str(source or '').strip().lower()
+        if not kind or not source:
+            return 0.0
+        if not isinstance(priors, dict):
+            priors = self.get_candidate_learning_priors(page_idx=page_idx)
+        pair = dict((priors or {}).get('pairs', {}).get((kind, source), {}) or {})
+        try:
+            return float(pair.get('adjustment', 0.0) or 0.0)
+        except Exception:
+            return 0.0
 
     def _empty_geom(self):
         return {"names": [], "dob": [], "phil": []}
@@ -2498,9 +3203,6 @@ class FormAlchemistEngine:
         self.pdf_path = path
         self.all_boxes = []
         self.box_types = []
-        self.option_groups = []
-        self.unknown_fillables = []
-        self.compound_sections = []
         self.geom = self._empty_geom()
         self.semantic_targets = self._empty_semantic_targets()
         self.detected_page_idx = None
@@ -2510,6 +3212,17 @@ class FormAlchemistEngine:
         self.geom_by_page = {}
         self.semantic_targets_by_page = {}
         self.boxes_settings_signature_by_page = {}
+        self.candidate_boxes_by_page = {}
+        self.candidate_types_by_page = {}
+        self.candidate_scores_by_page = {}
+        self.candidate_sources_by_page = {}
+        self.candidate_review_state_by_page = {}
+        self.candidate_meta_by_page = {}
+        self.candidate_payloads_by_scope = {}
+        self.area_templates_by_page = {}
+        self.area_template_index = {}
+        self.area_template_match_cache = {}
+        self.area_template_match_review_state = {}
         self.semantic_target_overrides = {}
         return total
 
@@ -2615,51 +3328,10 @@ class FormAlchemistEngine:
         }
         return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
-    def _clone_option_groups(self, groups):
-        out = []
-        for group in list(groups or []):
-            if not isinstance(group, dict):
-                continue
-            clone = dict(group)
-            bbox = clone.get("bbox")
-            clone["bbox"] = fitz.Rect(bbox) if bbox is not None else None
-            clone["member_ids"] = [int(x) for x in list(clone.get("member_ids", []) or []) if isinstance(x, int) or str(x).isdigit()]
-            clone["member_types"] = [str(x) for x in list(clone.get("member_types", []) or [])]
-            clone["count"] = int(clone.get("count", len(clone["member_ids"])) or len(clone["member_ids"]))
-            clone["orientation"] = str(clone.get("orientation", "mixed") or "mixed")
-            clone["kind"] = str(clone.get("kind", "option_group") or "option_group")
-            out.append(clone)
-        return out
-
-    def _clone_compound_sections(self, sections):
-        out = []
-        for section in list(sections or []):
-            if not isinstance(section, dict):
-                continue
-            clone = dict(section)
-            bbox = clone.get("bbox")
-            clone["bbox"] = fitz.Rect(bbox) if bbox is not None else None
-            clone["member_ids"] = [int(x) for x in list(clone.get("member_ids", []) or []) if isinstance(x, int) or str(x).isdigit()]
-            clone["member_types"] = [str(x) for x in list(clone.get("member_types", []) or [])]
-            clone["count"] = int(clone.get("count", len(clone["member_ids"])) or len(clone["member_ids"]))
-            clone["row_count"] = int(clone.get("row_count", 1) or 1)
-            clone["col_count"] = int(clone.get("col_count", 1) or 1)
-            clone["kind"] = str(clone.get("kind", "compound_block") or "compound_block")
-            clone["layout"] = str(clone.get("layout", "mixed") or "mixed")
-            clone["label_text"] = str(clone.get("label_text", "") or "")
-            clone["label_tokens"] = [str(x) for x in list(clone.get("label_tokens", []) or [])]
-            clone["label_hints"] = [str(x) for x in list(clone.get("label_hints", []) or [])]
-            clone["context_score"] = float(clone.get("context_score", 0.0) or 0.0)
-            out.append(clone)
-        return out
-
     def _cache_detection_for_page(self, page_idx):
         page_idx = int(page_idx)
         self.boxes_by_page[page_idx] = [fitz.Rect(r) for r in self.all_boxes]
         self.box_types_by_page[page_idx] = list(self.box_types)
-        self.option_groups_by_page[page_idx] = self._clone_option_groups(self.option_groups)
-        self.unknown_fillables_by_page[page_idx] = [fitz.Rect(r) for r in self.unknown_fillables]
-        self.compound_sections_by_page[page_idx] = self._clone_compound_sections(self.compound_sections)
         geom_copy = {}
         for key, rects in (self.geom or {}).items():
             geom_copy[key] = [fitz.Rect(r) for r in rects]
@@ -2673,18 +3345,14 @@ class FormAlchemistEngine:
         if page_idx is None:
             self.boxes_by_page = {}
             self.box_types_by_page = {}
-            self.option_groups_by_page = {}
-            self.unknown_fillables_by_page = {}
-            self.compound_sections_by_page = {}
             self.geom_by_page = {}
             self.semantic_targets_by_page = {}
             self.boxes_settings_signature_by_page = {}
+            self.clear_candidate_cache()
+            self.invalidate_area_template_match_cache()
             if clear_current:
                 self.all_boxes = []
                 self.box_types = []
-                self.option_groups = []
-                self.unknown_fillables = []
-                self.compound_sections = []
                 self.geom = self._empty_geom()
                 self.semantic_targets = self._empty_semantic_targets()
                 self.detected_page_idx = None
@@ -2694,22 +3362,295 @@ class FormAlchemistEngine:
         page_idx = int(page_idx)
         self.boxes_by_page.pop(page_idx, None)
         self.box_types_by_page.pop(page_idx, None)
-        self.option_groups_by_page.pop(page_idx, None)
-        self.unknown_fillables_by_page.pop(page_idx, None)
-        self.compound_sections_by_page.pop(page_idx, None)
         self.geom_by_page.pop(page_idx, None)
         self.semantic_targets_by_page.pop(page_idx, None)
         self.boxes_settings_signature_by_page.pop(page_idx, None)
+        self.clear_candidate_cache(page_idx=page_idx)
+        self.invalidate_area_template_match_cache(page_idx=page_idx)
         if clear_current and self.detected_page_idx == page_idx:
             self.all_boxes = []
             self.box_types = []
-            self.option_groups = []
-            self.unknown_fillables = []
-            self.compound_sections = []
             self.geom = self._empty_geom()
             self.semantic_targets = self._empty_semantic_targets()
             self.detected_page_idx = None
             self.detected_settings_signature = None
+
+    def _candidate_scope_key(self, page_idx, anchor_ids=None):
+        page_idx = int(page_idx)
+        norm_ids = []
+        for value in list(anchor_ids or []):
+            if isinstance(value, int) or str(value).isdigit():
+                iv = int(value)
+                if iv not in norm_ids:
+                    norm_ids.append(iv)
+        norm_ids = sorted(norm_ids)
+        return f"{page_idx}:" + (",".join(str(v) for v in norm_ids) if norm_ids else "*")
+
+    def clear_candidate_cache(self, page_idx=None):
+        if page_idx is None:
+            self.candidate_boxes_by_page = {}
+            self.candidate_types_by_page = {}
+            self.candidate_scores_by_page = {}
+            self.candidate_sources_by_page = {}
+            self.candidate_review_state_by_page = {}
+            self.candidate_meta_by_page = {}
+            self.candidate_payloads_by_scope = {}
+            return
+        page_idx = int(page_idx)
+        self.candidate_boxes_by_page.pop(page_idx, None)
+        self.candidate_types_by_page.pop(page_idx, None)
+        self.candidate_scores_by_page.pop(page_idx, None)
+        self.candidate_sources_by_page.pop(page_idx, None)
+        self.candidate_review_state_by_page.pop(page_idx, None)
+        self.candidate_meta_by_page.pop(page_idx, None)
+        prefix = f"{page_idx}:"
+        for scope_key in list((self.candidate_payloads_by_scope or {}).keys()):
+            if str(scope_key).startswith(prefix):
+                self.candidate_payloads_by_scope.pop(scope_key, None)
+
+    def _normalize_cached_candidate_item(self, item):
+        if not isinstance(item, dict) or item.get('rect') is None:
+            return None
+        try:
+            rect = item.get('rect') if isinstance(item.get('rect'), fitz.Rect) else fitz.Rect(item.get('rect'))
+        except Exception:
+            return None
+        source = str(item.get('source', 'scan') or 'scan')
+        source_set = [str(s) for s in (item.get('source_set', []) or []) if str(s).strip()]
+        if source and source not in source_set:
+            source_set.append(source)
+        try:
+            support_count = int(item.get('support_count', len(source_set) if source_set else 1) or 1)
+        except Exception:
+            support_count = max(1, len(source_set) if source_set else 1)
+        normalized = {
+            'rect': rect,
+            'kind': str(item.get('kind', 'field') or 'field'),
+            'score': float(item.get('score', 0.0) or 0.0),
+            'source': source,
+            'source_set': list(source_set),
+            'support_count': int(max(support_count, len(source_set) if source_set else 1)),
+            'consensus_bonus': float(item.get('consensus_bonus', 0.0) or 0.0),
+            'raw_score': float(item.get('raw_score', item.get('score', 0.0)) or 0.0),
+            'base_score': float(item.get('base_score', item.get('score', 0.0)) or 0.0),
+            'learning_bias': float(item.get('learning_bias', 0.0) or 0.0),
+            'features': dict(item.get('features', {}) or {}),
+        }
+        if 'reason' in item:
+            normalized['reason'] = str(item.get('reason', '') or '')
+        return normalized
+
+    def cache_candidates_for_page(self, page_idx, candidates=None, review_state=None, meta=None, anchor_ids=None):
+        page_idx = int(page_idx)
+        cand_list = []
+        for item in list(candidates or []):
+            norm = self._normalize_cached_candidate_item(item)
+            if norm is not None:
+                cand_list.append(norm)
+        review_state = dict(review_state or {})
+        meta_payload = dict(meta or {})
+        norm_anchor_ids = []
+        for value in list(anchor_ids or meta_payload.get('anchor_ids', []) or []):
+            if isinstance(value, int) or str(value).isdigit():
+                iv = int(value)
+                if iv not in norm_anchor_ids:
+                    norm_anchor_ids.append(iv)
+        norm_anchor_ids = sorted(norm_anchor_ids)
+        meta_payload['anchor_ids'] = list(norm_anchor_ids)
+
+        boxes = [fitz.Rect(item.get('rect')) for item in cand_list]
+        kinds = [str(item.get('kind', 'field') or 'field') for item in cand_list]
+        scores = [float(item.get('score', 0.0) or 0.0) for item in cand_list]
+        sources = [str(item.get('source', 'scan') or 'scan') for item in cand_list]
+
+        self.candidate_boxes_by_page[page_idx] = list(boxes)
+        self.candidate_types_by_page[page_idx] = list(kinds)
+        self.candidate_scores_by_page[page_idx] = list(scores)
+        self.candidate_sources_by_page[page_idx] = list(sources)
+        self.candidate_review_state_by_page[page_idx] = dict(review_state)
+        self.candidate_meta_by_page[page_idx] = dict(meta_payload)
+
+        scope_key = self._candidate_scope_key(page_idx, norm_anchor_ids)
+        self.candidate_payloads_by_scope[scope_key] = {
+            'candidates': [self._normalize_cached_candidate_item(item) for item in cand_list],
+            'review_state': dict(review_state),
+            'meta': dict(meta_payload),
+        }
+
+    def get_candidates_for_page(self, page_idx, anchor_ids=None):
+        page_idx = int(page_idx)
+        scope_key = self._candidate_scope_key(page_idx, anchor_ids)
+        scoped = dict((self.candidate_payloads_by_scope or {}).get(scope_key, {}) or {})
+        if scoped:
+            candidates = []
+            for item in list(scoped.get('candidates', []) or []):
+                norm = self._normalize_cached_candidate_item(item)
+                if norm is not None:
+                    candidates.append(norm)
+            return {
+                'candidates': candidates,
+                'review_state': dict(scoped.get('review_state', {}) or {}),
+                'meta': dict(scoped.get('meta', {}) or {}),
+            }
+
+        boxes = list(self.candidate_boxes_by_page.get(page_idx, []) or [])
+        kinds = list(self.candidate_types_by_page.get(page_idx, []) or [])
+        scores = list(self.candidate_scores_by_page.get(page_idx, []) or [])
+        sources = list(self.candidate_sources_by_page.get(page_idx, []) or [])
+        candidates = []
+        for idx, rect in enumerate(boxes):
+            norm = self._normalize_cached_candidate_item({
+                'rect': fitz.Rect(rect),
+                'kind': str(kinds[idx] if idx < len(kinds) else 'field'),
+                'score': float(scores[idx] if idx < len(scores) else 0.0),
+                'source': str(sources[idx] if idx < len(sources) else 'scan'),
+            })
+            if norm is not None:
+                candidates.append(norm)
+        return {
+            'candidates': candidates,
+            'review_state': dict(self.candidate_review_state_by_page.get(page_idx, {}) or {}),
+            'meta': dict(self.candidate_meta_by_page.get(page_idx, {}) or {}),
+        }
+
+    def update_candidate_review_state_for_page(self, page_idx, review_state=None, anchor_ids=None):
+        page_idx = int(page_idx)
+        current = dict(self.candidate_review_state_by_page.get(page_idx, {}) or {})
+        if isinstance(review_state, dict):
+            current.update({str(k): bool(v) for k, v in review_state.items()})
+        self.candidate_review_state_by_page[page_idx] = current
+        scope_key = self._candidate_scope_key(page_idx, anchor_ids)
+        scoped = dict((self.candidate_payloads_by_scope or {}).get(scope_key, {}) or {})
+        if scoped:
+            scoped_current = dict(scoped.get('review_state', {}) or {})
+            scoped_current.update({str(k): bool(v) for k, v in (review_state or {}).items()})
+            scoped['review_state'] = scoped_current
+            self.candidate_payloads_by_scope[scope_key] = scoped
+            return dict(scoped_current)
+        return dict(current)
+
+    def get_cached_mobile_repair_proposal(self, page_idx, anchor_ids=None):
+        stored = self.get_candidates_for_page(page_idx, anchor_ids=anchor_ids)
+        candidates = list(stored.get("candidates", []) or [])
+        meta = dict(stored.get("meta", {}) or {})
+        review_state = dict(stored.get("review_state", {}) or {})
+        if not candidates and not meta.get("removal_candidates"):
+            return None
+
+        try:
+            page_idx = int(page_idx or 0)
+        except Exception:
+            page_idx = 0
+
+        cached_anchor_ids = [int(x) for x in (meta.get("anchor_ids", []) or []) if isinstance(x, int) or str(x).isdigit()]
+        requested_anchor_ids = [int(x) for x in (anchor_ids or []) if isinstance(x, int) or str(x).isdigit()]
+        if requested_anchor_ids and cached_anchor_ids and sorted(set(cached_anchor_ids)) != sorted(set(requested_anchor_ids)):
+            return None
+
+        expected_sig = str(meta.get("detection_signature", "") or "")
+        current_sig = ""
+        try:
+            current_sig = str(self._settings_signature() or "")
+        except Exception:
+            current_sig = ""
+        if expected_sig and current_sig and expected_sig != current_sig:
+            return None
+
+        expected_fp = str(meta.get("fingerprint_key", "") or "")
+        current_fp = ""
+        try:
+            current_fp = str(((self.current_detection_context or {}).get('fingerprint') or {}).get('fingerprint_key', '') or '')
+        except Exception:
+            current_fp = ""
+        if not current_fp and self.pdf_path:
+            try:
+                current_fp = str((self.build_page_fingerprint(page_idx=page_idx) or {}).get('fingerprint_key', '') or '')
+            except Exception:
+                current_fp = ""
+        if expected_fp and current_fp and expected_fp != current_fp:
+            return None
+
+        detection_ready = False
+        try:
+            if int(getattr(self, "detected_page_idx", -1) or -1) == page_idx and bool(getattr(self, "all_boxes", []) or []):
+                detection_ready = True
+            else:
+                detection_ready = bool(self._restore_detection_for_page(page_idx, required_signature=self._settings_signature()))
+        except Exception:
+            detection_ready = False
+        if not detection_ready:
+            return None
+
+        try:
+            zone_vals = list(meta.get("zone_rect", []) or [])
+            zone_rect = fitz.Rect(*zone_vals) if len(zone_vals) == 4 else None
+        except Exception:
+            zone_rect = None
+
+        all_boxes = list(getattr(self, 'all_boxes', []) or [])
+        all_types = list(getattr(self, 'box_types', []) or [])
+
+        def _resolve_existing_index(rect, kind, min_score=0.50):
+            best_idx = -1
+            best_score = 0.0
+            try:
+                rr = rect if isinstance(rect, fitz.Rect) else fitz.Rect(*rect)
+            except Exception:
+                return -1
+            kind = str(kind or '')
+            for idx_existing, existing in enumerate(all_boxes):
+                existing_kind = str(all_types[idx_existing] if idx_existing < len(all_types) else '')
+                if kind and existing_kind != kind:
+                    continue
+                score = self._rect_iou(rr, existing)
+                try:
+                    if score <= 0.0:
+                        score = self._mapping_match_score(rr, existing)
+                except Exception:
+                    pass
+                if score > best_score:
+                    best_idx = idx_existing
+                    best_score = score
+            return best_idx if best_score >= float(min_score) else -1
+
+        removal_candidates = []
+        for item in list(meta.get("removal_candidates", []) or []):
+            if not isinstance(item, dict):
+                continue
+            try:
+                rect_vals = list(item.get("rect", []) or [])
+                rect = fitz.Rect(*rect_vals) if len(rect_vals) == 4 else None
+            except Exception:
+                rect = None
+            if rect is None:
+                continue
+            kind = str(item.get("kind", "field") or "field")
+            existing_index = _resolve_existing_index(rect, kind, min_score=0.45)
+            if existing_index < 0:
+                continue
+            removal_candidates.append({
+                "existing_index": int(existing_index),
+                "rect": rect,
+                "kind": kind,
+                "reason": str(item.get("reason", "") or ""),
+                "score": float(item.get("score", 0.0) or 0.0),
+                "source": str(item.get("source", "cleanup") or "cleanup"),
+            })
+        return {
+            "page_idx": int(page_idx),
+            "anchor_ids": list(cached_anchor_ids or requested_anchor_ids),
+            "anchor_rects": [],
+            "zone_rect": zone_rect,
+            "existing_local_ids": [int(x) for x in (meta.get("existing_local_ids", []) or []) if isinstance(x, int) or str(x).isdigit()],
+            "existing_local_count": int(meta.get("existing_local_count", 0) or 0),
+            "candidates": candidates,
+            "candidate_type_counts": dict(meta.get("candidate_type_counts", {}) or {}),
+            "source_counts": dict(meta.get("source_counts", {}) or {}),
+            "inferred_structured_count": int(meta.get("inferred_structured_count", 0) or 0),
+            "removal_candidates": removal_candidates,
+            "review_defaults": dict(review_state),
+            "cache_validated": True,
+        }
 
     def current_detection_matches_settings(self, page_idx=0):
         page_idx = int(page_idx)
@@ -2726,9 +3667,6 @@ class FormAlchemistEngine:
             return False
         self.all_boxes = [fitz.Rect(r) for r in self.boxes_by_page.get(page_idx, [])]
         self.box_types = list(self.box_types_by_page.get(page_idx, []))
-        self.option_groups = self._clone_option_groups(self.option_groups_by_page.get(page_idx, []))
-        self.unknown_fillables = [fitz.Rect(r) for r in self.unknown_fillables_by_page.get(page_idx, [])]
-        self.compound_sections = self._clone_compound_sections(self.compound_sections_by_page.get(page_idx, []))
         geom_src = self.geom_by_page.get(page_idx, {}) or {}
         semantic_src = self.semantic_targets_by_page.get(page_idx)
         if semantic_src:
@@ -2762,773 +3700,16 @@ class FormAlchemistEngine:
     # Box append helpers
     # --------------------------------------------------------
     def _append_box_unique(self, rect, box_type="check", iou_thresh=0.55):
-        option_types = {"check", "radio"}
         for j, existing in enumerate(self.all_boxes):
-            existing_type = self.box_types[j]
-            overlap = _rect_iou(rect, existing)
-            if existing_type == "unknown" and box_type != "unknown" and overlap >= max(0.30, iou_thresh * 0.6):
-                self.all_boxes[j] = rect
-                self.box_types[j] = box_type
-                try:
-                    self.unknown_fillables = [u for u in self.unknown_fillables if self._rect_overlap_score(u, rect) < max(0.30, iou_thresh * 0.6)]
-                except Exception:
-                    pass
-                return
-            same_family = (existing_type == box_type) or (existing_type in option_types and box_type in option_types)
-            if not same_family:
+            if self.box_types[j] != box_type:
                 continue
-            if overlap >= iou_thresh:
-                if existing_type == box_type:
-                    return
-                # Prefer the more specific circle option label when the shape families overlap.
-                if box_type == "radio" and existing_type == "check":
-                    self.all_boxes[j] = rect
-                    self.box_types[j] = box_type
+            if _rect_iou(rect, existing) >= iou_thresh:
                 return
         self.all_boxes.append(rect)
         self.box_types.append(box_type)
 
     def _append_geom_fields(self):
         return
-
-    def _make_bbox_from_rects(self, rects):
-        rects = [fitz.Rect(r) for r in list(rects or [])]
-        if not rects:
-            return None
-        x0 = min(r.x0 for r in rects)
-        y0 = min(r.y0 for r in rects)
-        x1 = max(r.x1 for r in rects)
-        y1 = max(r.y1 for r in rects)
-        return fitz.Rect(x0, y0, x1, y1)
-
-    def _option_group_kind(self, member_types):
-        member_types = [str(t or "") for t in list(member_types or [])]
-        if member_types and all(t == "radio" for t in member_types):
-            return "radio_group"
-        if member_types and all(t == "check" for t in member_types):
-            return "check_group"
-        return "option_group"
-
-    def _cluster_option_groups(self):
-        option_indices = [i for i, t in enumerate(self.box_types) if str(t) in {"check", "radio"}]
-        if len(option_indices) < 2:
-            return []
-
-        rects = {i: fitz.Rect(self.all_boxes[i]) for i in option_indices}
-        centers = {i: ((rects[i].x0 + rects[i].x1) / 2.0, (rects[i].y0 + rects[i].y1) / 2.0) for i in option_indices}
-        sizes = {i: (max(rects[i].width, 1e-6), max(rects[i].height, 1e-6)) for i in option_indices}
-        parent = {i: i for i in option_indices}
-
-        def find(x):
-            while parent[x] != x:
-                parent[x] = parent[parent[x]]
-                x = parent[x]
-            return x
-
-        def union(a, b):
-            ra, rb = find(a), find(b)
-            if ra != rb:
-                parent[rb] = ra
-
-        for pos_a, a in enumerate(option_indices):
-            ra = rects[a]
-            cxa, cya = centers[a]
-            wa, ha = sizes[a]
-            sa = max(wa, ha)
-            for b in option_indices[pos_a + 1:]:
-                rb = rects[b]
-                cxb, cyb = centers[b]
-                wb, hb = sizes[b]
-                sb = max(wb, hb)
-                size_ratio = min(sa, sb) / max(sa, sb)
-                if size_ratio < 0.55:
-                    continue
-                dx = abs(cxa - cxb)
-                dy = abs(cya - cyb)
-                gap_x = max(0.0, max(ra.x0, rb.x0) - min(ra.x1, rb.x1))
-                gap_y = max(0.0, max(ra.y0, rb.y0) - min(ra.y1, rb.y1))
-                horiz = dy <= max(ha, hb) * 0.95 and gap_x <= max(wa, wb) * 6.0
-                vert = dx <= max(wa, wb) * 1.10 and gap_y <= max(ha, hb) * 4.5
-                if horiz or vert:
-                    union(a, b)
-
-        groups = {}
-        for idx in option_indices:
-            groups.setdefault(find(idx), []).append(idx)
-
-        out = []
-        for _, members in groups.items():
-            members = sorted(set(int(m) for m in members))
-            if len(members) < 2:
-                continue
-            member_rects = [rects[m] for m in members]
-            bbox = self._make_bbox_from_rects(member_rects)
-            if bbox is None:
-                continue
-            xs = [centers[m][0] for m in members]
-            ys = [centers[m][1] for m in members]
-            spread_x = (max(xs) - min(xs)) if xs else 0.0
-            spread_y = (max(ys) - min(ys)) if ys else 0.0
-            orientation = "horizontal" if spread_x >= spread_y * 1.2 else ("vertical" if spread_y >= spread_x * 1.2 else "mixed")
-            if orientation == "horizontal":
-                members.sort(key=lambda m: (centers[m][0], centers[m][1]))
-            elif orientation == "vertical":
-                members.sort(key=lambda m: (centers[m][1], centers[m][0]))
-            else:
-                members.sort(key=lambda m: (centers[m][1], centers[m][0]))
-            member_types = [str(self.box_types[m]) for m in members]
-            out.append({
-                "id": len(out),
-                "kind": self._option_group_kind(member_types),
-                "orientation": orientation,
-                "member_ids": members,
-                "member_types": member_types,
-                "bbox": bbox,
-                "count": len(members),
-            })
-
-        out.sort(key=lambda g: (round(g["bbox"].y0, 3) if g.get("bbox") else 0.0, g["bbox"].x0 if g.get("bbox") else 0.0))
-        for gid, group in enumerate(out):
-            group["id"] = gid
-        return out
-
-    def get_option_group_for_box(self, box_idx):
-        try:
-            box_idx = int(box_idx)
-        except Exception:
-            return None
-        for group in list(self.option_groups or []):
-            members = list(group.get("member_ids", []) or [])
-            if box_idx in members:
-                return group
-        return None
-
-    def describe_box_group(self, box_idx):
-        group = self.get_option_group_for_box(box_idx)
-        if not group:
-            return ""
-        members = list(group.get("member_ids", []) or [])
-        kind = str(group.get("kind", "option_group") or "option_group")
-        kind_label = {"radio_group": "radio group", "check_group": "square option group", "option_group": "option group"}.get(kind, kind.replace("_", " "))
-        orientation = str(group.get("orientation", "mixed") or "mixed")
-        try:
-            slot = members.index(int(box_idx)) + 1
-        except Exception:
-            slot = 0
-        count = int(group.get("count", len(members)) or len(members))
-        slot_text = f" • slot {slot}/{count}" if slot > 0 and count > 0 else ""
-        return f"{kind_label} • {orientation} • {count} options{slot_text}"
-
-
-    def _cluster_axis_positions(self, values, tol):
-        vals = sorted(float(v) for v in list(values or []))
-        if not vals:
-            return []
-        clusters = [[vals[0]]]
-        for v in vals[1:]:
-            if abs(v - (sum(clusters[-1]) / max(len(clusters[-1]), 1))) <= float(tol):
-                clusters[-1].append(v)
-            else:
-                clusters.append([v])
-        return [sum(c) / max(len(c), 1) for c in clusters]
-
-    def _compound_section_kind(self, member_rects, member_types, row_count, col_count, bbox):
-        member_types = [str(t or "") for t in list(member_types or [])]
-        widths = [float(r.width) for r in member_rects if r is not None]
-        heights = [float(r.height) for r in member_rects if r is not None]
-        if not widths or not heights:
-            return "compound_block", "mixed"
-        med_w = float(np.median(widths)) if widths else 0.0
-        med_h = float(np.median(heights)) if heights else 0.0
-        wide_count = sum(1 for w in widths if w >= max(24.0, med_w * 1.45))
-        line_like_count = sum(1 for t in member_types if t in ("line", "unknown"))
-        if row_count >= 2 and col_count >= 3 and bbox.width >= max(140.0, med_w * 4.2):
-            if wide_count >= 2 or line_like_count >= max(2, len(member_types) // 3):
-                return "address_block", "multi_row_grid"
-            return "table_block", "multi_row_grid"
-        if row_count >= 3 and col_count <= 2 and bbox.height >= max(40.0, med_h * 4.0):
-            return "contact_block", "stacked"
-        if row_count == 1 and col_count >= 3:
-            return "row_cluster", "single_row"
-        return "compound_block", "mixed"
-
-    def _normalize_context_text(self, text):
-        text = str(text or "")
-        try:
-            text = unicodedata.normalize("NFKD", text)
-            text = text.encode("ascii", "ignore").decode("ascii")
-        except Exception:
-            pass
-        text = text.upper()
-        text = re.sub(r"[^A-Z0-9\s/&()\-]+", " ", text)
-        text = re.sub(r"\s+", " ", text).strip()
-        return text
-
-    def _extract_page_label_spans(self, page_idx=0):
-        spans = []
-        doc = None
-        try:
-            if not self.pdf_path:
-                return []
-            doc = fitz.open(self.pdf_path)
-            page = doc.load_page(int(page_idx))
-            words = page.get_text("words") or []
-            cleaned = []
-            for item in words:
-                if not item or len(item) < 5:
-                    continue
-                try:
-                    x0, y0, x1, y1, word = item[:5]
-                except Exception:
-                    continue
-                word = str(word or "").strip()
-                if not word:
-                    continue
-                norm = self._normalize_context_text(word)
-                if not norm:
-                    continue
-                cleaned.append((float(y0), float(x0), float(x1), float(y1), word, norm))
-            cleaned.sort(key=lambda z: (round(z[0], 1), z[1]))
-            lines = []
-            current = []
-            current_y = None
-            for rec in cleaned:
-                y0 = rec[0]
-                if current_y is None or abs(y0 - current_y) <= 4.0:
-                    current.append(rec)
-                    current_y = y0 if current_y is None else ((current_y * (len(current) - 1)) + y0) / float(len(current))
-                else:
-                    lines.append(current)
-                    current = [rec]
-                    current_y = y0
-            if current:
-                lines.append(current)
-            for line in lines:
-                xs0 = min(r[1] for r in line)
-                ys0 = min(r[0] for r in line)
-                xs1 = max(r[2] for r in line)
-                ys1 = max(r[3] for r in line)
-                raw_text = " ".join(r[4] for r in line).strip()
-                norm_text = self._normalize_context_text(raw_text)
-                if not norm_text:
-                    continue
-                toks = [tok for tok in re.findall(r"[A-Z][A-Z0-9/&()\-]{1,}", norm_text) if len(tok) >= 2]
-                spans.append({
-                    "rect": fitz.Rect(xs0, ys0, xs1, ys1),
-                    "text": raw_text,
-                    "norm_text": norm_text,
-                    "tokens": toks,
-                })
-        except Exception:
-            spans = []
-        finally:
-            try:
-                if doc is not None:
-                    doc.close()
-            except Exception:
-                pass
-        return spans
-
-    def _find_nearby_label_spans(self, rect, page_idx=0, limit=4):
-        rect = fitz.Rect(rect)
-        spans = self._extract_page_label_spans(page_idx=page_idx)
-        if not spans:
-            return []
-        ranked = []
-        for span in spans:
-            srect = span.get("rect")
-            if srect is None:
-                continue
-            hgap = max(0.0, max(srect.x0 - rect.x1, rect.x0 - srect.x1))
-            vgap = max(0.0, max(srect.y0 - rect.y1, rect.y0 - srect.y1))
-            x_overlap = _x_overlap_ratio(rect, srect)
-            y_overlap = _y_overlap_ratio(rect, srect) if '_y_overlap_ratio' in globals() else 0.0
-            above_bonus = 0.0
-            if srect.y1 <= rect.y0 + max(6.0, rect.height * 0.4):
-                above_bonus = 18.0
-            left_bonus = 0.0
-            if srect.x1 <= rect.x0 + max(6.0, rect.width * 0.3):
-                left_bonus = 8.0
-            if hgap > max(120.0, rect.width * 0.8) and vgap > max(50.0, rect.height * 1.5):
-                continue
-            score = (x_overlap * 30.0) + (y_overlap * 16.0) + above_bonus + left_bonus - (hgap * 0.12) - (vgap * 0.35)
-            if score < 2.0:
-                continue
-            ranked.append((score, span))
-        ranked.sort(key=lambda z: (-z[0], z[1].get("rect").y0 if z[1].get("rect") is not None else 0.0, z[1].get("rect").x0 if z[1].get("rect") is not None else 0.0))
-        return [span for _, span in ranked[:max(1, int(limit))]]
-
-    def _contextual_section_kind(self, base_kind, label_tokens, label_text, row_count, col_count, bbox):
-        toks = set(str(t or "") for t in list(label_tokens or []))
-        text = self._normalize_context_text(label_text)
-        def _has_any(*needles):
-            for n in needles:
-                n = str(n or "").upper()
-                if n in toks or n in text:
-                    return True
-            return False
-        address_hits = sum(int(_has_any(k)) for k in [
-            "ADDRESS", "PERMANENT", "MAILING", "BARANGAY", "MUNICIPALITY", "CITY",
-            "PROVINCE", "STATE", "COUNTRY", "ZIP", "STREET", "BUILDING", "LOT",
-            "BLOCK", "HOUSE", "UNIT", "ROOM", "FLOOR", "SUBDIVISION"
-        ])
-        contact_hits = sum(int(_has_any(k)) for k in [
-            "CONTACT", "PHONE", "HOME", "MOBILE", "EMAIL", "E MAIL", "FAX", "TELEPHONE"
-        ])
-        if _has_any("SAME", "ABOVE") and _has_any("ADDRESS", "MAILING", "PERMANENT"):
-            return "linked_address_block", ["same_as_above", "address_context"]
-        if address_hits >= 2:
-            return "address_block", ["address_context"]
-        if contact_hits >= 2:
-            return "contact_block", ["contact_context"]
-        if _has_any("DATE", "MONTH", "DAY", "YEAR") and (row_count >= 1 and col_count >= 2):
-            return "date_block", ["date_context"]
-        return str(base_kind or "compound_block"), []
-
-    def _contextualize_compound_sections(self, sections, page_idx=0):
-        out = []
-        for section in list(sections or []):
-            if not isinstance(section, dict):
-                continue
-            clone = dict(section)
-            bbox = clone.get("bbox")
-            if bbox is None:
-                out.append(clone)
-                continue
-            nearby = self._find_nearby_label_spans(bbox, page_idx=page_idx, limit=4)
-            label_text = " | ".join(str(s.get("text", "") or "").strip() for s in nearby if str(s.get("text", "") or "").strip())
-            label_tokens = []
-            seen = set()
-            for span in nearby:
-                for tok in list(span.get("tokens", []) or []):
-                    tok = str(tok or "").upper()
-                    if tok and tok not in seen:
-                        seen.add(tok)
-                        label_tokens.append(tok)
-            new_kind, hints = self._contextual_section_kind(
-                clone.get("kind", "compound_block"),
-                label_tokens,
-                label_text,
-                clone.get("row_count", 1),
-                clone.get("col_count", 1),
-                bbox,
-            )
-            clone["kind"] = str(new_kind or clone.get("kind", "compound_block"))
-            clone["label_text"] = label_text
-            clone["label_tokens"] = label_tokens[:12]
-            clone["label_hints"] = [str(h) for h in list(hints or [])]
-            clone["context_score"] = float(len(label_tokens) + (2 * len(hints)))
-            out.append(clone)
-        return out
-
-    def _cluster_compound_sections(self):
-        candidate_ids = []
-        for idx, (rect, kind) in enumerate(zip(list(self.all_boxes or []), list(self.box_types or []))):
-            kind = str(kind or "")
-            if kind not in ("field", "line", "unknown"):
-                continue
-            if rect is None or rect.width <= 0 or rect.height <= 0:
-                continue
-            if rect.width < 6 or rect.height < 4:
-                continue
-            candidate_ids.append(idx)
-        if len(candidate_ids) < 3:
-            return []
-
-        def _near(a, b):
-            ra = self.all_boxes[a]
-            rb = self.all_boxes[b]
-            x_overlap = _x_overlap_ratio(ra, rb)
-            inter = _rect_intersection_area(ra, rb)
-            if inter > 0:
-                return True
-            hgap = max(0.0, max(rb.x0 - ra.x1, ra.x0 - rb.x1))
-            vgap = max(0.0, max(rb.y0 - ra.y1, ra.y0 - rb.y1))
-            row_tol = max(8.0, min(28.0, max(ra.height, rb.height) * 1.6))
-            col_tol = max(10.0, min(34.0, max(ra.width, rb.width) * 0.55))
-            if x_overlap >= 0.15 and vgap <= row_tol:
-                return True
-            y_overlap = _y_overlap_ratio(ra, rb) if '_y_overlap_ratio' in globals() else 0.0
-            if y_overlap >= 0.20 and hgap <= col_tol:
-                return True
-            pad_x = max(10.0, min(36.0, max(ra.width, rb.width) * 0.35))
-            pad_y = max(8.0, min(28.0, max(ra.height, rb.height) * 1.1))
-            ea = fitz.Rect(ra.x0 - pad_x, ra.y0 - pad_y, ra.x1 + pad_x, ra.y1 + pad_y)
-            eb = fitz.Rect(rb.x0 - pad_x, rb.y0 - pad_y, rb.x1 + pad_x, rb.y1 + pad_y)
-            return _rect_intersection_area(ea, eb) > 0
-
-        seen = set()
-        sections = []
-        for seed in candidate_ids:
-            if seed in seen:
-                continue
-            stack = [seed]
-            cluster = []
-            seen.add(seed)
-            while stack:
-                cur = stack.pop()
-                cluster.append(cur)
-                for other in candidate_ids:
-                    if other in seen:
-                        continue
-                    if _near(cur, other):
-                        seen.add(other)
-                        stack.append(other)
-            cluster = sorted(set(cluster))
-            if len(cluster) < 3:
-                continue
-            rects = [self.all_boxes[i] for i in cluster]
-            bbox = fitz.Rect(rects[0])
-            for rr in rects[1:]:
-                rr = fitz.Rect(rr)
-                bbox = fitz.Rect(
-                    min(bbox.x0, rr.x0),
-                    min(bbox.y0, rr.y0),
-                    max(bbox.x1, rr.x1),
-                    max(bbox.y1, rr.y1),
-                )
-            if bbox.width < 40 and bbox.height < 24:
-                continue
-            centers_y = [((r.y0 + r.y1) / 2.0) for r in rects]
-            centers_x = [((r.x0 + r.x1) / 2.0) for r in rects]
-            med_h = float(np.median([max(r.height, 1.0) for r in rects])) if rects else 8.0
-            med_w = float(np.median([max(r.width, 1.0) for r in rects])) if rects else 12.0
-            row_count = len(self._cluster_axis_positions(centers_y, tol=max(5.0, min(20.0, med_h * 1.05))))
-            col_count = len(self._cluster_axis_positions(centers_x, tol=max(7.0, min(36.0, med_w * 0.60))))
-            member_types = [self.box_types[i] if i < len(self.box_types) else "field" for i in cluster]
-            kind, layout = self._compound_section_kind(rects, member_types, row_count, col_count, bbox)
-            sections.append({
-                "bbox": bbox,
-                "member_ids": cluster,
-                "member_types": member_types,
-                "count": len(cluster),
-                "row_count": int(row_count),
-                "col_count": int(col_count),
-                "kind": kind,
-                "layout": layout,
-            })
-        return sections
-
-    def get_compound_section_for_box(self, box_idx):
-        try:
-            box_idx = int(box_idx)
-        except Exception:
-            return None
-        for section in list(self.compound_sections or []):
-            if box_idx in list(section.get("member_ids", []) or []):
-                return section
-        return None
-
-    def describe_box_section(self, box_idx):
-        section = self.get_compound_section_for_box(box_idx)
-        if not section:
-            return ""
-        kind = str(section.get("kind", "compound_block") or "compound_block")
-        kind_label = {
-            "address_block": "address block",
-            "linked_address_block": "linked address block",
-            "contact_block": "contact block",
-            "table_block": "table block",
-            "date_block": "date block",
-            "row_cluster": "row cluster",
-            "compound_block": "compound block",
-        }.get(kind, kind.replace("_", " "))
-        count = int(section.get("count", len(section.get("member_ids", []) or [])) or len(section.get("member_ids", []) or []))
-        rows = int(section.get("row_count", 1) or 1)
-        cols = int(section.get("col_count", 1) or 1)
-        layout = str(section.get("layout", "mixed") or "mixed").replace("_", " ")
-        label_text = str(section.get("label_text", "") or "").strip()
-        label_part = f" • labels: {label_text}" if label_text else ""
-        return f"{kind_label} • {rows} rows × {cols} cols • {count} members • {layout}{label_part}"
-
-    def _normalize_column_for_matching(self, text):
-        s = str(text or "").strip().upper()
-        s = re.sub(r"[^A-Z0-9]+", " ", s)
-        s = re.sub(r"\s+", " ", s).strip()
-        return s
-
-    def _column_leaf_tokens(self, column_name):
-        text = self._normalize_column_for_matching(column_name)
-        tokens = [t for t in text.split() if t]
-        if not tokens:
-            return []
-        generic = {
-            "MAILING", "PERMANENT", "CURRENT", "PRESENT", "HOME", "WORK", "OFFICE",
-            "ADDRESS", "DETAILS", "DETAIL", "CONTACT", "CONTACTS", "ABOVE", "SAME",
-            "AS", "PRIMARY", "SECONDARY", "ALTERNATE", "ALT", "RESIDENTIAL", "RESIDENCE"
-        }
-        leaf = [t for t in tokens if t not in generic]
-        return leaf or tokens
-
-    def _same_as_above_enabled_for_row(self, row, section=None):
-        sec = section or {}
-        sec_text = self._normalize_context_text((sec.get("label_text", "") or "") + " " + (sec.get("kind", "") or ""))
-        bool_true = {"1", "TRUE", "YES", "Y", "CHECKED", "X", "ON"}
-        bool_false = {"0", "FALSE", "NO", "N", "UNCHECKED", "OFF"}
-        explicit_false = False
-        try:
-            row_keys = list(getattr(row, 'index', [])) if hasattr(row, 'index') else list(row.keys())
-        except Exception:
-            row_keys = []
-        for key in row_keys:
-            ktext = self._normalize_column_for_matching(key)
-            if not ktext:
-                continue
-            if "SAME" in ktext and "ABOVE" in ktext:
-                val = str(row.get(key, "") or "").strip().upper()
-                if val in bool_true:
-                    return True
-                if val in bool_false:
-                    explicit_false = True
-        if explicit_false:
-            return False
-        return "SAME AS ABOVE" in sec_text or str(sec.get("kind", "") or "") == "linked_address_block"
-
-    def _score_same_as_above_source_column(self, target_column, candidate_column, section=None):
-        tnorm = self._normalize_column_for_matching(target_column)
-        cnorm = self._normalize_column_for_matching(candidate_column)
-        if not tnorm or not cnorm or tnorm == cnorm:
-            return -1.0
-        target_leaf = set(self._column_leaf_tokens(target_column))
-        cand_leaf = set(self._column_leaf_tokens(candidate_column))
-        if not target_leaf or not cand_leaf:
-            return -1.0
-        common = target_leaf & cand_leaf
-        if not common:
-            return -1.0
-        score = float(len(common) * 10)
-        if "MAILING" in tnorm:
-            if "PERMANENT" in cnorm:
-                score += 24.0
-            if "CURRENT" in cnorm or "HOME" in cnorm or "PRESENT" in cnorm:
-                score += 12.0
-        if "CONTACT" in tnorm or "EMAIL" in tnorm or "PHONE" in tnorm or "MOBILE" in tnorm:
-            if "CONTACT" in cnorm or "EMAIL" in cnorm or "PHONE" in cnorm or "MOBILE" in cnorm:
-                score += 8.0
-        sec_text = self._normalize_context_text((section or {}).get("label_text", ""))
-        if "ADDRESS" in sec_text and ("ADDRESS" in cnorm or "ADDRESS" in tnorm):
-            score += 3.0
-        if "CONTACT" in sec_text and ("CONTACT" in cnorm or "CONTACT" in tnorm):
-            score += 3.0
-        score -= abs(len(cand_leaf) - len(target_leaf)) * 0.75
-        return score
-
-    def _find_same_as_above_source_column(self, row, target_column, section=None):
-        best_col = ""
-        best_score = 0.0
-        try:
-            row_keys = list(getattr(row, 'index', [])) if hasattr(row, 'index') else list(row.keys())
-        except Exception:
-            row_keys = []
-        for candidate in row_keys:
-            ctext = str(candidate or "").strip()
-            if not ctext or ctext == str(target_column or ""):
-                continue
-            val = str(row.get(candidate, "") or "").strip()
-            if not val:
-                continue
-            score = self._score_same_as_above_source_column(target_column, ctext, section=section)
-            if score > best_score:
-                best_score = score
-                best_col = ctext
-        return best_col if best_score >= 11.0 else ""
-
-    def _mapping_section_for_item(self, item, page_idx=0):
-        rects = [self._coerce_rect(r) for r in self._mapping_rect_list(item)]
-        if not rects:
-            return None
-        target = rects[0] if len(rects) == 1 else self._rect_union(rects)
-        best = None
-        best_score = 0.0
-        for section in list(getattr(self, 'compound_sections', []) or []):
-            bbox = section.get('bbox')
-            if bbox is None:
-                continue
-            score = self._rect_overlap_score(target, bbox)
-            if score > best_score:
-                best_score = score
-                best = section
-        return best if best_score >= 0.08 else None
-
-    def _resolve_mapping_value(self, item, row, page_idx=0):
-        col = str(item.get("column", "") or "").strip()
-        raw_val = str(row.get(col, "") or "").strip()
-        if raw_val:
-            return raw_val, {"resolved_from": col, "same_as_above": False}
-        section = self._mapping_section_for_item(item, page_idx=page_idx)
-        if not section:
-            return "", {"resolved_from": col, "same_as_above": False}
-        kind = str(section.get("kind", "") or "")
-        if kind not in ("linked_address_block", "address_block", "contact_block"):
-            return "", {"resolved_from": col, "same_as_above": False}
-        if not self._same_as_above_enabled_for_row(row, section=section):
-            return "", {"resolved_from": col, "same_as_above": False}
-        src_col = self._find_same_as_above_source_column(row, col, section=section)
-        if not src_col:
-            return "", {"resolved_from": col, "same_as_above": False}
-        src_val = str(row.get(src_col, "") or "").strip()
-        if not src_val:
-            return "", {"resolved_from": col, "same_as_above": False}
-        return src_val, {
-            "resolved_from": src_col,
-            "same_as_above": True,
-            "section_kind": kind,
-        }
-
-    def get_section_action_suggestions(self, box_idx):
-        section = self.get_compound_section_for_box(box_idx)
-        if not section:
-            return []
-        kind = str(section.get("kind", "compound_block") or "compound_block")
-        suggestions = []
-        if kind == "linked_address_block":
-            suggestions.append("Same as Above helper can copy blank mailing/contact values from matching permanent/current columns.")
-            suggestions.append("Map one side cleanly first; linked fields can reuse the matching source column when the row flag is checked.")
-        elif kind == "address_block":
-            suggestions.append("Treat this as one address group: map street/building cells separately from barangay/city/province/ZIP.")
-            suggestions.append("Prefer consistent column prefixes so profile learning can recognize this address block later.")
-        elif kind == "contact_block":
-            suggestions.append("Keep phone/mobile/email mappings semantically distinct; contact blocks are now context-aware.")
-        elif kind == "date_block":
-            suggestions.append("Use grid/date mappings for split day-month-year slots to keep centering and fit behavior stable.")
-        elif kind in ("table_block", "row_cluster"):
-            suggestions.append("Review neighboring fields together; grouped rows/columns are easier to maintain as a section.")
-        label_text = str(section.get("label_text", "") or "").strip()
-        if label_text and "SAME AS ABOVE" in self._normalize_context_text(label_text):
-            suggestions.append("Nearby label indicates linked-copy behavior may be appropriate for blank secondary fields.")
-        return suggestions[:4]
-
-    def _mapping_exists_for_box(self, box_idx, page_idx=0):
-        try:
-            box_idx = int(box_idx)
-        except Exception:
-            return False
-        if box_idx < 0 or box_idx >= len(self.all_boxes):
-            return False
-        target_rect = self.all_boxes[box_idx]
-        for configs in self.custom_mappings.values():
-            for cfg in configs:
-                if int(cfg.get("page", 0) or 0) != int(page_idx):
-                    continue
-                for r in self._mapping_rect_list(cfg):
-                    if self._mapping_match_score(target_rect, r) >= 1.0:
-                        return True
-        return False
-
-    def _section_candidate_label_text(self, box_idx, page_idx=0):
-        if box_idx < 0 or box_idx >= len(self.all_boxes):
-            return ""
-        rect = self.all_boxes[box_idx]
-        parts = []
-        section = self.get_compound_section_for_box(box_idx)
-        if section:
-            sec_label = str(section.get("label_text", "") or "").strip()
-            if sec_label:
-                parts.append(sec_label)
-            kind = str(section.get("kind", "") or "").strip()
-            if kind:
-                parts.append(kind.replace("_", " "))
-        for span in self._find_nearby_label_spans(rect, page_idx=page_idx, limit=5):
-            raw = str(span.get("raw_text", "") or "").strip()
-            if raw:
-                parts.append(raw)
-        # preserve order while deduplicating
-        seen = set()
-        ordered = []
-        for part in parts:
-            norm = self._normalize_context_text(part)
-            if not norm or norm in seen:
-                continue
-            seen.add(norm)
-            ordered.append(part)
-        return " | ".join(ordered[:5])
-
-    def _score_section_label_to_column(self, label_text, column_name, section=None):
-        lnorm = self._normalize_context_text(label_text)
-        cnorm = self._normalize_column_for_matching(column_name)
-        if not lnorm or not cnorm:
-            return -1.0
-        lset = set(t for t in lnorm.split() if t)
-        cset = set(self._column_leaf_tokens(column_name))
-        if not cset:
-            cset = set(t for t in cnorm.split() if t)
-        common = lset & cset
-        score = float(len(common) * 10.0)
-        if cnorm in lnorm or lnorm in cnorm:
-            score += 8.0
-        if any(tok in lnorm for tok in cset):
-            score += 4.0
-        kind = str((section or {}).get("kind", "") or "")
-        if kind in ("address_block", "linked_address_block"):
-            if any(tok in cnorm for tok in ("ADDRESS", "BARANGAY", "CITY", "MUNICIPALITY", "PROVINCE", "STATE", "COUNTRY", "ZIP", "POSTAL", "STREET", "BUILDING", "HOUSE", "LOT", "BLOCK", "SUBDIVISION")):
-                score += 3.0
-        elif kind == "contact_block":
-            if any(tok in cnorm for tok in ("PHONE", "MOBILE", "EMAIL", "CONTACT", "FAX", "LANDLINE")):
-                score += 3.0
-        elif kind == "date_block":
-            if any(tok in cnorm for tok in ("DATE", "DAY", "MONTH", "YEAR")):
-                score += 3.0
-        return score
-
-    def preview_section_auto_links(self, section, page_idx=0, available_columns=None):
-        if not bool(getattr(self, "section_automation_enabled", True)):
-            return []
-        if not isinstance(section, dict):
-            return []
-        columns = [str(c).strip() for c in list(available_columns or []) if str(c).strip()]
-        if not columns:
-            return []
-        suggestions = []
-        used_columns = set()
-        member_ids = [int(x) for x in list(section.get("member_ids", []) or []) if str(x).isdigit()]
-        for box_idx in member_ids:
-            if box_idx < 0 or box_idx >= len(self.all_boxes):
-                continue
-            btype = str(self.box_types[box_idx] if box_idx < len(self.box_types) else "")
-            if btype not in ("field", "line", "unknown"):
-                continue
-            if self._mapping_exists_for_box(box_idx, page_idx=page_idx):
-                continue
-            label_text = self._section_candidate_label_text(box_idx, page_idx=page_idx)
-            if not label_text:
-                continue
-            best_col = ""
-            best_score = -1.0
-            for col in columns:
-                if col in used_columns:
-                    continue
-                score = self._score_section_label_to_column(label_text, col, section=section)
-                if score > best_score:
-                    best_score = score
-                    best_col = col
-            if best_col and best_score >= 12.0:
-                suggestions.append({
-                    "box_idx": int(box_idx),
-                    "column": str(best_col),
-                    "score": float(best_score),
-                    "label_text": str(label_text),
-                    "box_type": btype,
-                })
-                used_columns.add(best_col)
-        suggestions.sort(key=lambda item: (-float(item.get("score", 0.0)), int(item.get("box_idx", -1))))
-        return suggestions
-
-    def apply_section_auto_links(self, section, page_idx=0, available_columns=None):
-        suggestions = self.preview_section_auto_links(section, page_idx=page_idx, available_columns=available_columns)
-        applied = 0
-        errors = []
-        for item in suggestions:
-            try:
-                self.assign_mapping([int(item["box_idx"])], str(item["column"]), "", False, 1, int(page_idx))
-                applied += 1
-            except Exception as e:
-                errors.append(str(e))
-        return {
-            "applied": int(applied),
-            "suggested": int(len(suggestions)),
-            "errors": errors[:5],
-            "suggestions": suggestions,
-        }
 
     # --------------------------------------------------------
     # Cleanup helpers
@@ -3672,6 +3853,348 @@ class FormAlchemistEngine:
     # --------------------------------------------------------
     # Checkbox logic
     # --------------------------------------------------------
+    def build_text_like_mask(self, img_bgr, header_band_pct=0.16):
+        """Build a conservative mask of small text-like components, mainly for header/title suppression."""
+        if img_bgr is None or getattr(img_bgr, "size", 0) == 0:
+            return None, {"header_cut": 0, "component_count": 0}
+        if len(img_bgr.shape) == 2:
+            gray = img_bgr
+        else:
+            gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+        gray = cv2.GaussianBlur(gray, (3, 3), 0)
+        _, binv = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        h_img, w_img = binv.shape[:2]
+        header_cut = int(max(8, min(h_img - 1, h_img * float(header_band_pct))))
+        n, _, stats, _ = cv2.connectedComponentsWithStats(binv)
+        mask = np.zeros_like(binv)
+        comp_count = 0
+        max_text_w = max(26, min(int(w_img * 0.18), 180))
+        max_text_h = max(18, min(int(h_img * 0.10), 92))
+        for i in range(1, n):
+            x, y, w, h, area = [int(v) for v in stats[i]]
+            if area < 6 or area > 2400 or w <= 0 or h <= 0:
+                continue
+            if w > max_text_w or h > max_text_h:
+                continue
+            roi = binv[y:y+h, x:x+w]
+            if roi.size == 0:
+                continue
+            fill_ratio = float(area) / float(max(w * h, 1))
+            if fill_ratio < 0.05 or fill_ratio > 0.88:
+                continue
+            aspect = float(w) / float(max(h, 1))
+            if aspect < 0.10 or aspect > 18.0:
+                continue
+            row_cov = float(np.mean((roi > 0).sum(axis=1) / float(max(w, 1))))
+            col_cov = float(np.mean((roi > 0).sum(axis=0) / float(max(h, 1))))
+            if row_cov > 0.82 and col_cov > 0.82:
+                continue
+            if w >= 48 and h >= 20 and fill_ratio < 0.10:
+                continue
+            if y >= header_cut and not (w <= 72 and h <= 42 and fill_ratio >= 0.11):
+                continue
+            x0 = max(0, x - 1)
+            y0 = max(0, y - 1)
+            x1 = min(w_img, x + w + 1)
+            y1 = min(h_img, y + h + 1)
+            mask[y0:y1, x0:x1] = 255
+            comp_count += 1
+        if comp_count > 0:
+            mask = cv2.dilate(mask, np.ones((3, 3), np.uint8), iterations=1)
+        return mask, {"header_cut": int(header_cut), "component_count": int(comp_count)}
+
+    def rect_text_overlap_ratio(self, rect, text_mask, preview_zoom=1.0):
+        if text_mask is None:
+            return 0.0
+        try:
+            rect = rect if isinstance(rect, fitz.Rect) else fitz.Rect(*rect)
+        except Exception:
+            return 0.0
+        h_img, w_img = text_mask.shape[:2]
+        x0 = max(0, min(w_img, int(math.floor(rect.x0 * float(preview_zoom)))))
+        y0 = max(0, min(h_img, int(math.floor(rect.y0 * float(preview_zoom)))))
+        x1 = max(0, min(w_img, int(math.ceil(rect.x1 * float(preview_zoom)))))
+        y1 = max(0, min(h_img, int(math.ceil(rect.y1 * float(preview_zoom)))))
+        if x1 <= x0 or y1 <= y0:
+            return 0.0
+        roi = text_mask[y0:y1, x0:x1]
+        if roi.size <= 0:
+            return 0.0
+        return float(cv2.countNonZero(roi)) / float(max(roi.size, 1))
+
+    def should_suppress_text_like_rect(self, rect, text_mask=None, preview_zoom=1.0, header_cut=0, overlap_thresh=0.18):
+        if text_mask is None:
+            return False
+        try:
+            rect = rect if isinstance(rect, fitz.Rect) else fitz.Rect(*rect)
+        except Exception:
+            return False
+        overlap = self.rect_text_overlap_ratio(rect, text_mask, preview_zoom=preview_zoom)
+        if overlap < float(overlap_thresh):
+            return False
+        w_px = float(max(rect.width, 0.0)) * float(preview_zoom)
+        h_px = float(max(rect.height, 0.0)) * float(preview_zoom)
+        y0_px = float(rect.y0) * float(preview_zoom)
+        smallish = (w_px <= 180.0 and h_px <= 88.0)
+        tiny = (w_px <= 96.0 and h_px <= 62.0)
+        header_like = (y0_px <= float(max(header_cut, 0)) + 8.0)
+        if header_like and tiny and overlap >= max(0.12, float(overlap_thresh) * 0.85):
+            return True
+        if smallish and overlap >= max(0.34, float(overlap_thresh) + 0.14):
+            return True
+        return False
+
+    def detect_faint_field_candidates(self, img_bgr, zoom_factor=1.0, zone_rect=None, text_mask=None, header_cut=0):
+        """Repair-only candidate detector for faint or low-contrast rectangular fields."""
+        if img_bgr is None or getattr(img_bgr, "size", 0) == 0:
+            return []
+        if len(img_bgr.shape) == 2:
+            gray = img_bgr
+        else:
+            gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+        try:
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            work = clahe.apply(gray)
+        except Exception:
+            work = gray
+        work = cv2.GaussianBlur(work, (3, 3), 0)
+        edges = cv2.Canny(work, 30, 110)
+        edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8), iterations=1)
+        cnts, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        h_img, w_img = gray.shape[:2]
+        out = []
+        for c in cnts:
+            x, y, w, h = cv2.boundingRect(c)
+            if w < 28 or h < 12:
+                continue
+            if w > int(w_img * 0.92) or h > int(h_img * 0.18):
+                continue
+            if w * h < 260 or w * h > int(w_img * h_img * 0.035):
+                continue
+            rect = fitz.Rect(x / zoom_factor, y / zoom_factor, (x + w) / zoom_factor, (y + h) / zoom_factor)
+            if zone_rect is not None and _rect_intersection_area(rect, zone_rect) <= 0:
+                continue
+            if self.should_suppress_text_like_rect(rect, text_mask, preview_zoom=zoom_factor, header_cut=header_cut, overlap_thresh=0.14):
+                continue
+            aspect = float(w) / float(max(h, 1))
+            if aspect < 1.4 or aspect > 18.0:
+                continue
+            peri = cv2.arcLength(c, True)
+            area = max(float(cv2.contourArea(c)), 1.0)
+            extent = area / float(max(w * h, 1))
+            approx = cv2.approxPolyDP(c, 0.03 * peri, True) if peri > 0 else []
+            if len(approx) < 4 or len(approx) > 10:
+                continue
+            roi_e = edges[y:y+h, x:x+w]
+            if roi_e.size == 0:
+                continue
+            row_cov = float(np.mean((roi_e > 0).sum(axis=1) / float(max(w, 1))))
+            col_cov = float(np.mean((roi_e > 0).sum(axis=0) / float(max(h, 1))))
+            border_band = max(1, min(int(min(w, h) * 0.14), 10))
+            top = roi_e[:border_band, :]
+            bottom = roi_e[-border_band:, :]
+            left = roi_e[:, :border_band]
+            right = roi_e[:, -border_band:]
+            border_strength = min(
+                float(cv2.countNonZero(top)) / float(max(top.size, 1)),
+                float(cv2.countNonZero(bottom)) / float(max(bottom.size, 1)),
+                float(cv2.countNonZero(left)) / float(max(left.size, 1)),
+                float(cv2.countNonZero(right)) / float(max(right.size, 1)),
+            )
+            side_hits = sum([
+                1 if (float(cv2.countNonZero(top)) / float(max(top.size, 1))) >= 0.05 else 0,
+                1 if (float(cv2.countNonZero(bottom)) / float(max(bottom.size, 1))) >= 0.05 else 0,
+                1 if (float(cv2.countNonZero(left)) / float(max(left.size, 1))) >= 0.05 else 0,
+                1 if (float(cv2.countNonZero(right)) / float(max(right.size, 1))) >= 0.05 else 0,
+            ])
+            if side_hits < 3:
+                continue
+            score = 0.42
+            score += min(0.14, max(0.0, (border_strength - 0.04) * 1.6))
+            score += min(0.10, max(0.0, (row_cov - 0.03) * 0.65))
+            score += min(0.10, max(0.0, (col_cov - 0.03) * 0.65))
+            score += 0.08 if side_hits >= 4 else 0.03
+            if 0.04 <= extent <= 0.42:
+                score += 0.08
+            out.append({"rect": rect, "score": float(max(0.0, min(0.95, score))), "source": "faint_field"})
+        return out
+
+    def detect_partial_box_candidates(self, img_bgr, zoom_factor=1.0, zone_rect=None, text_mask=None, header_cut=0):
+        """Repair-only detector for broken or incomplete rectangular field borders."""
+        if img_bgr is None or getattr(img_bgr, "size", 0) == 0:
+            return []
+        if len(img_bgr.shape) == 2:
+            gray = img_bgr
+        else:
+            gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+        gray = cv2.GaussianBlur(gray, (3, 3), 0)
+        _, binv = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        h_img, w_img = binv.shape[:2]
+        cnts, _ = cv2.findContours(binv, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        out = []
+        for c in cnts:
+            x, y, w, h = cv2.boundingRect(c)
+            if w < 28 or h < 12:
+                continue
+            if w > int(w_img * 0.92) or h > int(h_img * 0.18):
+                continue
+            if w * h < 240:
+                continue
+            rect = fitz.Rect(x / zoom_factor, y / zoom_factor, (x + w) / zoom_factor, (y + h) / zoom_factor)
+            if zone_rect is not None and _rect_intersection_area(rect, zone_rect) <= 0:
+                continue
+            if self.should_suppress_text_like_rect(rect, text_mask, preview_zoom=zoom_factor, header_cut=header_cut, overlap_thresh=0.14):
+                continue
+            aspect = float(w) / float(max(h, 1))
+            if aspect < 1.5 or aspect > 22.0:
+                continue
+            roi = binv[y:y+h, x:x+w]
+            if roi.size == 0:
+                continue
+            band = max(1, min(int(min(w, h) * 0.12), 10))
+            top = float(cv2.countNonZero(roi[:band, :])) / float(max(roi[:band, :].size, 1))
+            bottom = float(cv2.countNonZero(roi[-band:, :])) / float(max(roi[-band:, :].size, 1))
+            left = float(cv2.countNonZero(roi[:, :band])) / float(max(roi[:, :band].size, 1))
+            right = float(cv2.countNonZero(roi[:, -band:])) / float(max(roi[:, -band:].size, 1))
+            side_vals = [top, bottom, left, right]
+            strong_sides = sum(1 for v in side_vals if v >= 0.05)
+            weak_sides = sum(1 for v in side_vals if 0.015 <= v < 0.05)
+            if strong_sides + weak_sides < 3:
+                continue
+            filled = float(cv2.countNonZero(roi)) / float(max(roi.size, 1))
+            if filled > 0.42:
+                continue
+            peri = cv2.arcLength(c, True)
+            approx = cv2.approxPolyDP(c, 0.035 * peri, True) if peri > 0 else []
+            if len(approx) < 2 or len(approx) > 12:
+                continue
+            score = 0.40
+            score += min(0.18, strong_sides * 0.055)
+            score += min(0.08, weak_sides * 0.025)
+            score += 0.08 if 0.03 <= filled <= 0.24 else 0.0
+            score += 0.06 if len(approx) >= 4 else 0.02
+            out.append({"rect": rect, "score": float(max(0.0, min(0.92, score))), "source": "partial_box"})
+        return out
+
+    def detect_non_square_option_candidates(self, img_bgr, zoom_factor=1.0, zone_rect=None, text_mask=None, header_cut=0):
+        """Repair-only detector for radio / diamond / weak non-square option-like candidates.
+        These are intentionally softer than looks_like_checkbox() and feed the candidate layer only.
+        """
+        if img_bgr is None or getattr(img_bgr, "size", 0) == 0:
+            return []
+        if len(img_bgr.shape) == 2:
+            img_bgr = cv2.cvtColor(img_bgr, cv2.COLOR_GRAY2BGR)
+
+        gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+        gray = cv2.GaussianBlur(gray, (3, 3), 0)
+        _, binv = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        binv = cv2.morphologyEx(binv, cv2.MORPH_OPEN, np.ones((1, 1), np.uint8))
+
+        h_img, w_img = binv.shape[:2]
+        if zone_rect is not None:
+            try:
+                zr = zone_rect if isinstance(zone_rect, fitz.Rect) else fitz.Rect(*zone_rect)
+                zx0 = max(0, min(w_img, int(math.floor(float(zr.x0) * float(zoom_factor)))))
+                zy0 = max(0, min(h_img, int(math.floor(float(zr.y0) * float(zoom_factor)))))
+                zx1 = max(0, min(w_img, int(math.ceil(float(zr.x1) * float(zoom_factor)))))
+                zy1 = max(0, min(h_img, int(math.ceil(float(zr.y1) * float(zoom_factor)))))
+                if zx1 > zx0 and zy1 > zy0:
+                    roi_mask = np.zeros_like(binv)
+                    roi_mask[zy0:zy1, zx0:zx1] = binv[zy0:zy1, zx0:zx1]
+                    work = roi_mask
+                else:
+                    work = binv
+            except Exception:
+                work = binv
+        else:
+            work = binv
+
+        min_sz = max(8, int(self.settings.get("C_Size", (14, 65))[0]) - 6)
+        max_sz = min(72, int(self.settings.get("C_Size", (14, 65))[1]) + 12)
+        out = []
+        seen = []
+
+        cnts, _ = cv2.findContours(work, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        for c in cnts:
+            try:
+                x, y, w, h = cv2.boundingRect(c)
+            except Exception:
+                continue
+            if w < min_sz or h < min_sz or w > max_sz or h > max_sz:
+                continue
+            if y < int(header_cut or 0):
+                continue
+            aspect = (w / float(max(h, 1)))
+            if not (0.55 <= aspect <= 1.60):
+                continue
+            rect = fitz.Rect(x / zoom_factor, y / zoom_factor, (x + w) / zoom_factor, (y + h) / zoom_factor)
+            if text_mask is not None:
+                try:
+                    if self.should_suppress_text_like_rect(rect, text_mask, preview_zoom=zoom_factor, header_cut=header_cut, overlap_thresh=0.16):
+                        continue
+                except Exception:
+                    pass
+            area = float(cv2.contourArea(c))
+            if area <= 0:
+                continue
+            peri = float(cv2.arcLength(c, True))
+            if peri <= 0:
+                continue
+            circularity = float((4.0 * math.pi * area) / max(peri * peri, 1e-6))
+            extent = float(area / max(float(w * h), 1.0))
+            approx = cv2.approxPolyDP(c, max(1.0, 0.05 * peri), True)
+            vertices = int(len(approx) if approx is not None else 0)
+            cx = x + (w * 0.5)
+            cy = y + (h * 0.5)
+            roi = work[max(0, y - 2):min(h_img, y + h + 2), max(0, x - 2):min(w_img, x + w + 2)]
+            ink_ratio = float(cv2.countNonZero(roi) / float(max(roi.size, 1))) if roi.size > 0 else 0.0
+
+            source = ''
+            score = 0.0
+            # Radio / circular options
+            if 0.72 <= aspect <= 1.28 and circularity >= 0.45 and 0.18 <= extent <= 0.90:
+                source = 'radio_like'
+                score = 0.60 + min(0.20, max(0.0, circularity - 0.45))
+                if vertices >= 6:
+                    score += 0.05
+            # Rotated diamonds / lozenge-like options
+            elif 0.70 <= aspect <= 1.35 and vertices == 4 and 0.10 <= extent <= 0.46:
+                source = 'diamond_like'
+                score = 0.57
+                if 0.16 <= extent <= 0.36:
+                    score += 0.05
+            # Broken / weak check-like options that are not strong enough for normal checkbox logic
+            elif 0.70 <= aspect <= 1.40 and 0.10 <= extent <= 0.62 and 3 <= vertices <= 8 and ink_ratio <= 0.55:
+                source = 'weak_option'
+                score = 0.48
+                if circularity >= 0.30:
+                    score += 0.04
+                if vertices == 4:
+                    score += 0.03
+            else:
+                continue
+
+            duplicate = False
+            for prev in seen:
+                if self._rect_iou(prev, rect) >= 0.55:
+                    duplicate = True
+                    break
+            if duplicate:
+                continue
+            seen.append(rect)
+            out.append({
+                'rect': rect,
+                'source': source,
+                'score': round(float(min(max(score, 0.0), 0.95)), 4),
+                'kind': 'check',
+                'center': [round(float(cx / zoom_factor), 3), round(float(cy / zoom_factor), 3)],
+                'circularity': round(float(circularity), 4),
+                'extent': round(float(extent), 4),
+                'vertices': int(vertices),
+            })
+
+        return out
+
     def looks_like_checkbox(self, binv, x, y, w, h, cc_area=None):
         strictness = self.settings["C_Strict"]
         border_override = self.settings["C_Border"]
@@ -3763,227 +4286,6 @@ class FormAlchemistEngine:
             return False
 
         return True
-
-    def looks_like_circle_option(self, binv, x, y, w, h, cc_area=None):
-        roi = binv[y:y+h, x:x+w]
-        if roi.size == 0 or w <= 0 or h <= 0:
-            return False
-
-        aspect = w / float(max(h, 1))
-        if not (0.72 <= aspect <= 1.38):
-            return False
-
-        cnts, _ = cv2.findContours(roi, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if not cnts:
-            return False
-
-        c = max(cnts, key=cv2.contourArea)
-        area = float(cc_area if cc_area is not None else cv2.contourArea(c))
-        if area <= 0:
-            return False
-
-        peri = cv2.arcLength(c, True)
-        if peri <= 0:
-            return False
-
-        approx = cv2.approxPolyDP(c, 0.04 * peri, True)
-        if len(approx) <= 4:
-            return False
-
-        circularity = (4.0 * np.pi * area) / float(max(peri * peri, 1e-6))
-        if circularity < 0.52:
-            return False
-
-        bx, by, bw, bh = cv2.boundingRect(c)
-        extent = area / float(max(bw * bh, 1))
-        if not (0.32 <= extent <= 0.92):
-            return False
-
-        t = max(1, int(min(w, h) * 0.18))
-        if w <= 2 * t or h <= 2 * t:
-            return False
-
-        top, bottom, left, right = roi[:t, :], roi[-t:, :], roi[:, :t], roi[:, -t:]
-        inner = roi[t:-t, t:-t]
-
-        def frac(a):
-            return cv2.countNonZero(a) / float(a.size) if a.size > 0 else 0.0
-
-        border_min = min(frac(top), frac(bottom), frac(left), frac(right))
-        inner_frac = frac(inner)
-        if border_min < 0.08:
-            return False
-        if inner_frac > 0.78:
-            return False
-
-        cp = max(1, int(min(w, h) * 0.22))
-        corners = [roi[:cp, :cp], roi[:cp, -cp:], roi[-cp:, :cp], roi[-cp:, -cp:]]
-        corner_frac = sum(frac(cn) for cn in corners) / float(max(len(corners), 1))
-        if corner_frac > 0.42:
-            return False
-
-        pad = max(2, int(min(w, h) * 0.30))
-        y0 = max(0, y - pad)
-        y1 = min(binv.shape[0], y + h + pad)
-        x0 = max(0, x - pad)
-        x1 = min(binv.shape[1], x + w + pad)
-        outer = binv[y0:y1, x0:x1].copy()
-        ix0 = x - x0
-        iy0 = y - y0
-        ix1 = ix0 + w
-        iy1 = iy0 + h
-        outer[iy0:iy1, ix0:ix1] = 0
-        outer_frac = cv2.countNonZero(outer) / float(max(outer.size, 1))
-        if outer_frac > 0.12:
-            return False
-
-        return True
-
-    def find_circle_option_rects_in_roi(self, binv, x, y, w, h):
-        roi = binv[y:y + h, x:x + w]
-        if roi.size == 0:
-            return []
-
-        min_sz, max_sz = self.settings["C_Size"]
-        cnts, _ = cv2.findContours(roi, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        found = []
-
-        for c in cnts:
-            rx, ry, rw, rh = cv2.boundingRect(c)
-            if not (min_sz <= rw <= max_sz and min_sz <= rh <= max_sz):
-                continue
-            cc_area = cv2.contourArea(c)
-            if self.looks_like_circle_option(binv, x + rx, y + ry, rw, rh, cc_area=cc_area):
-                found.append((x + rx, y + ry, rw, rh))
-
-        return found
-
-    def looks_like_unknown_fillable(self, binv, x, y, w, h, cc_area=None):
-        roi = binv[y:y+h, x:x+w]
-        if roi.size == 0 or w <= 0 or h <= 0:
-            return False
-
-        aspect = w / float(max(h, 1))
-        if not (0.35 <= aspect <= 26.0):
-            return False
-
-        cnts, _ = cv2.findContours(roi, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if not cnts:
-            return False
-
-        c = max(cnts, key=cv2.contourArea)
-        area = float(cc_area if cc_area is not None else cv2.contourArea(c))
-        if area <= 0:
-            return False
-
-        bbox_area = float(max(w * h, 1))
-        fill = area / bbox_area
-        if fill < 0.04 or fill > 0.94:
-            return False
-
-        peri = cv2.arcLength(c, True)
-        if peri <= 0:
-            return False
-        approx = cv2.approxPolyDP(c, 0.04 * peri, True)
-        circularity = (4.0 * np.pi * area) / float(max(peri * peri, 1e-6))
-
-        t = max(1, int(min(w, h) * 0.14))
-        if w <= 2 * t or h <= 2 * t:
-            return False
-
-        top, bottom, left, right = roi[:t, :], roi[-t:, :], roi[:, :t], roi[:, -t:]
-        inner = roi[t:-t, t:-t]
-
-        def frac(a):
-            return cv2.countNonZero(a) / float(a.size) if a.size > 0 else 0.0
-
-        border_fracs = [frac(top), frac(bottom), frac(left), frac(right)]
-        strong_borders = sum(1 for v in border_fracs if v >= 0.07)
-        inner_frac = frac(inner)
-
-        if strong_borders >= 3 and inner_frac <= 0.72:
-            return True
-        if aspect >= 2.2 and strong_borders >= 2 and inner_frac <= 0.65 and fill <= 0.72:
-            return True
-        if 4 < len(approx) <= 18 and 0.12 <= fill <= 0.82 and inner_frac <= 0.78:
-            return True
-        if circularity >= 0.48 and 0.18 <= fill <= 0.82 and inner_frac <= 0.78:
-            return True
-        return False
-
-    def _rect_overlap_score(self, a, b):
-        a = fitz.Rect(a)
-        b = fitz.Rect(b)
-
-        ax0, ay0, ax1, ay1 = float(a.x0), float(a.y0), float(a.x1), float(a.y1)
-        bx0, by0, bx1, by1 = float(b.x0), float(b.y0), float(b.x1), float(b.y1)
-
-        aw = max(0.0, ax1 - ax0)
-        ah = max(0.0, ay1 - ay0)
-        bw = max(0.0, bx1 - bx0)
-        bh = max(0.0, by1 - by0)
-        a_area = max(aw * ah, 1e-6)
-        b_area = max(bw * bh, 1e-6)
-
-        ix0 = max(ax0, bx0)
-        iy0 = max(ay0, by0)
-        ix1 = min(ax1, bx1)
-        iy1 = min(ay1, by1)
-        iw = max(0.0, ix1 - ix0)
-        ih = max(0.0, iy1 - iy0)
-        inter_area = iw * ih
-        if inter_area <= 0:
-            return 0.0
-
-        iou = inter_area / float(max(a_area + b_area - inter_area, 1e-6))
-        frac = inter_area / float(max(min(a_area, b_area), 1e-6))
-        return max(iou, frac)
-
-    def _append_unknown_fillable(self, rect, overlap_thresh=0.33):
-        rect = fitz.Rect(rect)
-        for existing in list(getattr(self, 'all_boxes', []) or []):
-            if self._rect_overlap_score(rect, existing) >= overlap_thresh:
-                return False
-        for existing in list(getattr(self, 'unknown_fillables', []) or []):
-            if self._rect_overlap_score(rect, existing) >= overlap_thresh:
-                return False
-        self.unknown_fillables.append(rect)
-        self.all_boxes.append(rect)
-        self.box_types.append('unknown')
-        return True
-
-    def find_unknown_fillable_rects(self, binv, zoom_factor=3.0):
-        if binv is None or getattr(binv, 'size', 0) == 0:
-            return []
-
-        nf, _, stats, _ = cv2.connectedComponentsWithStats(binv)
-        out = []
-        min_w = max(10, int(self.settings.get('F_MinW', 15) * 0.55))
-        min_h = max(8, int(self.settings.get('F_MinH', 35) * 0.22))
-        min_area = max(24, int(self.settings.get('F_Area', 500) * 0.10))
-        max_sz = int(max(self.settings.get('ROI_Max', 200), self.settings.get('Line_MaxW', 800) * 0.65))
-        img_h, img_w = binv.shape[:2]
-
-        for i in range(1, nf):
-            x, y, w, h, area = stats[i]
-            if area < min_area:
-                continue
-            if w < min_w and h < min_h:
-                continue
-            if w >= img_w * 0.92 or h >= img_h * 0.16:
-                continue
-            if max(w, h) > max_sz:
-                continue
-            aspect = w / float(max(h, 1))
-            if aspect > 32.0 or (aspect > 8.0 and h <= max(10, min_h)):
-                continue
-            if min(w, h) <= 4:
-                continue
-            if w <= int(self.settings['C_Size'][1]) and h <= int(self.settings['C_Size'][1]) and 0.70 <= aspect <= 1.40:
-                continue
-            if self.looks_like_unknown_fillable(binv, x, y, w, h, cc_area=area):
-                out.append(fitz.Rect(x / zoom_factor, y / zoom_factor, (x + w) / zoom_factor, (y + h) / zoom_factor))
-        return out
 
 # =========================
 # PART 2 / 4
@@ -4258,8 +4560,6 @@ class FormAlchemistEngine:
 
         self.all_boxes = []
         self.box_types = []
-        self.option_groups = []
-        self.unknown_fillables = []
         self.geom = self._empty_geom()
         self.semantic_targets = self._empty_semantic_targets()
 
@@ -4302,6 +4602,8 @@ class FormAlchemistEngine:
         # --- General detection
         full_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         base_bin = cv2.threshold(full_gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
+        text_like_mask, text_like_meta = self.build_text_like_mask(img)
+        header_cut = int((text_like_meta or {}).get('header_cut', 0) or 0)
 
         bin_checks = base_bin.copy()
         if red_close_k > 0:
@@ -4340,6 +4642,8 @@ class FormAlchemistEngine:
             max_line_w=line_max_w_val
         )
         for lr in line_rects:
+            if self.should_suppress_text_like_rect(lr, text_like_mask, preview_zoom=ZOOM, header_cut=header_cut, overlap_thresh=0.16):
+                continue
             self.all_boxes.append(lr)
             self.box_types.append("line")
 
@@ -4357,6 +4661,8 @@ class FormAlchemistEngine:
             eps=max(0.04, float(red_eps_val))
         )
         for rr in red_color_boxes:
+            if self.should_suppress_text_like_rect(rr, text_like_mask, preview_zoom=ZOOM, header_cut=header_cut, overlap_thresh=0.22):
+                continue
             self._append_box_unique(rr, "check", iou_thresh=0.45)
 
         # --- grayscale checkbox detection
@@ -4376,8 +4682,11 @@ class FormAlchemistEngine:
                 0.68 <= aspect <= 1.45
             ):
                 if self.looks_like_checkbox(bin_checks, x, y, w, h, area):
+                    rect = fitz.Rect(x / ZOOM, y / ZOOM, (x + w) / ZOOM, (y + h) / ZOOM)
+                    if self.should_suppress_text_like_rect(rect, text_like_mask, preview_zoom=ZOOM, header_cut=header_cut, overlap_thresh=0.22):
+                        continue
                     self._append_box_unique(
-                        fitz.Rect(x / ZOOM, y / ZOOM, (x + w) / ZOOM, (y + h) / ZOOM),
+                        rect,
                         "check",
                         iou_thresh=0.45
                     )
@@ -4388,11 +4697,14 @@ class FormAlchemistEngine:
                 0.55 <= aspect <= 1.75
             ):
                 for fx, fy, fw, fh in self.find_checkbox_rects_in_roi(bin_checks, x, y, w, h):
-                    self._append_box_unique(
-                        fitz.Rect(fx / ZOOM, fy / ZOOM, (fx + fw) / ZOOM, (fy + fh) / ZOOM),
-                        "check",
-                        iou_thresh=0.45
-                    )
+                        rect = fitz.Rect(fx / ZOOM, fy / ZOOM, (fx + fw) / ZOOM, (fy + fh) / ZOOM)
+                        if self.should_suppress_text_like_rect(rect, text_like_mask, preview_zoom=ZOOM, header_cut=header_cut, overlap_thresh=0.22):
+                            continue
+                        self._append_box_unique(
+                            rect,
+                            "check",
+                            iou_thresh=0.45
+                        )
 
             elif (
                 max(w, h) <= int(red_roi_max_val) and
@@ -4400,48 +4712,25 @@ class FormAlchemistEngine:
                 0.60 <= aspect <= 1.60
             ):
                 for fx, fy, fw, fh in self.find_checkbox_rects_in_roi(bin_checks, x, y, w, h):
-                    self._append_box_unique(
-                        fitz.Rect(fx / ZOOM, fy / ZOOM, (fx + fw) / ZOOM, (fy + fh) / ZOOM),
-                        "check",
-                        iou_thresh=0.45
-                    )
+                        rect = fitz.Rect(fx / ZOOM, fy / ZOOM, (fx + fw) / ZOOM, (fy + fh) / ZOOM)
+                        if self.should_suppress_text_like_rect(rect, text_like_mask, preview_zoom=ZOOM, header_cut=header_cut, overlap_thresh=0.22):
+                            continue
+                        self._append_box_unique(
+                            rect,
+                            "check",
+                            iou_thresh=0.45
+                        )
 
             elif max(w, h) <= int(red_roi_max_val) and min(w, h) >= checkbox_min_sz:
                 for fx, fy, fw, fh in self.find_checkbox_rects_in_roi(bin_checks, x, y, w, h):
-                    self._append_box_unique(
-                        fitz.Rect(fx / ZOOM, fy / ZOOM, (fx + fw) / ZOOM, (fy + fh) / ZOOM),
-                        "check",
-                        iou_thresh=0.45
-                    )
-
-        # --- circle / radio option detection
-        radio_min_sz = max(7, int(checkbox_min_sz) - 5)
-        for i in range(1, nf):
-            x, y, w, h, area = sf[i]
-            if w >= w_img * 0.9:
-                continue
-
-            aspect = w / float(h) if h > 0 else 999
-            if not (radio_min_sz <= w <= checkbox_max_sz and radio_min_sz <= h <= checkbox_max_sz and 0.70 <= aspect <= 1.40):
-                continue
-
-            if self.looks_like_circle_option(bin_checks, x, y, w, h, area):
-                self._append_box_unique(
-                    fitz.Rect(x / ZOOM, y / ZOOM, (x + w) / ZOOM, (y + h) / ZOOM),
-                    "radio",
-                    iou_thresh=0.45
-                )
-            elif (
-                max(w, h) <= int(red_roi_max_val) and
-                min(w, h) >= radio_min_sz and
-                0.65 <= aspect <= 1.55
-            ):
-                for fx, fy, fw, fh in self.find_circle_option_rects_in_roi(bin_checks, x, y, w, h):
-                    self._append_box_unique(
-                        fitz.Rect(fx / ZOOM, fy / ZOOM, (fx + fw) / ZOOM, (fy + fh) / ZOOM),
-                        "radio",
-                        iou_thresh=0.45
-                    )
+                        rect = fitz.Rect(fx / ZOOM, fy / ZOOM, (fx + fw) / ZOOM, (fy + fh) / ZOOM)
+                        if self.should_suppress_text_like_rect(rect, text_like_mask, preview_zoom=ZOOM, header_cut=header_cut, overlap_thresh=0.22):
+                            continue
+                        self._append_box_unique(
+                            rect,
+                            "check",
+                            iou_thresh=0.45
+                        )
 
         # --- field detection
         nf2, _, sf2, _ = cv2.connectedComponentsWithStats(bin_fields)
@@ -4467,29 +4756,13 @@ class FormAlchemistEngine:
                 pad_px=2
             )
 
+            if self.should_suppress_text_like_rect(refined_rect, text_like_mask, preview_zoom=ZOOM, header_cut=header_cut, overlap_thresh=0.16):
+                continue
             self.all_boxes.append(refined_rect)
             self.box_types.append("field")
 
         self._cleanup_field_fragments()
         self._cleanup_line_field_conflicts()
-
-        # --- unknown/custom fillable candidates
-        unknown_mask = bin_fields.copy()
-        if line_rects:
-            for lr in line_rects:
-                try:
-                    x0 = max(0, int(lr.x0 * ZOOM) - 2)
-                    y0 = max(0, int(lr.y0 * ZOOM) - 2)
-                    x1 = min(unknown_mask.shape[1], int(lr.x1 * ZOOM) + 2)
-                    y1 = min(unknown_mask.shape[0], int(lr.y1 * ZOOM) + 2)
-                    unknown_mask[y0:y1, x0:x1] = 0
-                except Exception:
-                    pass
-        for ur in self.find_unknown_fillable_rects(unknown_mask, zoom_factor=ZOOM):
-            self._append_unknown_fillable(ur, overlap_thresh=0.33)
-
-        self.option_groups = self._cluster_option_groups()
-        self.compound_sections = self._contextualize_compound_sections(self._cluster_compound_sections(), page_idx=page_idx)
         self.detected_page_idx = int(page_idx)
         self.detected_settings_signature = self._settings_signature()
         self._cache_detection_for_page(page_idx)
@@ -4567,6 +4840,22 @@ class FormAlchemistEngine:
         score += iou * 10.0
         score += cover_target * 5.0
         return score
+
+
+    def _mobile_repair_overlap_score(self, a, b):
+        try:
+            ra = a if isinstance(a, fitz.Rect) else fitz.Rect(*a)
+            rb = b if isinstance(b, fitz.Rect) else fitz.Rect(*b)
+            inter = _rect_intersection_area(ra, rb)
+            if inter <= 0:
+                return 0.0
+            area_a = max(float(ra.width) * float(ra.height), 1e-6)
+            area_b = max(float(rb.width) * float(rb.height), 1e-6)
+            iou = inter / float(max(area_a + area_b - inter, 1e-6))
+            cover = inter / float(max(min(area_a, area_b), 1e-6))
+            return float(max(iou, cover))
+        except Exception:
+            return 0.0
 
     def describe_box_mapping(self, box_idx, page_idx):
         if box_idx < 0 or box_idx >= len(self.all_boxes):
@@ -4810,7 +5099,6 @@ class FormAlchemistEngine:
         return fitz.Rect(*rect)
 
     def _collect_overlay_ops(self, patient_name, page_idx=0, record_key=None):
-        self._ensure_detection_for_page(page_idx=page_idx)
         row = self._get_patient_row(patient_name, record_key=record_key)
         ops = []
 
@@ -4825,9 +5113,6 @@ class FormAlchemistEngine:
 
                 csv_val = str(row.get(c["column"], "")).strip()
                 trigger = str(c.get("trigger", "")).strip()
-                resolved_meta = {"resolved_from": str(c.get("column", "") or ""), "same_as_above": False}
-                if not trigger:
-                    csv_val, resolved_meta = self._resolve_mapping_value(c, row, page_idx=page_idx)
 
                 if trigger and csv_val.upper() == trigger.upper():
                     ops.append({
@@ -4841,8 +5126,6 @@ class FormAlchemistEngine:
                         "rects": target_rects,
                         "grid": bool(c.get("g", False)),
                         "grid_n": int(c.get("n", 1)),
-                        "resolved_from": str(resolved_meta.get("resolved_from", c.get("column", "")) or c.get("column", "")),
-                        "same_as_above": bool(resolved_meta.get("same_as_above", False)),
                     })
 
         return ops
@@ -4860,9 +5143,6 @@ class FormAlchemistEngine:
 
                 csv_val = str(row.get(c["column"], "")).strip()
                 trigger = str(c.get("trigger", "")).strip()
-                resolved_meta = {"resolved_from": str(c.get("column", "") or ""), "same_as_above": False}
-                if not trigger:
-                    csv_val, resolved_meta = self._resolve_mapping_value(c, row, page_idx=page_idx)
 
                 if trigger:
                     if csv_val.upper() != trigger.upper():
@@ -4878,8 +5158,6 @@ class FormAlchemistEngine:
                         "rects": target_rects,
                         "grid": bool(c.get("g", False)),
                         "grid_n": int(c.get("n", 1)),
-                        "resolved_from": str(resolved_meta.get("resolved_from", c.get("column", "")) or c.get("column", "")),
-                        "same_as_above": bool(resolved_meta.get("same_as_above", False)),
                     })
 
         return ops_by_page
@@ -5206,111 +5484,6 @@ class FormAlchemistEngine:
         base = re.sub(r"[_\-]+", " ", base)
         return _safe_slug(base)
 
-    def _extract_page_anchor_tokens(self, page_idx=0, max_tokens=14):
-        raw_text = ""
-        doc = None
-        try:
-            if not self.pdf_path:
-                return []
-            doc = fitz.open(self.pdf_path)
-            page = doc.load_page(int(page_idx))
-            page_rect = page.rect
-            top_cutoff = float(page_rect.y0 + (page_rect.height * 0.45))
-            blocks = page.get_text("blocks") or []
-            chunks = []
-            for blk in blocks:
-                if not blk or len(blk) < 5:
-                    continue
-                try:
-                    x0, y0, x1, y1, blk_text = blk[:5]
-                except Exception:
-                    continue
-                blk_text = str(blk_text or "").strip()
-                if not blk_text:
-                    continue
-                if float(y1) <= top_cutoff:
-                    chunks.append((float(y0), float(x0), blk_text))
-            if chunks:
-                raw_text = "\n".join(part for _, __, part in sorted(chunks))
-            else:
-                raw_text = str(page.get_text("text") or "")
-        except Exception:
-            raw_text = ""
-        finally:
-            try:
-                if doc is not None:
-                    doc.close()
-            except Exception:
-                pass
-
-        if not raw_text:
-            return []
-        try:
-            raw_text = unicodedata.normalize("NFKD", raw_text)
-            raw_text = raw_text.encode("ascii", "ignore").decode("ascii")
-        except Exception:
-            raw_text = str(raw_text)
-        raw_text = raw_text.upper()
-        raw_text = re.sub(r"[^A-Z0-9\s/&()\-]+", " ", raw_text)
-        stop = {
-            "THE", "AND", "FOR", "WITH", "FROM", "THIS", "THAT", "ARE", "YOU", "YOUR",
-            "NOT", "YES", "NO", "ALL", "USE", "PLEASE", "INDICATE", "FORM", "PAGE", "TO",
-            "OF", "IN", "ON", "AT", "BY", "BE", "AS", "IS", "OR", "AN", "A"
-        }
-        tokens = []
-        seen = set()
-        for tok in re.findall(r"[A-Z][A-Z0-9/&()\-]{1,}", raw_text):
-            tok = tok.strip("-/&() ")
-            if len(tok) < 3 or tok in stop:
-                continue
-            if tok not in seen:
-                seen.add(tok)
-                tokens.append(tok)
-            if len(tokens) >= int(max_tokens):
-                break
-        return tokens
-
-    def _coarse_layout_signature(self, binv, cols=12, rows=16, threshold=0.035):
-        try:
-            h, w = binv.shape[:2]
-        except Exception:
-            return ""
-        cols = max(4, int(cols))
-        rows = max(4, int(rows))
-        bits = []
-        for r in range(rows):
-            y0 = int(round((r * h) / float(rows)))
-            y1 = int(round(((r + 1) * h) / float(rows)))
-            if y1 <= y0:
-                y1 = min(h, y0 + 1)
-            for c in range(cols):
-                x0 = int(round((c * w) / float(cols)))
-                x1 = int(round(((c + 1) * w) / float(cols)))
-                if x1 <= x0:
-                    x1 = min(w, x0 + 1)
-                cell = binv[y0:y1, x0:x1]
-                density = float(cv2.countNonZero(cell) / float(max(cell.size, 1))) if cell.size else 0.0
-                bits.append("1" if density >= float(threshold) else "0")
-        return "".join(bits)
-
-    def _token_overlap_score(self, left, right):
-        a = {str(x).strip().upper() for x in (left or []) if str(x).strip()}
-        b = {str(x).strip().upper() for x in (right or []) if str(x).strip()}
-        if not a or not b:
-            return 0.0
-        return float(len(a & b) / float(max(len(a | b), 1)))
-
-    def _bitstring_similarity(self, left, right):
-        a = str(left or "")
-        b = str(right or "")
-        if not a or not b:
-            return 0.0
-        n = min(len(a), len(b))
-        if n <= 0:
-            return 0.0
-        same = sum(1 for i in range(n) if a[i] == b[i])
-        return float(same / float(max(n, 1)))
-
     def build_page_fingerprint(self, page_idx=0, img_bgr=None):
         if img_bgr is None:
             img_bgr = self._render_pdf_page_bgr(self.pdf_path, page_idx=page_idx, preview_zoom=ZOOM)
@@ -5332,8 +5505,6 @@ class FormAlchemistEngine:
         horiz = cv2.morphologyEx(binv, cv2.MORPH_OPEN, h_kernel)
         vert = cv2.morphologyEx(binv, cv2.MORPH_OPEN, v_kernel)
 
-        anchor_tokens = self._extract_page_anchor_tokens(page_idx=page_idx, max_tokens=14)
-        layout_signature = self._coarse_layout_signature(binv)
         features = {
             "page_idx": int(page_idx),
             "width": int(w),
@@ -5344,19 +5515,14 @@ class FormAlchemistEngine:
             "ink_density": round(ink_density, 6),
             "hline_density": round(float(cv2.countNonZero(horiz) / float(max(horiz.size, 1))), 6),
             "vline_density": round(float(cv2.countNonZero(vert) / float(max(vert.size, 1))), 6),
-            "layout_signature": layout_signature,
-            "anchor_hash": _sha1_json(anchor_tokens) if anchor_tokens else "",
-            "anchor_count": int(len(anchor_tokens)),
         }
 
         fingerprint = {
-            "version": 2,
+            "version": 1,
             "pdf_family_hint": self._page_family_hint(),
             "page_idx": int(page_idx),
             "page_count": int(self.total_pages() or 0) if self.pdf_path else 0,
             "features": features,
-            "anchor_tokens": list(anchor_tokens),
-            "anchor_signature": " | ".join(anchor_tokens[:8]),
         }
         fingerprint["fingerprint_key"] = _sha1_json(fingerprint)
         return fingerprint
@@ -5366,20 +5532,18 @@ class FormAlchemistEngine:
             return 0.0
         score = 0.0
         if str(profile_entry.get("pdf_family_hint", "")) == str(fingerprint.get("pdf_family_hint", "")):
-            score += 0.28
+            score += 0.42
         if int(profile_entry.get("page_idx", -1)) == int(fingerprint.get("page_idx", -2)):
-            score += 0.12
-        if int(profile_entry.get("page_count", 0) or 0) == int(fingerprint.get("page_count", -1) or -1):
-            score += 0.04
+            score += 0.18
 
         pf = profile_entry.get("feature_snapshot", {}) or {}
         ff = fingerprint.get("features", {}) or {}
         for key, weight, scale in [
-            ("aspect", 0.08, 0.20),
-            ("ink_density", 0.10, 0.08),
-            ("hline_density", 0.08, 0.06),
-            ("vline_density", 0.08, 0.06),
-            ("gray_std", 0.04, 45.0),
+            ("aspect", 0.10, 0.20),
+            ("ink_density", 0.12, 0.08),
+            ("hline_density", 0.09, 0.06),
+            ("vline_density", 0.09, 0.06),
+            ("gray_std", 0.05, 45.0),
         ]:
             try:
                 a = float(ff.get(key, 0.0))
@@ -5388,15 +5552,6 @@ class FormAlchemistEngine:
                 score += weight * closeness
             except Exception:
                 pass
-
-        score += 0.16 * self._token_overlap_score(
-            fingerprint.get("anchor_tokens", []),
-            profile_entry.get("anchor_tokens", []),
-        )
-        score += 0.11 * self._bitstring_similarity(
-            ff.get("layout_signature", ""),
-            pf.get("layout_signature", ""),
-        )
 
         quality = float(profile_entry.get("avg_quality", 0.0) or 0.0)
         score += min(0.08, max(0.0, quality) * 0.08)
@@ -5408,7 +5563,7 @@ class FormAlchemistEngine:
         profiles = (self.profile_memory or {}).get("profiles", {}) or {}
         fp_key = str((fingerprint or {}).get("fingerprint_key", "") or "")
         exact = profiles.get(fp_key)
-        if isinstance(exact, dict) and not bool(exact.get("disabled", False)) and not bool(exact.get("forgotten", False)):
+        if isinstance(exact, dict):
             exact = dict(exact)
             exact["match_score"] = 1.0
             exact["match_kind"] = "exact"
@@ -5417,18 +5572,12 @@ class FormAlchemistEngine:
         best = None
         best_score = 0.0
         for entry in profiles.values():
-            if not isinstance(entry, dict):
-                continue
-            if bool(entry.get("disabled", False)) or bool(entry.get("forgotten", False)):
-                continue
             score = self._score_profile_match(fingerprint, entry)
-            if bool(entry.get("pinned", False)):
-                score += 0.035
             if score > best_score:
                 best_score = score
                 best = dict(entry)
         if best is not None:
-            best["match_score"] = float(min(1.0, max(0.0, best_score)))
+            best["match_score"] = float(best_score)
             best["match_kind"] = "fuzzy"
         return best
 
@@ -5789,10 +5938,7 @@ class FormAlchemistEngine:
             "fingerprint_key": fp_key,
             "pdf_family_hint": str(fingerprint.get("pdf_family_hint", "")),
             "page_idx": int(fingerprint.get("page_idx", revision.get("page_idx", 0)) or 0),
-            "page_count": int(fingerprint.get("page_count", 0) or 0),
             "feature_snapshot": dict((fingerprint.get("features") or {})),
-            "anchor_tokens": list(fingerprint.get("anchor_tokens", []) or []),
-            "anchor_signature": str(fingerprint.get("anchor_signature", "") or ""),
             "settings": dict(revision.get("profile_used", {}) or {}),
             "save_count": combined_count,
             "approved_count": int(existing.get("approved_count", 0) or 0) + (1 if revision.get("approved") else 0),
@@ -5838,6 +5984,72 @@ class FormAlchemistEngine:
         self.correction_log = payload
         self.learning_storage.save_correction_log(payload)
         return entry
+
+    def record_candidate_review_batch(self, page_idx=0, anchor_ids=None, zone_rect=None, reviewed_items=None, source='repair_review'):
+        reviewed_items = list(reviewed_items or [])
+        if not reviewed_items:
+            return None
+        try:
+            page_idx = int(page_idx or 0)
+        except Exception:
+            page_idx = 0
+        fingerprint = {}
+        try:
+            fingerprint = dict((self.current_detection_context or {}).get('fingerprint', {}) or {})
+        except Exception:
+            fingerprint = {}
+        if not fingerprint and self.pdf_path:
+            try:
+                fingerprint = self.build_page_fingerprint(page_idx=page_idx)
+            except Exception:
+                fingerprint = {}
+        summary_counts = {}
+        summary = {
+            'event_type': 'candidate_review_batch',
+            'recorded_at': _utc_now_iso(),
+            'page_idx': int(page_idx),
+            'pdf_path': str(self.pdf_path or ''),
+            'fingerprint_key': str((fingerprint or {}).get('fingerprint_key', '') or ''),
+            'pdf_family_hint': str((fingerprint or {}).get('pdf_family_hint', '') or self._page_family_hint() or ''),
+            'anchor_ids': [int(x) for x in (anchor_ids or []) if isinstance(x, int) or str(x).isdigit()],
+            'zone_rect': self._serialize_rect(zone_rect) if zone_rect is not None else None,
+            'source': str(source or 'repair_review'),
+            'decision_count': int(len(reviewed_items)),
+        }
+        summary_entry = self._append_correction_event(summary)
+        for item in reviewed_items:
+            action = str(item.get('action', '') or '')
+            accepted = bool(item.get('accepted', False))
+            key = f"{action}:{'accepted' if accepted else 'rejected'}"
+            summary_counts[key] = int(summary_counts.get(key, 0) or 0) + 1
+            rect = item.get('rect')
+            detail = {
+                'event_type': 'candidate_review_item',
+                'parent_event_id': str(summary_entry.get('event_id', '') or ''),
+                'page_idx': int(page_idx),
+                'action': action,
+                'accepted': accepted,
+                'kind': str(item.get('kind', '') or ''),
+                'source': str(item.get('source', '') or ''),
+                'score': float(item.get('score', 0.0) or 0.0),
+                'reason': str(item.get('reason', '') or ''),
+                'review_key': str(item.get('review_key', '') or ''),
+                'fingerprint_key': str((fingerprint or {}).get('fingerprint_key', '') or ''),
+            }
+            try:
+                if rect is not None:
+                    detail['rect'] = self._serialize_rect(rect)
+            except Exception:
+                pass
+            self._append_correction_event(detail)
+        self._append_correction_event({
+            'event_type': 'candidate_review_summary',
+            'parent_event_id': str(summary_entry.get('event_id', '') or ''),
+            'page_idx': int(page_idx),
+            'decision_summary': summary_counts,
+            'fingerprint_key': str((fingerprint or {}).get('fingerprint_key', '') or ''),
+        })
+        return summary_counts
 
     def _record_revision_learning_events(self, revision, event_type="revision_saved"):
         if not isinstance(revision, dict):
@@ -6003,6 +6215,7 @@ class FormAlchemistEngine:
             "pdf_path": self.pdf_path,
             "zoom": float(ZOOM),
             "text_tuning": self._normalized_text_tuning(getattr(self, "text_tuning", None)),
+            "candidate_tuning": self.get_candidate_tuning(),
             "ui_state": ui_state,
             "learning_meta": self.collect_learning_meta(),
             "current_detection_context": dict(self.current_detection_context or {}),
@@ -6041,6 +6254,7 @@ class FormAlchemistEngine:
             "Grid_N": int(self.settings["Grid_N"]),
 
             "custom_mappings": mappings_serial,
+            "area_templates": self._serialize_area_templates(),
         }
 
     def apply_config(self, cfg):
@@ -6075,6 +6289,7 @@ class FormAlchemistEngine:
         self.config_zoom = float(cfg.get("zoom", getattr(self, "config_zoom", ZOOM)))
         self.config_pdf_path = str(cfg.get("pdf_path", getattr(self, "config_pdf_path", "")) or "")
         self.text_tuning = self._normalized_text_tuning(cfg.get("text_tuning", getattr(self, "text_tuning", None)))
+        self.candidate_tuning = self._normalized_candidate_tuning(cfg.get("candidate_tuning", getattr(self, "candidate_tuning", None)))
         self.record_label_source_column = str(cfg.get("record_label_source_column", getattr(self, "record_label_source_column", "")) or "").strip()
         self.apply_learning_meta(cfg.get("learning_meta", {}))
         restored_ctx = cfg.get("current_detection_context", {}) or {}
@@ -6084,6 +6299,8 @@ class FormAlchemistEngine:
 
         self.custom_mappings.clear()
         self.semantic_target_overrides = {}
+        self.area_templates_by_page = {}
+        self.area_template_index = {}
         loaded_mappings = cfg.get("custom_mappings", {}) or {}
         for k, lst in loaded_mappings.items():
             if isinstance(lst, dict):
@@ -6125,6 +6342,7 @@ class FormAlchemistEngine:
         self.box_types_by_page = {}
         self.geom_by_page = {}
         self.semantic_targets_by_page = {}
+        self._deserialize_area_templates(cfg.get("area_templates", {}))
 
     def merge_config_into_current(self, incoming_cfg, keep_current_detection=True, prefer="incoming"):
         current_cfg = self.collect_config()
@@ -6647,7 +6865,6 @@ class FormAlchemistEngine:
         cv2.line(img, (x1 - pad, y0 + pad), (x0 + pad, y1 - pad), (0, 0, 0), thickness, cv2.LINE_AA)
 
     def get_processed_preview_pixmap(self, patient_name, page_idx=0, preview_zoom=1.5, record_key=None):
-        self._ensure_detection_for_page(page_idx=page_idx)
         img = self.get_raw_preview_pixmap(page_idx=page_idx, preview_zoom=preview_zoom)
         if img is None or getattr(img, "size", 0) == 0:
             raise ValueError("Failed to build preview image.")
@@ -6678,12 +6895,8 @@ class FormAlchemistEngine:
             box_type = self.box_types[i]
             if box_type == "check":
                 color = (0, 0, 255)
-            elif box_type == "radio":
-                color = (255, 0, 255)
             elif box_type == "line":
                 color = (0, 215, 255)
-            elif box_type == "unknown":
-                color = (0, 140, 255)
             else:
                 color = (0, 255, 0)
 
@@ -6709,11 +6922,16 @@ class InteractivePreview(Image):
         self.hovered_box_id = None
         self.preview_zoom = 1.0
         self.page_idx = 0
+        self.label_mode = 'all'
         self.box_tap_callback = None
         self.box_double_tap_callback = None
+        self.preview_tap_callback = None
         self.hover_callback = None
         self.zoom_request_callback = None
         self.display_scale = 1.0
+        self.capture_rect_payload = None
+        self.capture_split_rects_payload = []
+        self.capture_points_payload = []
         self._active_touches = {}
         self._touch_refs = {}
         self._pinch_start_dist = None
@@ -6749,11 +6967,12 @@ class InteractivePreview(Image):
         self.canvas.ask_update()
         Clock.schedule_once(lambda dt: self._redraw_overlay(), 0)
 
-    def set_boxes_payload(self, boxes_payload, selected_ids=None, preview_zoom=1.0, page_idx=0):
+    def set_boxes_payload(self, boxes_payload, selected_ids=None, preview_zoom=1.0, page_idx=0, label_mode='all'):
         self.boxes_payload = list(boxes_payload or [])
         self.preview_zoom = float(preview_zoom or 1.0)
         self.page_idx = int(page_idx or 0)
         self.selected_ids = set(selected_ids or [])
+        self.label_mode = str(label_mode or 'all')
         self.hovered_box_id = None
         self._redraw_overlay()
 
@@ -6761,10 +6980,23 @@ class InteractivePreview(Image):
         self.selected_ids = set(selected_ids or [])
         self._redraw_overlay()
 
+    def set_capture_guides(self, capture_rect=None, guide_rects=None, guide_points=None):
+        self.capture_rect_payload = dict(capture_rect or {}) if isinstance(capture_rect, dict) else capture_rect
+        self.capture_split_rects_payload = [dict(r) if isinstance(r, dict) else r for r in (guide_rects or [])]
+        self.capture_points_payload = list(guide_points or [])
+        self._redraw_overlay()
+
+    def clear_capture_guides(self):
+        self.capture_rect_payload = None
+        self.capture_split_rects_payload = []
+        self.capture_points_payload = []
+        self._redraw_overlay()
+
     def clear_boxes(self):
         self.boxes_payload = []
         self.selected_ids = set()
         self.hovered_box_id = None
+        self.clear_capture_guides()
         self._active_touches = {}
         self._touch_refs = {}
         self._pinch_start_dist = None
@@ -6837,6 +7069,20 @@ class InteractivePreview(Image):
         if y + h + 22 <= dy + dh:
             return "top_left"
         return "bottom"
+
+    def _should_draw_box_label(self, box):
+        mode = str(getattr(self, 'label_mode', 'all') or 'all').strip().lower()
+        try:
+            box_id = int(box.get('id'))
+        except Exception:
+            box_id = box.get('id')
+        if mode in {'none', 'off', 'hidden'}:
+            return False
+        if mode in {'selected', 'selected_only', 'focus', 'focus_only'}:
+            return (box_id in self.selected_ids) or (box_id == self.hovered_box_id)
+        if mode in {'hovered', 'hovered_only'}:
+            return box_id == self.hovered_box_id
+        return True
 
     def _resolve_box_image_rect(self, box):
         if not isinstance(box, dict):
@@ -6911,6 +7157,8 @@ class InteractivePreview(Image):
             return None
         label_hits = []
         for box in self.boxes_payload:
+            if not self._should_draw_box_label(box):
+                continue
             rect = self._resolve_label_display_rect(box)
             if rect is None:
                 continue
@@ -6959,8 +7207,42 @@ class InteractivePreview(Image):
                 hovered = (box["id"] == self.hovered_box_id)
                 Color(*self._box_color(box.get("t", "field"), selected=selected, hovered=hovered))
                 Line(rectangle=(x, y, w, h), width=3.2 if selected else (2.4 if hovered else 1.35))
-                Color(0, 0, 0, 0.88)
-                self._draw_label(x, y + h, box["id"], anchor=self._label_anchor_for_box(box, x, y, w, h, disp))
+                if self._should_draw_box_label(box):
+                    Color(0, 0, 0, 0.88)
+                    self._draw_label(x, y + h, box["id"], anchor=self._label_anchor_for_box(box, x, y, w, h, disp))
+
+            def _draw_pdf_rect(rect_payload, rgba, width=2.0):
+                if rect_payload is None:
+                    return
+                try:
+                    bx, by, bw, bh = self._resolve_box_image_rect(rect_payload)
+                except Exception:
+                    return
+                x = dx + bx * sx
+                y = dy + (tex.height - (by + bh)) * sy
+                w = max(1.0, bw * sx)
+                h = max(1.0, bh * sy)
+                Color(*rgba)
+                Line(rectangle=(x, y, w, h), width=width)
+
+            capture_rect = getattr(self, 'capture_rect_payload', None)
+            if capture_rect:
+                _draw_pdf_rect(capture_rect, (0.20, 0.90, 1.00, 0.95), width=2.6)
+            for rect_payload in (getattr(self, 'capture_split_rects_payload', []) or []):
+                _draw_pdf_rect(rect_payload, (0.15, 1.00, 0.38, 0.92), width=2.2)
+            for point in (getattr(self, 'capture_points_payload', []) or []):
+                if not isinstance(point, (list, tuple)) or len(point) < 2:
+                    continue
+                try:
+                    img_x = float(point[0])
+                    img_y = float(point[1])
+                except Exception:
+                    continue
+                px = dx + img_x * sx
+                py = dy + (tex.height - img_y) * sy
+                rad = max(3.0, float(dp(4)))
+                Color(1.0, 0.92, 0.20, 0.95)
+                Ellipse(pos=(px - rad, py - rad), size=(rad * 2.0, rad * 2.0))
 
     def _touch_to_image_point(self, touch):
         disp = self._get_display_rect()
@@ -7072,6 +7354,19 @@ class InteractivePreview(Image):
                 self._pinch_start_scale = float(getattr(self, "display_scale", 1.0) or 1.0)
                 return True
 
+            if bool(getattr(self, 'capture_mode_active', False)) and callable(self.preview_tap_callback) and pt is not None:
+                try:
+                    handled = bool(self.preview_tap_callback(pt, hit))
+                except Exception:
+                    handled = False
+                if handled:
+                    try:
+                        touch.ud['_capture_point_handled'] = True
+                    except Exception:
+                        pass
+                    self._set_pointed_box(hit, notify=True)
+                    return True
+
             tap_count = self._register_tap(touch.x, touch.y)
 
             if hit is not None and tap_count >= 2:
@@ -7103,14 +7398,14 @@ class InteractivePreview(Image):
         self._touch_refs[touch.uid] = touch
         self._set_pointed_box(hit, notify=True)
         self._touch_start[touch.uid] = (touch.x, touch.y)
-        self._tap_candidates[touch.uid] = ({"hit": hit, "x": touch.x, "y": touch.y} if hit is not None else None)
+        self._tap_candidates[touch.uid] = ({"hit": hit, "x": touch.x, "y": touch.y, "img_pt": pt} if pt is not None else None)
         self._active_touches[touch.uid] = (touch.x, touch.y)
 
         if len(self._active_touches) >= 2:
             self._begin_android_pinch()
             return True
 
-        if hit is not None:
+        if pt is not None:
             try:
                 touch.grab(self)
             except Exception:
@@ -7213,7 +7508,16 @@ class InteractivePreview(Image):
 
             if candidate and (not moved) and (not had_multi_touch):
                 hit = candidate.get("hit")
+                img_pt = candidate.get("img_pt")
                 tap_count = self._register_tap(float(candidate.get("x", touch.x)), float(candidate.get("y", touch.y)))
+                if callable(self.preview_tap_callback):
+                    try:
+                        handled = bool(self.preview_tap_callback(img_pt, hit))
+                    except Exception:
+                        handled = False
+                    if handled:
+                        self._set_pointed_box(hit, notify=True)
+                        return True
                 if hit is not None and tap_count >= 2:
                     if callable(self.box_double_tap_callback):
                         self.box_double_tap_callback(hit)
@@ -7237,15 +7541,63 @@ class InteractivePreview(Image):
                 return True
             return super().on_touch_up(touch)
 
-        if getattr(touch, "grab_current", None) is self:
+        was_grabbed = (getattr(touch, "grab_current", None) is self)
+        if was_grabbed:
             try:
                 touch.ungrab(self)
             except Exception:
                 pass
+
+        if bool(getattr(getattr(touch, 'ud', {}), 'get', lambda *a, **k: False)('_capture_point_handled', False)):
+            if touch.uid in self._active_touches:
+                self._active_touches.pop(touch.uid, None)
+                if len(self._active_touches) < 2:
+                    self._pinch_start_dist = None
+            return True
+
+        moved = False
+        start = self._active_touches.get(touch.uid)
+        if start is not None:
+            try:
+                moved = math.hypot(float(touch.x) - float(start[0]), float(touch.y) - float(start[1])) > float(self._tap_slop)
+            except Exception:
+                moved = False
+
         if touch.uid in self._active_touches:
             self._active_touches.pop(touch.uid, None)
             if len(self._active_touches) < 2:
                 self._pinch_start_dist = None
+
+        if self.collide_point(*touch.pos):
+            pt = self._touch_to_image_point(touch)
+            hit = self._find_hit_box_for_touch(touch)
+            if (not moved) and (pt is not None or hit is not None):
+                tap_count = self._register_tap(float(touch.x), float(touch.y))
+                if callable(self.preview_tap_callback):
+                    try:
+                        handled = bool(self.preview_tap_callback(pt, hit))
+                    except Exception:
+                        handled = False
+                    if handled:
+                        self._set_pointed_box(hit, notify=True)
+                        return True
+                if hit is not None and tap_count >= 2:
+                    if callable(self.box_double_tap_callback):
+                        self.box_double_tap_callback(hit)
+                        self._recent_taps = []
+                        self._set_pointed_box(hit, notify=True)
+                        return True
+                if hit is not None:
+                    if callable(self.box_tap_callback):
+                        self.box_tap_callback(hit)
+                        self._set_pointed_box(hit, notify=True)
+                        return True
+                if hit is None and tap_count >= 3:
+                    if callable(self.zoom_request_callback):
+                        self.zoom_request_callback("step", "in")
+                        self._recent_taps = []
+                        return True
+
         return super().on_touch_up(touch)
 
     def _on_mouse_pos(self, _window, pos):
@@ -7549,11 +7901,16 @@ class FormAlchemistApp(MDApp):
         self._mobile_zoom_bootstrap_pending = bool(is_mobile)
         self.mobile_select_mode = False
         self._mobile_quick_rail_open = False
-        self.repair_anchor_box_ids = []
-        self.repair_anchor_page_idx = 0
-        self.repair_mode_armed = False
+        self._repair_anchor_box_ids = []
+        self._repair_anchor_page_idx = -1
+        self._repair_last_proposal = None
+        self._capture_mode_active = False
+        self._capture_page_idx = -1
+        self._capture_points = []
+        self._capture_preview_rect = None
+        self._capture_split_preview = []
+        self._capture_active_template = None
         self.text_tuning_ui = self.engine._normalized_text_tuning(getattr(self.engine, "text_tuning", None))
-        self.learning_auto_apply = True
 
         def style_card(widget, color=None, radius=dp(22)):
             color = color or palette["surface"]
@@ -7857,7 +8214,7 @@ class FormAlchemistApp(MDApp):
             hud_body = BoxLayout(orientation="vertical", spacing=dp(5), size_hint_y=None)
             hud_body.bind(minimum_height=hud_body.setter("height"))
             self.preview_hud_detail_lbl = Label(
-                text=("Tap or drag over a box to review it here. Use Repair only if detection is incomplete." if is_mobile else "Hover or tap a box to review it here. Use Repair only if detection is incomplete."),
+                text=("Tap or drag over a box to see its details here." if is_mobile else "Hover or tap a box to see its details here."),
                 color=palette["text"],
                 size_hint_y=None,
                 height=dp(32),
@@ -7881,7 +8238,7 @@ class FormAlchemistApp(MDApp):
             hud_btns = GridLayout(cols=3, spacing=dp(6), size_hint_y=None, height=row_h)
             self.btn_hud_map = make_button("Map", tone="primary")
             self.btn_hud_map.bind(on_release=self._open_mapping_from_hud)
-            self.btn_hud_clear = make_button("Clear", tone="secondary")
+            self.btn_hud_clear = make_button("Clear Link", tone="secondary")
             self.btn_hud_clear.bind(on_release=self.on_clear_selected_mapping)
             self.btn_hud_tune = make_button("Tune", tone="accent")
             self.btn_hud_tune.bind(on_release=self.open_detection_settings_popup)
@@ -8129,7 +8486,6 @@ class FormAlchemistApp(MDApp):
             display_map = {
                 "Files": "Files",
                 "Session": "Session",
-                "Selection": "Review",
                 "Detection": "Fields",
                 "Text": "Text",
                 "Learning": "Memory",
@@ -8389,39 +8745,19 @@ class FormAlchemistApp(MDApp):
         self.learning_revision_lbl = _make_learning_info_label("Current revision: none")
         self.learning_recent_lbl = _make_learning_info_label("Recent revisions: none", min_height=dp(48))
         self.learning_storage_lbl = _make_learning_info_label("Storage: —", color=palette["muted"], min_height=dp(40))
-        self.learning_validation_lbl = _make_learning_info_label("Validation: not run yet", min_height=dp(48))
 
         learning_body.add_widget(labeled_field("Summary", self.learning_summary_lbl, "Counts and current page learning state"))
         learning_body.add_widget(labeled_field("Best Match", self.learning_match_lbl, "The closest saved setup the app found for this page"))
         learning_body.add_widget(labeled_field("Saved Versions", self.learning_revision_lbl, "The current saved or approved setup version"))
         learning_body.add_widget(labeled_field("Recent History", self.learning_recent_lbl, "Recently saved setup versions for quick review"))
         learning_body.add_widget(labeled_field("Storage", self.learning_storage_lbl, "Where the app keeps its saved memory files"))
-        learning_body.add_widget(labeled_field("Validation", self.learning_validation_lbl, "Preflight scan for overlaps, custom fillables, weak sections, and unmapped text fields"))
-
-        auto_row = BoxLayout(orientation="horizontal", spacing=dp(10), size_hint_y=None, height=dp(34))
-        self.learning_auto_apply_chk = CheckBox(active=True, size_hint=(None, None), size=(dp(24), dp(24)))
-        self.learning_auto_apply_chk.bind(active=self.on_learning_auto_apply_change)
-        auto_lbl = Label(
-            text="Auto-apply learned setup on Detect",
-            color=palette["text"],
-            size_hint=(1, 1),
-            halign="left",
-            valign="middle",
-            font_size=dp(11.2 if is_mobile else 11.8),
-        )
-        auto_lbl.bind(size=self._sync_label_text_size)
-        auto_row.add_widget(self.learning_auto_apply_chk)
-        auto_row.add_widget(auto_lbl)
-        learning_body.add_widget(labeled_field("Auto Apply", auto_row, "When enabled, Detect may preload the best approved learned profile before scanning"))
 
         learn_grid = GridLayout(cols=2 if is_mobile else 3, spacing=dp(8), size_hint_y=None)
         learning_buttons = [
             ("Refresh State", self.on_learning_refresh, "soft"),
-            ("Validate Page", self.on_learning_validate_page, "accent"),
             ("Save Revision", self.on_learning_save_revision, "accent"),
             ("Approve Current", self.on_learning_approve_current, "primary"),
             ("Apply Best", self.on_learning_apply_best_profile, "plain"),
-            ("Manage Profiles", self.on_learning_manage_profiles, "soft"),
             ("View Current", self.on_learning_view_current_revision, "plain"),
             ("Browse Revisions", self.on_learning_browse_revisions, "plain"),
             ("Reload Memory", self.on_learning_reload_memory, "plain"),
@@ -8433,16 +8769,12 @@ class FormAlchemistApp(MDApp):
             btn.bind(on_release=cb)
             if txt == "Refresh State":
                 self.btn_learning_refresh = btn
-            elif txt == "Validate Page":
-                self.btn_learning_validate_page = btn
             elif txt == "Save Revision":
                 self.btn_learning_save_revision = btn
             elif txt == "Approve Current":
                 self.btn_learning_approve_current = btn
             elif txt == "Apply Best":
                 self.btn_learning_apply_best = btn
-            elif txt == "Manage Profiles":
-                self.btn_learning_manage_profiles = btn
             elif txt == "View Current":
                 self.btn_learning_view_current = btn
             elif txt == "Browse Revisions":
@@ -8464,7 +8796,7 @@ class FormAlchemistApp(MDApp):
         self.inspector_selected_lbl.bind(size=self._sync_label_text_size)
         self.inspector_count_lbl = Label(text="0", color=palette["text"], size_hint_y=None, height=dp(20), halign="left", valign="middle", font_size=dp(12))
         self.inspector_count_lbl.bind(size=self._sync_label_text_size)
-        selection_summary.add_widget(labeled_field("Selected Box Numbers", self.inspector_selected_lbl, "Select example boxes only if detection needs repair"))
+        selection_summary.add_widget(labeled_field("Selected Box Numbers", self.inspector_selected_lbl, "Tap preview boxes to select them"))
         selection_summary.add_widget(labeled_field("Boxes Selected", self.inspector_count_lbl))
 
         selection_box_body = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
@@ -8477,7 +8809,7 @@ class FormAlchemistApp(MDApp):
 
         mapping_section_body = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
         mapping_section_body.bind(minimum_height=mapping_section_body.setter("height"))
-        self.inspector_mapping_lbl = Label(text="Choose a box in the preview to map it. Use Repair only if detection is incomplete.", color=palette["muted"], size_hint_y=None, height=dp(40), halign="left", valign="middle", font_size=dp(11))
+        self.inspector_mapping_lbl = Label(text="Choose a box in the preview to select or map it.", color=palette["muted"], size_hint_y=None, height=dp(40), halign="left", valign="middle", font_size=dp(11))
         self.inspector_mapping_lbl.bind(size=self._sync_label_text_size)
         self._bind_auto_height_label(self.inspector_mapping_lbl, min_height=dp(36), extra_pad=dp(6))
         mapping_section_body.add_widget(labeled_field("Current Link", self.inspector_mapping_lbl))
@@ -8490,18 +8822,10 @@ class FormAlchemistApp(MDApp):
         self.btn_clear_mapping.bind(on_release=self.on_clear_selected_mapping)
         clear_row.add_widget(self.btn_clear_mapping)
         mapping_section_body.add_widget(clear_row)
-        section_action_row = GridLayout(cols=1 if is_mobile else 2, spacing=dp(8), size_hint_y=None, height=row_h if not is_mobile else (row_h*2 + dp(8)))
-        self.btn_section_assist = make_button("Section Assist", tone="soft")
-        self.btn_section_assist.bind(on_release=self.on_section_assist)
-        section_action_row.add_widget(self.btn_section_assist)
-        self.section_auto_chk = CheckBox(active=bool(getattr(self.engine, "section_automation_enabled", True)))
-        self.section_auto_chk.bind(active=self.on_section_automation_toggle)
-        section_action_row.add_widget(labeled_checkbox("Enable Section Helpers", self.section_auto_chk, "Use section-aware auto-linking and same-as-above fallback during preview and export"))
-        mapping_section_body.add_widget(section_action_row)
 
         hover_section_body = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
         hover_section_body.bind(minimum_height=hover_section_body.setter("height"))
-        self.inspector_hover_lbl = Label(text=("Tap a box to review it. Use Repair only if detection is incomplete." if is_mobile else "Hover a box to review it. Use Repair only if detection is incomplete."), color=palette["muted"], size_hint_y=None, height=dp(40), halign="left", valign="middle", font_size=dp(11))
+        self.inspector_hover_lbl = Label(text=("Tap a box to select it." if is_mobile else "Hover a box to review it."), color=palette["muted"], size_hint_y=None, height=dp(40), halign="left", valign="middle", font_size=dp(11))
         self.inspector_hover_lbl.bind(size=self._sync_label_text_size)
         self._bind_auto_height_label(self.inspector_hover_lbl, min_height=dp(36), extra_pad=dp(6))
         pointer_label = "Selected Box"
@@ -8510,8 +8834,6 @@ class FormAlchemistApp(MDApp):
         selection_body.add_widget(self._build_collapsible_panel("Selection Summary", selection_box_body, start_open=True))
         selection_body.add_widget(self._build_collapsible_panel("Mapping Details", mapping_section_body, start_open=True))
         selection_body.add_widget(self._build_collapsible_panel(pointer_label, hover_section_body, start_open=False))
-        if is_mobile:
-            self._mobile_section_cards["Selection"] = selection_card
         self._desktop_right_section_cards = {}
         self._desktop_right_section_buttons = {}
         self._desktop_right_section_host = None
@@ -8600,6 +8922,7 @@ class FormAlchemistApp(MDApp):
             self.preview.bind(texture=self._update_preview_size)
             self.preview.box_tap_callback = self.on_preview_box_tap
             self.preview.box_double_tap_callback = self.on_preview_box_double_tap
+            self.preview.preview_tap_callback = self.on_preview_point_tap
             self.preview.hover_callback = self.on_preview_box_hover
             self.preview.zoom_request_callback = self.on_preview_zoom_request
             preview_wrap.bind(size=self._on_preview_viewport_change, pos=self._on_preview_viewport_change)
@@ -8699,7 +9022,7 @@ class FormAlchemistApp(MDApp):
                 height=dp(40),
             )
             context_row = GridLayout(
-                cols=4,
+                cols=6,
                 rows=1,
                 spacing=dp(4),
                 size_hint=(1, None),
@@ -8735,7 +9058,11 @@ class FormAlchemistApp(MDApp):
             self.btn_mobile_sidebar.bind(on_release=lambda *_: self._toggle_mobile_sidebar())
             self.btn_mobile_more = self._make_compact_action_button("Repair", tone="secondary")
             self.btn_mobile_more.bind(on_release=self._toggle_mobile_inspect_panel)
-            self.btn_mobile_tools_fab = self._make_compact_action_button("Tools", tone="primary")
+            self.btn_mobile_capture = self._make_compact_action_button("Capture", tone="accent")
+            self.btn_mobile_capture.bind(on_release=self._toggle_manual_area_capture_mode)
+            self.btn_mobile_templates = self._make_compact_action_button("Tpls", tone="plain")
+            self.btn_mobile_templates.bind(on_release=self._open_area_template_library_popup)
+            self.btn_mobile_tools_fab = self._make_compact_action_button("More", tone="primary")
             self.btn_mobile_tools_fab.size_hint = (None, None)
             self.btn_mobile_tools_fab.size = (dp(88), dp(48))
             self.btn_mobile_tools_fab.pos = (Window.width - dp(86), dp(12))
@@ -8752,6 +9079,8 @@ class FormAlchemistApp(MDApp):
             self.btn_mobile_select_mode.text = "Select Off"
             self.btn_mobile_sidebar.text = "Menu"
             self.btn_mobile_more.text = "Repair"
+            self.btn_mobile_capture.text = "Capture"
+            self.btn_mobile_templates.text = "Tpls"
             for widget in [
                 self.btn_mobile_prev,
                 self.page_input_mobile,
@@ -8774,6 +9103,8 @@ class FormAlchemistApp(MDApp):
                 self.btn_mobile_zoom_reset,
                 self.btn_mobile_select_mode,
                 self.btn_mobile_more,
+                self.btn_mobile_capture,
+                self.btn_mobile_templates,
                 self.btn_mobile_sidebar,
             ]:
                 widget.size_hint = (1, None)
@@ -8791,6 +9122,7 @@ class FormAlchemistApp(MDApp):
             workspace.add_widget(bottom_dock)
 
             self._sync_mobile_tools_layout()
+            self._update_capture_button_state()
             Window.bind(size=self._sync_mobile_tools_layout)
 
             self.mobile_sidebar_scrim = Button(
@@ -8847,7 +9179,7 @@ class FormAlchemistApp(MDApp):
                         pass
                 self.mobile_sidebar.add_widget(mobile_flow_card)
 
-            sidebar_tabs = _make_mobile_section_tabs(["Files", "Detection", "Selection", "Text", "Learning", "Mapping", "Session", "Export"])
+            sidebar_tabs = _make_mobile_section_tabs(["Files", "Detection", "Text", "Learning", "Mapping", "Session", "Export"])
             self.mobile_sidebar.add_widget(sidebar_tabs)
 
             sidebar_scroll = ScrollView(do_scroll_x=False, do_scroll_y=True, bar_width=dp(4), bar_margin=dp(10), scroll_type=["bars", "content"])
@@ -8939,6 +9271,7 @@ class FormAlchemistApp(MDApp):
             self.preview.bind(texture=self._update_preview_size)
             self.preview.box_tap_callback = self.on_preview_box_tap
             self.preview.box_double_tap_callback = self.on_preview_box_double_tap
+            self.preview.preview_tap_callback = self.on_preview_point_tap
             self.preview.hover_callback = self.on_preview_box_hover
             self.preview.zoom_request_callback = self.on_preview_zoom_request
             preview_wrap.bind(size=self._on_preview_viewport_change, pos=self._on_preview_viewport_change)
@@ -9337,13 +9670,6 @@ class FormAlchemistApp(MDApp):
 
     def _update_selection_inspector(self):
         ids = sorted(set(int(x) for x in getattr(self.engine, "selected_box_ids", []) if isinstance(x, int) or str(x).isdigit()))
-        if getattr(self, "ui_mobile", False) and ids:
-            active = str(getattr(self, "_mobile_active_section", "") or "")
-            if active in {"", "Files", "Session", "Detection"} and callable(getattr(self, "_show_mobile_section", None)):
-                try:
-                    self._show_mobile_section("Selection")
-                except Exception:
-                    pass
         if hasattr(self, "inspector_selected_lbl") and self.inspector_selected_lbl is not None:
             self.inspector_selected_lbl.text = (", ".join(str(i) for i in ids) if ids else "None")
         if hasattr(self, "inspector_count_lbl") and self.inspector_count_lbl is not None:
@@ -9351,7 +9677,7 @@ class FormAlchemistApp(MDApp):
 
         if not ids:
             box_text = "No selection"
-            mapping_text = "Choose a box in the preview to map it. Use Repair only if detection is incomplete."
+            mapping_text = "Choose a box in the preview to select or map it."
         else:
             first = ids[0]
             box_type = self.engine.box_types[first] if first < len(self.engine.box_types) else "field"
@@ -9359,26 +9685,10 @@ class FormAlchemistApp(MDApp):
             rect_text = ""
             if rect is not None:
                 rect_text = f" | ({int(rect.x0)}, {int(rect.y0)}) → ({int(rect.x1)}, {int(rect.y1)})"
-            box_text = f"Box {first} • {self._friendly_box_type_label(box_type)}{rect_text}"
+            box_text = f"Box {first} • {box_type}{rect_text}"
             mapping = self.engine.describe_box_mapping(first, self.current_page_idx())
-            group_info = self.engine.describe_box_group(first)
-            section_info = self.engine.describe_box_section(first)
             mapping_text = mapping if mapping and mapping != "EMPTY" else "Unmapped"
-            if group_info:
-                mapping_text = mapping_text + ("\n" if mapping_text else "") + "Group: " + group_info
-            if section_info:
-                mapping_text = mapping_text + ("\n" if mapping_text else "") + "Section: " + section_info
-            section_actions = self.engine.get_section_action_suggestions(first)
-            if section_actions:
-                mapping_text = mapping_text + ("\n" if mapping_text else "") + "Suggestions: " + " | ".join(section_actions)
-            if section_info:
-                helper_state = "ON" if bool(getattr(self.engine, "section_automation_enabled", True)) else "OFF"
-                mapping_text = mapping_text + ("\n" if mapping_text else "") + f"Section Assist: {helper_state}"
 
-        repair_ids = list(getattr(self, "repair_anchor_box_ids", []) or [])
-        repair_page = int(getattr(self, "repair_anchor_page_idx", -1) or -1)
-        if repair_ids and repair_page == int(self.current_page_idx()):
-            mapping_text = mapping_text + ("\n" if mapping_text else "") + f"Repair mode: optional • anchors {repair_ids}"
         if hasattr(self, "inspector_box_lbl") and self.inspector_box_lbl is not None:
             self.inspector_box_lbl.text = box_text
         if hasattr(self, "inspector_mapping_lbl") and self.inspector_mapping_lbl is not None:
@@ -9387,22 +9697,12 @@ class FormAlchemistApp(MDApp):
             if ids:
                 first = ids[0]
                 mapping = self._find_mapping_for_box(first, self.current_page_idx()) or {}
-                preview_value = self._get_selected_column_preview(
+                self.inspector_resolution_lbl.text = "Resolved preview value: " + self._get_selected_column_preview(
                     mapping.get("column", self.column_spinner.text if hasattr(self, "column_spinner") else ""),
                     trigger=mapping.get("trigger", self.trigger_input.text if hasattr(self, "trigger_input") else ""),
                     is_grid=bool(mapping.get("g", getattr(self.grid_flag_chk, "active", False) if hasattr(self, "grid_flag_chk") else False)),
                     grid_n=int(mapping.get("n", self.grid_n_input.text if hasattr(self, "grid_n_input") else "1") or 1),
                 )
-                same_as_above_note = ""
-                try:
-                    if mapping and not str(mapping.get("trigger", "") or "").strip():
-                        row = self.engine._get_patient_row(self.selected_patient() or "", record_key=self.selected_record_key())
-                        _, resolved_meta = self.engine._resolve_mapping_value(mapping, row, page_idx=self.current_page_idx())
-                        if bool(resolved_meta.get("same_as_above", False)):
-                            same_as_above_note = f" (same-as-above from {resolved_meta.get('resolved_from', '')})"
-                except Exception:
-                    same_as_above_note = ""
-                self.inspector_resolution_lbl.text = "Resolved preview value: " + preview_value + same_as_above_note
             else:
                 self.inspector_resolution_lbl.text = "Resolved preview value: —"
         self._update_preview_hud()
@@ -9526,22 +9826,6 @@ class FormAlchemistApp(MDApp):
         keep = max(18, (max_len - 3) // 2)
         return f"{txt[:keep]}...{txt[-keep:]}"
 
-    def _learning_auto_apply_enabled(self):
-        try:
-            if hasattr(self, "learning_auto_apply_chk"):
-                return bool(getattr(self.learning_auto_apply_chk, "active", False))
-        except Exception:
-            pass
-        return bool(getattr(self, "learning_auto_apply", True))
-
-    def on_learning_auto_apply_change(self, instance, value):
-        self.learning_auto_apply = bool(value)
-        self.refresh_learning_ui()
-        try:
-            self._persist_runtime_session_state(current_page_idx=self.current_page_idx())
-        except Exception:
-            pass
-
     def refresh_learning_ui(self, *_):
         if not hasattr(self, "engine") or self.engine is None:
             return
@@ -9549,8 +9833,6 @@ class FormAlchemistApp(MDApp):
             return
         try:
             profiles = ((self.engine.profile_memory or {}).get("profiles", {}) or {})
-            active_profiles = [p for p in profiles.values() if isinstance(p, dict) and not bool(p.get("disabled", False)) and not bool(p.get("forgotten", False))]
-            pinned_count = sum(1 for p in active_profiles if bool(p.get("pinned", False)))
             revision_index = self.engine.learning_storage.load_revision_index() if getattr(self.engine, "learning_storage", None) else {"items": []}
             rev_items = revision_index.get("items", []) if isinstance(revision_index, dict) else []
             corrections = ((self.engine.correction_log or {}).get("events", []) or [])
@@ -9561,27 +9843,23 @@ class FormAlchemistApp(MDApp):
             box_count = len(getattr(self.engine, "all_boxes", []) or [])
             enabled = bool(getattr(self.engine, "learning_enabled", False))
             self.learning_summary_lbl.text = (
-                f"Profiles: {len(active_profiles)} • Pinned: {pinned_count} • Revisions: {len(rev_items)} • Corrections: {len(corrections)}\n"
+                f"Profiles: {len(profiles)} • Revisions: {len(rev_items)} • Corrections: {len(corrections)}\n"
                 f"Page: {page_idx} • Boxes: {box_count} • Learning: {'On' if enabled else 'Off'}"
             )
 
             fp_key = str(fp.get("fingerprint_key", "") or "")
             fp_short = (fp_key[:12] + "…") if fp_key and len(fp_key) > 13 else (fp_key or "—")
-            fp_anchor = str(fp.get("anchor_signature", "") or "").strip()
             if match:
                 kind = str(match.get("match_kind", "fuzzy") or "fuzzy").title()
                 score = float(match.get("match_score", 0.0) or 0.0)
                 applied = bool(ctx.get("profile_applied", False))
                 approved = bool(match.get("approved", False))
-                anchor_sig = str(match.get("anchor_signature", "") or "").strip()
-                anchor_line = f" • Anchors: {anchor_sig[:48]}" if anchor_sig else (f" • Page: {fp_anchor[:48]}" if fp_anchor else "")
                 self.learning_match_lbl.text = (
                     f"Match: {kind} • Score: {score:.2f} • Applied: {'Yes' if applied else 'No'}\n"
-                    f"Approved profile: {'Yes' if approved else 'No'} • Fingerprint: {fp_short}{anchor_line}"
+                    f"Approved profile: {'Yes' if approved else 'No'} • Fingerprint: {fp_short}"
                 )
             else:
-                anchor_line = f" • Page: {fp_anchor[:48]}" if fp_anchor else ""
-                self.learning_match_lbl.text = f"Match: none yet\nFingerprint: {fp_short}{anchor_line}"
+                self.learning_match_lbl.text = f"Match: none yet\nFingerprint: {fp_short}"
 
             current_rev = str(getattr(self.engine, "current_revision_id", "") or "")
             last_saved = str(getattr(self.engine, "last_saved_revision_id", "") or "")
@@ -9610,235 +9888,8 @@ class FormAlchemistApp(MDApp):
                 f"Store: {self._short_learning_path(getattr(self.engine.learning_storage, 'base_dir', ''))}\n"
                 f"PDF: {os.path.basename(getattr(self.engine, 'pdf_path', '') or '') or 'None loaded'}"
             )
-            if hasattr(self, "learning_validation_lbl"):
-                report = self._scan_validation_issues(page_idx=page_idx)
-                self.last_validation_report = report
-                overlap_count = int(report.get("overlap_count", 0) or 0)
-                unknown_count = int(report.get("unknown_count", 0) or 0)
-                unmapped_count = int(report.get("unmapped_text_count", 0) or 0)
-                unlabeled_count = int(report.get("unlabeled_section_count", 0) or 0)
-                weak_links = int(report.get("weak_auto_link_count", 0) or 0)
-                issue_count = len(list(report.get("issues", []) or []))
-                status_text = "Clean" if issue_count <= 0 else ("Watch" if issue_count <= 4 else "Needs review")
-                self.learning_validation_lbl.text = (
-                    f"{status_text} • Issues: {issue_count} • Overlaps: {overlap_count} • Unknown: {unknown_count}\n"
-                    f"Unmapped text: {unmapped_count} • Sections without labels: {unlabeled_count} • Weak auto-links: {weak_links}"
-                )
         except Exception:
             pass
-
-    def _is_mobile_layout(self):
-        try:
-            return bool(platform == "android" or getattr(self, "_mobile_mode", False))
-        except Exception:
-            return bool(platform == "android")
-
-    def _mapping_exists_for_box(self, box_idx, page_idx=0):
-        engine = getattr(self, "engine", None)
-        if engine is None:
-            return False
-        try:
-            return bool(engine._mapping_exists_for_box(box_idx, page_idx=page_idx))
-        except Exception:
-            return False
-
-    def _scan_validation_issues(self, page_idx=None):
-        report = {
-            "page_idx": 0,
-            "issues": [],
-            "overlap_count": 0,
-            "unknown_count": 0,
-            "unmapped_text_count": 0,
-            "unlabeled_section_count": 0,
-            "weak_auto_link_count": 0,
-            "box_count": 0,
-            "section_count": 0,
-            "group_count": 0,
-        }
-        engine = getattr(self, "engine", None)
-        if engine is None:
-            return report
-        try:
-            page_idx = int(page_idx if page_idx is not None else (getattr(engine, "detected_page_idx", 0) or 0))
-        except Exception:
-            page_idx = 0
-        report["page_idx"] = page_idx
-        boxes = list(getattr(engine, "all_boxes", []) or [])
-        box_types = list(getattr(engine, "box_types", []) or [])
-        n = min(len(boxes), len(box_types))
-        report["box_count"] = n
-        option_groups = list(getattr(engine, "option_groups", []) or [])
-        compound_sections = list(getattr(engine, "compound_sections", []) or [])
-        report["group_count"] = len(option_groups)
-        report["section_count"] = len(compound_sections)
-        option_group_by_box = {}
-        for group in option_groups:
-            gid = int(group.get("id", len(option_group_by_box)) or 0)
-            for member in list(group.get("member_ids", []) or []):
-                try:
-                    option_group_by_box[int(member)] = gid
-                except Exception:
-                    continue
-        text_like = {"field", "line", "unknown"}
-        for idx in range(n):
-            btype = str(box_types[idx] or "")
-            if btype == "unknown":
-                report["unknown_count"] += 1
-                report["issues"].append({
-                    "severity": "info",
-                    "title": "Custom fillable candidate",
-                    "detail": f"Box {idx + 1} is still classified as custom/unknown. Review or map it manually if important.",
-                })
-            if btype in text_like and not self._mapping_exists_for_box(idx, page_idx=page_idx):
-                report["unmapped_text_count"] += 1
-        for section in compound_sections:
-            label_text = str(section.get("label_text", "") or "").strip()
-            if not label_text:
-                report["unlabeled_section_count"] += 1
-        for section in compound_sections:
-            try:
-                suggestions = list(engine.preview_section_auto_links(section, page_idx=page_idx, available_columns=list(getattr(self, "csv_columns", []) or [])) or [])
-            except Exception:
-                suggestions = []
-            weak = [s for s in suggestions if float(s.get("score", 0.0) or 0.0) < 18.0]
-            report["weak_auto_link_count"] += len(weak)
-        for i in range(n):
-            rect_i = fitz.Rect(boxes[i])
-            type_i = str(box_types[i] or "")
-            for j in range(i + 1, n):
-                if option_group_by_box.get(i) == option_group_by_box.get(j) and i in option_group_by_box and j in option_group_by_box:
-                    continue
-                rect_j = fitz.Rect(boxes[j])
-                overlap = _rect_iou(rect_i, rect_j)
-                if overlap < 0.42:
-                    continue
-                type_j = str(box_types[j] or "")
-                report["overlap_count"] += 1
-                sev = "warning" if (type_i == type_j or "unknown" in {type_i, type_j}) else "info"
-                report["issues"].append({
-                    "severity": sev,
-                    "title": "Overlapping detections",
-                    "detail": f"Box {i + 1} ({type_i}) overlaps Box {j + 1} ({type_j}) with IOU {overlap:.2f}.",
-                })
-        tuning = dict(getattr(engine, "text_tuning", {}) or {})
-        inset_x = float(tuning.get("content_inset_x", 0.0) or 0.0)
-        inset_y = float(tuning.get("content_inset_y", 0.0) or 0.0)
-        overall_scale = float(tuning.get("overall_scale", 1.0) or 1.0)
-        line_scale = float(tuning.get("line_scale", 1.0) or 1.0)
-        if inset_x >= 0.36 or inset_y >= 0.36:
-            report["issues"].append({
-                "severity": "info",
-                "title": "Aggressive content inset",
-                "detail": f"Current inset is X={inset_x:.2f}, Y={inset_y:.2f}; text may look over-tight inside narrow fields.",
-            })
-        if overall_scale <= 0.55 or line_scale <= 0.45:
-            report["issues"].append({
-                "severity": "info",
-                "title": "Small text scale",
-                "detail": f"Overall scale={overall_scale:.2f}, line scale={line_scale:.2f}; long fields may appear too small in preview/export.",
-            })
-        report["issues"] = list(report.get("issues", []) or [])[:80]
-        return report
-
-    def _format_validation_report_text(self, report):
-        report = dict(report or {})
-        lines = []
-        page_idx = int(report.get("page_idx", 0) or 0)
-        lines.append(f"Page: {page_idx}")
-        lines.append(
-            f"Boxes: {int(report.get('box_count', 0) or 0)} • Groups: {int(report.get('group_count', 0) or 0)} • Sections: {int(report.get('section_count', 0) or 0)}"
-        )
-        lines.append(
-            f"Overlaps: {int(report.get('overlap_count', 0) or 0)} • Unknown: {int(report.get('unknown_count', 0) or 0)} • Unmapped text: {int(report.get('unmapped_text_count', 0) or 0)}"
-        )
-        lines.append(
-            f"Sections without labels: {int(report.get('unlabeled_section_count', 0) or 0)} • Weak auto-links: {int(report.get('weak_auto_link_count', 0) or 0)}"
-        )
-        issues = list(report.get("issues", []) or [])
-        if not issues:
-            lines.append("")
-            lines.append("No obvious validation issues found on the current page.")
-            return "\n".join(lines)
-        lines.append("")
-        lines.append("Issues:")
-        severity_symbol = {"warning": "!", "info": "•", "error": "×"}
-        for item in issues[:30]:
-            sev = str(item.get("severity", "info") or "info")
-            symbol = severity_symbol.get(sev, "•")
-            title = str(item.get("title", "Issue") or "Issue")
-            detail = str(item.get("detail", "") or "").strip()
-            lines.append(f"{symbol} {title}")
-            if detail:
-                lines.append(f"   {detail}")
-        if len(issues) > 30:
-            lines.append(f"… {len(issues) - 30} more issue(s) not shown in this popup.")
-        return "\n".join(lines)
-
-    def _open_validation_report_popup(self, report):
-        palette = getattr(self, "ui_palette", {}) or {}
-        body = BoxLayout(orientation="vertical", spacing=dp(8))
-        header = Label(
-            text="Current page validation report",
-            color=palette.get("text", (1, 1, 1, 1)),
-            size_hint_y=None,
-            height=dp(28),
-            halign="left",
-            valign="middle",
-            font_size=dp(12),
-        )
-        header.bind(size=self._sync_label_text_size)
-        body.add_widget(header)
-        scroll = ScrollView(do_scroll_x=False, do_scroll_y=True, bar_width=dp(5), scroll_type=["bars", "content"])
-        content = Label(
-            text=self._format_validation_report_text(report),
-            color=palette.get("text", (1, 1, 1, 1)),
-            size_hint_y=None,
-            halign="left",
-            valign="top",
-            font_size=dp(11),
-        )
-        content.bind(size=self._sync_label_text_size)
-        self._bind_auto_height_label(content, min_height=dp(260), extra_pad=dp(10))
-        scroll.add_widget(content)
-        body.add_widget(scroll)
-        btn_row = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=dp(40))
-        refresh_btn = Button(text="Refresh", background_normal="", background_color=palette.get("surface_soft", (0.15, 0.16, 0.22, 1)), color=palette.get("text", (1,1,1,1)))
-        close_btn = Button(text="Close", background_normal="", background_color=palette.get("surface_soft", (0.15, 0.16, 0.22, 1)), color=palette.get("text", (1,1,1,1)))
-        btn_row.add_widget(refresh_btn)
-        btn_row.add_widget(close_btn)
-        body.add_widget(btn_row)
-        popup = Popup(
-            title="Validation Report",
-            separator_height=0,
-            background="",
-            background_color=(0, 0, 0, 0.78),
-            content=body,
-            size_hint=((0.94 if self._is_mobile_layout() else 0.70), (0.86 if self._is_mobile_layout() else 0.78)),
-            auto_dismiss=True,
-        )
-        def _refresh_and_replace(*_):
-            try:
-                report2 = self._scan_validation_issues()
-                self.last_validation_report = report2
-                content.text = self._format_validation_report_text(report2)
-                self.refresh_learning_ui()
-                self.set_status("Validation report refreshed.")
-            except Exception as e:
-                self.set_status(f"Validation refresh failed.\n{e}", kind="error")
-        refresh_btn.bind(on_release=_refresh_and_replace)
-        close_btn.bind(on_release=lambda *_: popup.dismiss())
-        popup.open()
-
-    def on_learning_validate_page(self, instance):
-        try:
-            report = self._scan_validation_issues()
-            self.last_validation_report = report
-            self.refresh_learning_ui()
-            self._open_validation_report_popup(report)
-            issue_count = len(list(report.get("issues", []) or []))
-            self.set_status(f"Validation complete.\nIssues found: {issue_count}")
-        except Exception as e:
-            self.set_status(f"Validation failed.\n{e}", kind="error")
 
     def on_learning_refresh(self, instance):
         self.refresh_learning_ui()
@@ -9952,304 +10003,6 @@ class FormAlchemistApp(MDApp):
         except Exception as e:
             self.set_status(f"Apply learned profile error:\n{e}")
 
-    def _persist_profile_memory_ui_changes(self):
-        try:
-            self.engine.profile_memory["version"] = 1
-            self.engine.profile_memory["updated_at"] = _utc_now_iso()
-            self.engine.learning_storage.save_profile_memory(self.engine.profile_memory)
-        except Exception:
-            pass
-
-    def _get_active_profile_entries(self):
-        profiles = ((self.engine.profile_memory or {}).get("profiles", {}) or {}) if hasattr(self, "engine") else {}
-        items = []
-        for key, entry in profiles.items():
-            if not isinstance(entry, dict):
-                continue
-            row = dict(entry)
-            row.setdefault("fingerprint_key", str(key))
-            if bool(row.get("disabled", False)) or bool(row.get("forgotten", False)):
-                continue
-            items.append(row)
-        items.sort(
-            key=lambda e: (
-                1 if bool(e.get("pinned", False)) else 0,
-                1 if bool(e.get("approved", False)) else 0,
-                float(e.get("avg_quality_weighted", e.get("avg_quality", 0.0)) or 0.0),
-                int(e.get("save_count", 0) or 0),
-                str(e.get("last_used_at", "") or ""),
-            ),
-            reverse=True,
-        )
-        return items
-
-    def _profile_card_summary_text(self, entry):
-        key = str(entry.get("fingerprint_key", "") or "")
-        key_short = (key[:16] + "…") if len(key) > 17 else (key or "—")
-        family = str(entry.get("pdf_family_hint", "") or "unknown")
-        page_idx = int(entry.get("page_idx", 0) or 0)
-        page_count = int(entry.get("page_count", 0) or 0)
-        quality = float(entry.get("avg_quality_weighted", entry.get("avg_quality", 0.0)) or 0.0)
-        saves = int(entry.get("save_count", 0) or 0)
-        approved = "Approved" if bool(entry.get("approved", False)) else "Draft"
-        pinned = "Pinned" if bool(entry.get("pinned", False)) else "Normal"
-        anchor = str(entry.get("anchor_signature", "") or "").strip()
-        anchor_line = f"Anchors: {anchor[:72]}" if anchor else "Anchors: —"
-        return (
-            f"{family} • p{page_idx}/{max(page_count, 1)} • {approved} • {pinned}\n"
-            f"Key: {key_short} • Quality: {quality:.2f} • Saves: {saves}\n"
-            f"{anchor_line}"
-        )
-
-    def _refresh_profile_manager_popup(self, popup_holder=None):
-        if isinstance(popup_holder, dict):
-            refresh_fn = popup_holder.get("refresh")
-            if callable(refresh_fn):
-                try:
-                    refresh_fn()
-                    return
-                except Exception:
-                    pass
-        Clock.schedule_once(lambda dt: self.on_learning_manage_profiles(None), 0.05)
-
-    def _apply_profile_from_manager(self, profile_key, popup_holder=None):
-        try:
-            profiles = ((self.engine.profile_memory or {}).get("profiles", {}) or {})
-            entry = profiles.get(profile_key)
-            if not isinstance(entry, dict):
-                self.set_status("Profile entry could not be loaded.")
-                return
-            settings = dict(entry.get("settings", {}) or {})
-            if not settings:
-                self.set_status("Profile has no stored settings to apply.")
-                return
-            self.engine._apply_learning_profile_settings(settings)
-            page_idx = int(self.current_page_idx()) if hasattr(self, "current_page_idx") else 0
-            ctx = dict(getattr(self.engine, "current_detection_context", {}) or {})
-            ctx.update({
-                "page_idx": page_idx,
-                "matched_profile": dict(entry),
-                "profile_applied": True,
-            })
-            self.engine.current_detection_context = ctx
-            self.engine.last_applied_profile_meta = {
-                "profile_key": str(profile_key),
-                "match_kind": "manual_browser",
-                "match_score": 1.0,
-                "applied_at": _utc_now_iso(),
-                "explicit_ui_apply": True,
-            }
-            entry["last_used_at"] = _utc_now_iso()
-            profiles[str(profile_key)] = entry
-            self._persist_profile_memory_ui_changes()
-            self.push_engine_settings_to_ui()
-            self.refresh_learning_ui()
-            self.engine.persist_learning_session(current_page_idx=page_idx)
-            if isinstance(popup_holder, dict) and popup_holder.get("popup") is not None:
-                try:
-                    popup_holder.get("popup").dismiss()
-                except Exception:
-                    pass
-            self.set_status(f"Applied saved profile.\nKey: {str(profile_key)[:20]}")
-        except Exception as e:
-            self.set_status(f"Apply profile error:\n{e}")
-
-    def _toggle_profile_pin_from_manager(self, profile_key, popup_holder=None):
-        try:
-            profiles = ((self.engine.profile_memory or {}).get("profiles", {}) or {})
-            entry = profiles.get(profile_key)
-            if not isinstance(entry, dict):
-                self.set_status("Profile entry could not be loaded.")
-                return
-            new_state = not bool(entry.get("pinned", False))
-            entry["pinned"] = new_state
-            entry["pinned_at"] = _utc_now_iso() if new_state else ""
-            entry["last_used_at"] = _utc_now_iso()
-            profiles[str(profile_key)] = entry
-            self._persist_profile_memory_ui_changes()
-            self.refresh_learning_ui()
-            self._refresh_profile_manager_popup(popup_holder)
-            self.set_status(f"Profile {'pinned' if new_state else 'unpinned'}.\nKey: {str(profile_key)[:20]}")
-        except Exception as e:
-            self.set_status(f"Pin profile error:\n{e}")
-
-    def _toggle_profile_approval_from_manager(self, profile_key, popup_holder=None):
-        try:
-            profiles = ((self.engine.profile_memory or {}).get("profiles", {}) or {})
-            entry = profiles.get(profile_key)
-            if not isinstance(entry, dict):
-                self.set_status("Profile entry could not be loaded.")
-                return
-            new_state = not bool(entry.get("approved", False))
-            entry["approved"] = new_state
-            entry["trust_class"] = "approved" if new_state else "saved"
-            entry["last_used_at"] = _utc_now_iso()
-            profiles[str(profile_key)] = entry
-            self._persist_profile_memory_ui_changes()
-            self.refresh_learning_ui()
-            self._refresh_profile_manager_popup(popup_holder)
-            self.set_status(f"Profile {'approved' if new_state else 'set to draft'}.\nKey: {str(profile_key)[:20]}")
-        except Exception as e:
-            self.set_status(f"Approve profile error:\n{e}")
-
-    def _forget_profile_from_manager(self, profile_key, popup_holder=None):
-        try:
-            profiles = ((self.engine.profile_memory or {}).get("profiles", {}) or {})
-            if str(profile_key) in profiles:
-                profiles.pop(str(profile_key), None)
-                self._persist_profile_memory_ui_changes()
-                self.refresh_learning_ui()
-                self._refresh_profile_manager_popup(popup_holder)
-                self.set_status(f"Profile forgotten.\nKey: {str(profile_key)[:20]}")
-                return
-            self.set_status("Profile entry was already removed.")
-        except Exception as e:
-            self.set_status(f"Forget profile error:\n{e}")
-
-    def _open_profile_details_popup(self, profile_key, popup_holder=None):
-        profiles = ((self.engine.profile_memory or {}).get("profiles", {}) or {})
-        entry = profiles.get(profile_key)
-        if not isinstance(entry, dict):
-            self.set_status("Profile details could not be loaded.")
-            return
-        palette = getattr(self, "ui_palette", {}) or {}
-        data = dict(entry)
-        body = BoxLayout(orientation="vertical", spacing=dp(8))
-        scroll = ScrollView(do_scroll_x=False, do_scroll_y=True, bar_width=dp(5), scroll_type=["bars", "content"])
-        content = BoxLayout(orientation="vertical", spacing=dp(8), size_hint_y=None)
-        content.bind(minimum_height=content.setter("height"))
-        sections = [
-            ("Profile", [
-                f"Key: {data.get('fingerprint_key', '—')}",
-                f"Family: {data.get('pdf_family_hint', '—')}",
-                f"Page: {int(data.get('page_idx', 0) or 0)} / Count: {int(data.get('page_count', 0) or 0)}",
-                f"Pinned: {'Yes' if data.get('pinned', False) else 'No'}",
-                f"Approved: {'Yes' if data.get('approved', False) else 'No'}",
-                f"Trust: {data.get('trust_class', 'draft')}",
-            ]),
-            ("Quality", [
-                f"Saves: {int(data.get('save_count', 0) or 0)}",
-                f"Approved count: {int(data.get('approved_count', 0) or 0)}",
-                f"Avg quality: {float(data.get('avg_quality', 0.0) or 0.0):.3f}",
-                f"Weighted quality: {float(data.get('avg_quality_weighted', 0.0) or 0.0):.3f}",
-                f"Weight total: {float(data.get('learning_weight_total', 0.0) or 0.0):.3f}",
-            ]),
-            ("Anchors", [
-                f"Signature: {str(data.get('anchor_signature', '') or '—')}",
-                f"Tokens: {', '.join(list(data.get('anchor_tokens', []) or [])[:20]) or '—'}",
-            ]),
-            ("Settings", [
-                f"Keys: {', '.join(sorted(list((data.get('settings', {}) or {}).keys()))[:18]) or '—'}",
-                f"Last revision: {data.get('last_revision_id', '—')}",
-                f"Last used: {data.get('last_used_at', '—')}",
-            ]),
-        ]
-        for title, lines in sections:
-            card = BoxLayout(orientation="vertical", spacing=dp(6), padding=[dp(10), dp(10), dp(10), dp(10)], size_hint_y=None)
-            card.bind(minimum_height=card.setter("height"))
-            self._style_popup_card(card, palette.get("surface_alt", (0.11, 0.135, 0.185, 1)), radius=dp(16))
-            ttl = Label(text=title, color=palette.get("text", (0.93, 0.96, 1.0, 1)), size_hint_y=None, height=dp(20), halign="left", valign="middle", font_size=dp(12.5), bold=True)
-            ttl.bind(size=self._sync_label_text_size)
-            card.add_widget(ttl)
-            for line in lines:
-                lbl = Label(text=str(line), color=palette.get("text", (0.93, 0.96, 1.0, 1)), size_hint_y=None, height=dp(18), halign="left", valign="middle", font_size=dp(11.0))
-                lbl.bind(size=self._sync_label_text_size)
-                self._bind_auto_height_label(lbl, min_height=dp(18), extra_pad=dp(2))
-                card.add_widget(lbl)
-            content.add_widget(card)
-        scroll.add_widget(content)
-        body.add_widget(scroll)
-        popup, _outer = self._make_styled_popup(
-            "Profile Details",
-            body,
-            subtitle="Saved learned profile details and quality signals",
-            size_hint=(0.94 if getattr(self, "ui_mobile", False) else 0.68, 0.86 if getattr(self, "ui_mobile", False) else 0.82),
-        )
-        popup.open()
-
-    def on_learning_manage_profiles(self, instance):
-        entries = self._get_active_profile_entries()
-        if not entries:
-            self.set_status("No saved profiles yet.")
-            return
-        palette = getattr(self, "ui_palette", {}) or {}
-        body = BoxLayout(orientation="vertical", spacing=dp(8))
-        note = Label(
-            text="Manage learned profiles here. You can inspect, apply, pin, approve, or forget stored profiles. Pinned profiles get a small priority boost during matching.",
-            color=palette.get("muted", (0.76, 0.82, 0.9, 1)),
-            size_hint_y=None,
-            height=dp(34),
-            halign="left",
-            valign="middle",
-            font_size=dp(11),
-        )
-        note.bind(size=self._sync_label_text_size)
-        self._bind_auto_height_label(note, min_height=dp(30), extra_pad=dp(4))
-        body.add_widget(note)
-        host = BoxLayout(orientation="vertical", size_hint=(1, 1))
-        body.add_widget(host)
-        popup_holder = {"popup": None, "host": host}
-
-        def _render_profiles():
-            host.clear_widgets()
-            items = self._get_active_profile_entries()
-            if not items:
-                empty = Label(text="No active profiles remain.", color=palette.get("muted", (0.76, 0.82, 0.9, 1)), halign="left", valign="middle")
-                empty.bind(size=self._sync_label_text_size)
-                host.add_widget(empty)
-                return
-            scroll = ScrollView(do_scroll_x=False, do_scroll_y=True, bar_width=dp(5), scroll_type=["bars", "content"])
-            content = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
-            content.bind(minimum_height=content.setter("height"))
-            for entry in items[:32]:
-                profile_key = str(entry.get("fingerprint_key", "") or "")
-                row = BoxLayout(orientation="vertical", spacing=dp(6), padding=[dp(10), dp(10), dp(10), dp(10)], size_hint_y=None)
-                row.bind(minimum_height=row.setter("height"))
-                self._style_popup_card(row, palette.get("surface_alt", (0.11, 0.135, 0.185, 1)), radius=dp(16))
-                summary = Label(
-                    text=self._profile_card_summary_text(entry),
-                    color=palette.get("text", (0.93, 0.96, 1.0, 1)),
-                    size_hint_y=None,
-                    height=dp(58),
-                    halign="left",
-                    valign="middle",
-                    font_size=dp(10.8),
-                )
-                summary.bind(size=self._sync_label_text_size)
-                self._bind_auto_height_label(summary, min_height=dp(48), extra_pad=dp(2))
-                row.add_widget(summary)
-                cols = 2 if getattr(self, "ui_mobile", False) else 5
-                btn_row = GridLayout(cols=cols, spacing=dp(8), size_hint_y=None)
-                rows = 3 if cols == 2 else 1
-                btn_row.height = rows * dp(36) + max(rows - 1, 0) * dp(8)
-                btn_view = self._make_compact_action_button("View", tone="plain")
-                btn_apply = self._make_compact_action_button("Apply", tone="soft")
-                btn_pin = self._make_compact_action_button("Unpin" if bool(entry.get("pinned", False)) else "Pin", tone="soft")
-                btn_approve = self._make_compact_action_button("Unapprove" if bool(entry.get("approved", False)) else "Approve", tone="soft")
-                btn_forget = self._make_compact_action_button("Forget", tone="soft")
-                btn_view.bind(on_release=lambda *_, k=profile_key: self._open_profile_details_popup(k, popup_holder))
-                btn_apply.bind(on_release=lambda *_, k=profile_key: self._apply_profile_from_manager(k, popup_holder))
-                btn_pin.bind(on_release=lambda *_, k=profile_key: self._toggle_profile_pin_from_manager(k, popup_holder))
-                btn_approve.bind(on_release=lambda *_, k=profile_key: self._toggle_profile_approval_from_manager(k, popup_holder))
-                btn_forget.bind(on_release=lambda *_, k=profile_key: self._forget_profile_from_manager(k, popup_holder))
-                for btn in [btn_view, btn_apply, btn_pin, btn_approve, btn_forget]:
-                    btn_row.add_widget(btn)
-                row.add_widget(btn_row)
-                content.add_widget(row)
-            scroll.add_widget(content)
-            host.add_widget(scroll)
-
-        popup_holder["refresh"] = _render_profiles
-        _render_profiles()
-        popup, _outer = self._make_styled_popup(
-            "Profile Manager",
-            body,
-            subtitle="Inspect and control saved learned profiles",
-            size_hint=(0.95 if getattr(self, "ui_mobile", False) else 0.76, 0.90 if getattr(self, "ui_mobile", False) else 0.86),
-        )
-        popup_holder["popup"] = popup
-        popup.open()
-
     def _revision_popup_body(self, revision):
         palette = getattr(self, "ui_palette", {}) or {}
         data = dict(revision or {})
@@ -10270,10 +10023,9 @@ class FormAlchemistApp(MDApp):
             ]),
             ("Page / file", [
                 f"PDF: {os.path.basename(str(data.get('pdf_path', '') or '')) or '—'}",
-                f"Page: {int(data.get('page_idx', 0) or 0)} / Count: {int((fp or {}).get('page_count', 0) or 0)}",
+                f"Page: {int(data.get('page_idx', 0) or 0)}",
                 f"Family: {data.get('pdf_family_hint', '—')}",
                 f"Fingerprint: {fp.get('fingerprint_key', '—') or '—'}",
-                f"Anchors: {str(fp.get('anchor_signature', '') or '—')[:80]}",
             ]),
             ("Delta", [
                 f"Raw boxes: {int(delta.get('raw_count', 0) or 0)}",
@@ -10784,18 +10536,8 @@ class FormAlchemistApp(MDApp):
             return 0
         return min(idx, total - 1)
 
-    def _friendly_box_type_label(self, box_type):
-        box_type = str(box_type or "field")
-        return {
-            "check": "square option",
-            "radio": "circle option",
-            "line": "line field",
-            "field": "box field",
-            "unknown": "custom fillable",
-        }.get(box_type, box_type)
-
     def _box_type_counts(self):
-        counts = {"check": 0, "radio": 0, "line": 0, "field": 0, "unknown": 0}
+        counts = {"check": 0, "line": 0, "field": 0}
         for kind in list(getattr(self.engine, "box_types", []) or []):
             counts[str(kind)] = counts.get(str(kind), 0) + 1
         return counts
@@ -11159,12 +10901,16 @@ class FormAlchemistApp(MDApp):
 
     def _go_to_page(self, target_idx, reason="Page changed"):
         self._prepare_mobile_page_transition()
+        current_idx = self.current_page_idx()
         total = max(int(self.engine.total_pages() or 0), 0)
         if total > 0:
             target_idx = max(0, min(int(target_idx), total - 1))
         else:
             target_idx = max(0, int(target_idx))
         self._set_page_inputs_text(target_idx)
+        if int(current_idx) != int(target_idx):
+            self._clear_mobile_repair_state(page_idx=target_idx)
+            self._clear_manual_capture_preview(preserve_mode=False)
         if self.engine.pdf_path:
             return self._render_session_page(page_idx=target_idx, reason=reason)
         self.refresh_backend_capabilities_ui()
@@ -11179,6 +10925,39 @@ class FormAlchemistApp(MDApp):
             except Exception:
                 continue
         return sorted(set(out))
+
+    def _resolve_live_box_ids_for_rect_refs(self, rect_refs, min_score=0.45, exclude_ids=None):
+        engine = getattr(self, 'engine', None)
+        if engine is None:
+            return []
+        all_boxes = list(getattr(engine, 'all_boxes', []) or [])
+        all_types = list(getattr(engine, 'box_types', []) or [])
+        used = set(self._sanitize_box_id_list(exclude_ids or []))
+        resolved = []
+        for ref in (rect_refs or []):
+            if not isinstance(ref, (list, tuple)) or len(ref) < 2:
+                continue
+            rect, kind = ref[0], str(ref[1] or '')
+            try:
+                rect = fitz.Rect(rect)
+            except Exception:
+                continue
+            best_idx = -1
+            best_score = 0.0
+            for idx_existing, existing in enumerate(all_boxes):
+                if idx_existing in used:
+                    continue
+                existing_kind = str(all_types[idx_existing] if idx_existing < len(all_types) else '')
+                if kind and existing_kind != kind:
+                    continue
+                score = self._mobile_repair_overlap_score(rect, existing)
+                if score > best_score:
+                    best_idx = idx_existing
+                    best_score = score
+            if best_idx >= 0 and best_score >= float(min_score):
+                used.add(best_idx)
+                resolved.append(best_idx)
+        return self._sanitize_box_id_list(resolved)
 
     def _stash_page_selection(self, page_idx=None):
         if not hasattr(self, "_page_selected_box_ids"):
@@ -11201,7 +10980,21 @@ class FormAlchemistApp(MDApp):
         prev_page = int(getattr(self, "_active_selection_page_idx", page_idx))
         if prev_page != page_idx:
             self._stash_page_selection(prev_page)
-        self.engine._ensure_detection_for_page(page_idx)
+
+        restored = False
+        if int(getattr(self.engine, "detected_page_idx", -1) or -1) == page_idx and bool(getattr(self.engine, "all_boxes", [])):
+            restored = True
+        else:
+            restored = bool(self.engine._restore_detection_for_page(page_idx, required_signature=self.engine._settings_signature()))
+
+        if not restored and int(getattr(self.engine, "detected_page_idx", -1) or -1) != page_idx:
+            self.engine.all_boxes = []
+            self.engine.box_types = []
+            self.engine.geom = self.engine._empty_geom()
+            self.engine.semantic_targets = self.engine._empty_semantic_targets()
+            self.engine.detected_page_idx = None
+            self.engine.detected_settings_signature = None
+
         self._restore_page_selection(page_idx, clear_if_missing=clear_selection_if_missing)
 
     def render_preview_image(self, img_bgr, boxes_payload=None, page_idx=0, preview_zoom=PREVIEW_SCALE):
@@ -11224,6 +11017,7 @@ class FormAlchemistApp(MDApp):
                     selected_ids=self.engine.selected_box_ids,
                     preview_zoom=preview_zoom,
                     page_idx=page_idx,
+                    label_mode=('selected_only' if getattr(self, 'ui_mobile', False) else 'all'),
                 )
         else:
             rgba = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGBA)
@@ -11232,6 +11026,13 @@ class FormAlchemistApp(MDApp):
             texture.blit_buffer(buf, colorfmt="rgba", bufferfmt="ubyte")
             texture.flip_vertical()
             self.preview.texture = texture
+        if bool(getattr(self, '_capture_mode_active', False)):
+            self._refresh_manual_capture_overlay()
+        else:
+            try:
+                self.preview.clear_capture_guides()
+            except Exception:
+                pass
         self._refresh_preview_empty_hint()
         Clock.schedule_once(self._post_preview_refresh, 0)
         Clock.schedule_once(self._post_preview_refresh, 0.05)
@@ -11251,8 +11052,6 @@ class FormAlchemistApp(MDApp):
                 "h": float(r.height * preview_zoom),
                 "t": self.engine.box_types[i] if i < len(self.engine.box_types) else "field",
                 "mapping": self.engine.describe_box_mapping(i, page_idx),
-                "group": self.engine.describe_box_group(i),
-                "section": self.engine.describe_box_section(i),
             })
         return payload
 
@@ -11420,6 +11219,7 @@ class FormAlchemistApp(MDApp):
             selected_ids=getattr(self.engine, "selected_box_ids", []),
             preview_zoom=render_zoom,
             page_idx=page_idx,
+            label_mode=('selected_only' if getattr(self, 'ui_mobile', False) else 'all'),
         )
 
     def _desired_preview_render_zoom(self):
@@ -11524,9 +11324,9 @@ class FormAlchemistApp(MDApp):
             if hasattr(self, "preview_info") and self.preview_info is not None:
                 if getattr(self, "ui_mobile", False):
                     mode_txt = "Select ON" if bool(getattr(self, "mobile_select_mode", False)) else "Select OFF"
-                    self.preview_info.text = f"Preview ready. {mode_txt} • Tap to select • Double-tap to link • Repair optional."
+                    self.preview_info.text = f"Preview ready. {mode_txt} • Tap a box to select • Map if correct • Repair only if needed."
                 else:
-                    self.preview_info.text = "Preview ready. Tap to select • Double-tap a box to link it • Repair optional."
+                    self.preview_info.text = "Preview ready. Tap a box to select • Map if correct • Repair only if needed."
             self._update_selection_inspector()
             self._update_bottom_statusbar()
             return
@@ -11639,7 +11439,7 @@ class FormAlchemistApp(MDApp):
                 pass
         if fab is not None:
             try:
-                fab.text = "Close" if self.mobile_tools_tray_open else "Tools"
+                fab.text = "Close" if self.mobile_tools_tray_open else "More"
             except Exception:
                 pass
         self._sync_mobile_tools_layout()
@@ -11692,1174 +11492,1483 @@ class FormAlchemistApp(MDApp):
     def _toggle_mobile_quick_rail(self, *_):
         self._set_mobile_quick_rail_visible(not bool(getattr(self, "_mobile_quick_rail_open", False)))
 
-    def _repair_zone_bbox_from_ids(self, box_ids, page_idx=None):
-        ids = self._sanitize_box_id_list(box_ids)
-        if not ids or not hasattr(self, "engine"):
-            return None
-        rects = []
-        for box_id in ids:
-            if 0 <= int(box_id) < len(getattr(self.engine, "all_boxes", []) or []):
-                try:
-                    rects.append(fitz.Rect(self.engine.all_boxes[int(box_id)]))
-                except Exception:
-                    pass
-        if not rects:
-            return None
-        zone = fitz.Rect(rects[0])
-        for rect in rects[1:]:
-            zone = fitz.Rect(min(zone.x0, rect.x0), min(zone.y0, rect.y0), max(zone.x1, rect.x1), max(zone.y1, rect.y1))
-        pad_x = max(10.0, zone.width * 0.45)
-        pad_y = max(10.0, zone.height * 0.85)
-        return fitz.Rect(zone.x0 - pad_x, zone.y0 - pad_y, zone.x1 + pad_x, zone.y1 + pad_y)
-
-    def _collect_repair_detection_summary(self, box_ids, page_idx=0):
-        ids = self._sanitize_box_id_list(box_ids)
-        summary = {
-            "anchor_ids": ids,
-            "page_idx": int(page_idx or 0),
-            "zone": None,
-            "local_ids": [],
-            "unknown_ids": [],
-            "unmapped_ids": [],
-            "section": None,
-            "section_member_ids": [],
-            "grid_like": False,
-        }
-        if not ids or not hasattr(self, "engine"):
-            return summary
-        zone = self._repair_zone_bbox_from_ids(ids, page_idx=page_idx)
-        summary["zone"] = zone
-        section = None
+    def _clear_mobile_repair_state(self, page_idx=None, clear_selection=False, clear_saved_selection=False):
         try:
-            section = self.engine.get_compound_section_for_box(ids[0])
+            page_hint = int(page_idx) if page_idx is not None else -1
         except Exception:
-            section = None
-        summary["section"] = section
-        if isinstance(section, dict):
-            section_members = self._sanitize_box_id_list(section.get("member_ids", []) or [])
-            summary["section_member_ids"] = section_members
-            kind = str(section.get("kind", "") or "")
-            row_count = int(section.get("row_count", 1) or 1)
-            col_count = int(section.get("col_count", 1) or 1)
-            summary["grid_like"] = kind in {"table_block", "row_cluster", "date_block", "address_block", "linked_address_block", "contact_block"} or (row_count >= 2 and col_count >= 2)
-        local_ids = []
-        unknown_ids = []
-        unmapped_ids = []
-        zone_rect = zone
-        for idx, rect in enumerate(list(getattr(self.engine, "all_boxes", []) or [])):
+            page_hint = -1
+        self._repair_anchor_box_ids = []
+        self._repair_anchor_page_idx = page_hint
+        self._repair_last_proposal = None
+        try:
+            if hasattr(self, 'engine') and getattr(self, 'engine', None) is not None:
+                if page_hint >= 0:
+                    self.engine.clear_candidate_cache(page_idx=page_hint)
+                else:
+                    self.engine.clear_candidate_cache()
+        except Exception:
+            pass
+        if clear_selection and hasattr(self, 'engine') and getattr(self, 'engine', None) is not None:
             try:
-                rr = fitz.Rect(rect)
-            except Exception:
-                continue
-            inside = False
-            if zone_rect is not None:
-                cx = (rr.x0 + rr.x1) / 2.0
-                cy = (rr.y0 + rr.y1) / 2.0
-                inside = (zone_rect.x0 <= cx <= zone_rect.x1) and (zone_rect.y0 <= cy <= zone_rect.y1)
-                if not inside:
-                    try:
-                        inter = self.engine._rect_overlap_score(zone_rect, rr)
-                    except Exception:
-                        inter = 0.0
-                    inside = inter >= 0.08
-            if not inside:
-                continue
-            local_ids.append(idx)
-            box_type = str((self.engine.box_types[idx] if idx < len(getattr(self.engine, "box_types", []) or []) else "") or "")
-            if box_type == "unknown":
-                unknown_ids.append(idx)
-            try:
-                mapping_state = self.engine.describe_box_mapping(idx, int(page_idx or 0))
-            except Exception:
-                mapping_state = "EMPTY"
-            if str(mapping_state).strip() == "EMPTY":
-                unmapped_ids.append(idx)
-        summary["local_ids"] = local_ids
-        summary["unknown_ids"] = unknown_ids
-        summary["unmapped_ids"] = unmapped_ids
-        return summary
-
-    def _offset_pdf_rect(self, rect, dx_pdf=0.0, dy_pdf=0.0):
-        try:
-            rr = fitz.Rect(rect)
-        except Exception:
-            return None
-        return fitz.Rect(rr.x0 + float(dx_pdf), rr.y0 + float(dy_pdf), rr.x1 + float(dx_pdf), rr.y1 + float(dy_pdf))
-
-    def _repair_detection_candidates_from_zone(self, zone, page_idx=0, anchor_ids=None):
-        candidates = []
-        if zone is None or not hasattr(self, "engine") or not getattr(self.engine, "pdf_path", ""):
-            return candidates
-        try:
-            img = self.engine.get_raw_preview_pixmap(page_idx=int(page_idx or 0), preview_zoom=ZOOM)
-        except Exception:
-            return candidates
-        if img is None or getattr(img, "size", 0) == 0:
-            return candidates
-
-        img_h, img_w = img.shape[:2]
-        x0_px = max(0, int(zone.x0 * ZOOM))
-        y0_px = max(0, int(zone.y0 * ZOOM))
-        x1_px = min(img_w, int(zone.x1 * ZOOM))
-        y1_px = min(img_h, int(zone.y1 * ZOOM))
-        if x1_px - x0_px < 8 or y1_px - y0_px < 8:
-            return candidates
-
-        crop = img[y0_px:y1_px, x0_px:x1_px].copy()
-        if crop is None or getattr(crop, "size", 0) == 0:
-            return candidates
-
-        existing_local_rects = []
-        try:
-            local_summary = self._collect_repair_detection_summary(anchor_ids if anchor_ids is not None else getattr(self.engine, 'selected_box_ids', []), page_idx=page_idx)
-            for idx in list(local_summary.get('local_ids', []) or []):
-                if 0 <= int(idx) < len(getattr(self.engine, 'all_boxes', []) or []):
-                    existing_local_rects.append(fitz.Rect(self.engine.all_boxes[int(idx)]))
-        except Exception:
-            existing_local_rects = []
-
-        pdf_dx = float(x0_px) / float(ZOOM)
-        pdf_dy = float(y0_px) / float(ZOOM)
-        seen = []
-
-        def _score_existing(rr):
-            best = 0.0
-            try:
-                for ex in existing_local_rects:
-                    best = max(best, float(self.engine._rect_overlap_score(rr, ex)))
+                self.engine.selected_box_ids = []
             except Exception:
                 pass
-            return best
-
-        def _candidate_score(rr):
-            best = 0.0
-            for item in seen:
-                try:
-                    best = max(best, float(self.engine._rect_overlap_score(rr, item['rect'])))
-                except Exception:
-                    pass
-            return best
-
-        def _add_candidate(rect, box_type, reason, overlap_limit=0.34, source='scan', score=None):
-            rr = self._offset_pdf_rect(rect, pdf_dx, pdf_dy)
-            if rr is None or rr.width <= 0 or rr.height <= 0:
-                return
-            existing_overlap = _score_existing(rr)
-            if existing_overlap >= overlap_limit:
-                return
-            candidate_overlap = _candidate_score(rr)
-            if candidate_overlap >= max(0.42, overlap_limit + 0.05):
-                return
-            inferred_score = score
-            if inferred_score is None:
-                # Stronger confidence for structured text-entry areas, lighter for unresolved fillables.
-                base = 0.58 if str(box_type or 'unknown') in {'field', 'line'} else (0.52 if str(box_type or 'unknown') in {'check', 'radio'} else 0.38)
-                inferred_score = max(base, min(0.92, 1.0 - max(existing_overlap, candidate_overlap)))
-            seen.append({
-                'rect': rr,
-                'type': str(box_type or 'unknown'),
-                'reason': str(reason or 'repair candidate'),
-                'source': str(source or 'scan'),
-                'score': round(float(inferred_score), 4),
-            })
-
-        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-        base_bin = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
-        close_k = max(0, int(self.engine.settings.get('C_Close', 0) or 0))
-        open_k = max(0, int(self.engine.settings.get('C_Open', 1) or 1))
-        field_close_k = max(0, int(self.engine.settings.get('F_Close', 1) or 1))
-
-        bin_checks = base_bin.copy()
-        if close_k > 0:
-            bin_checks = cv2.morphologyEx(bin_checks, cv2.MORPH_CLOSE, np.ones((close_k, close_k), np.uint8))
-        if open_k > 0:
-            bin_checks = cv2.morphologyEx(bin_checks, cv2.MORPH_OPEN, np.ones((open_k, open_k), np.uint8))
-
-        bin_fields = base_bin.copy()
-        if field_close_k > 0:
-            bin_fields = cv2.morphologyEx(bin_fields, cv2.MORPH_CLOSE, np.ones((field_close_k, field_close_k), np.uint8))
-
-        min_line = max(26, int(float(self.engine.settings.get('Line_MinW', 100) or 100) * 0.30))
-        max_line = max(min_line + 8, min(int(float(self.engine.settings.get('Line_MaxW', 1680) or 1680)), crop.shape[1] - 2))
-        try:
-            for lr in self.engine.find_answer_lines(crop, ZOOM, min_line_w=min_line, max_line_w=max_line):
-                _add_candidate(lr, 'line', 'recovered line-like field', overlap_limit=0.30)
-        except Exception:
-            pass
-
-        try:
-            min_sz = max(6, int(float(self.engine.settings.get('C_Size', [14, 65])[0]) * 0.75))
-            max_sz = max(min_sz + 2, int(float(self.engine.settings.get('C_Size', [14, 65])[1]) * 1.10))
-            for rr in self.engine.find_red_checkbox_candidates(
-                crop,
-                zoom_factor=ZOOM,
-                min_sz=min_sz,
-                max_sz=max_sz,
-                border_min=max(0.04, float(self.engine.settings.get('C_Border', 0.10) or 0.10) * 0.65),
-                inner_max=min(0.82, float(self.engine.settings.get('C_Inner', 0.40) or 0.40) + 0.24),
-                band_pct=max(0.10, min(float(self.engine.settings.get('C_BandPct', 0.18) or 0.18), 0.20)),
-                aspect_tol=max(0.35, float(self.engine.settings.get('C_AspectTol', 0.10) or 0.10) * 2.6),
-                fill_min=max(0.10, float(self.engine.settings.get('C_FillMin', 0.45) or 0.45) * 0.35),
-                eps=max(0.04, float(self.engine.settings.get('C_Eps', 0.04) or 0.04)),
-            ):
-                _add_candidate(rr, 'check', 'recovered checkbox-like shape', overlap_limit=0.28)
-        except Exception:
-            pass
-
-        try:
-            nf, _, stats, _ = cv2.connectedComponentsWithStats(bin_checks)
-        except Exception:
-            nf, stats = 0, None
-        checkbox_min = max(6, int(float(self.engine.settings.get('C_Size', [14, 65])[0]) * 0.75))
-        checkbox_max = max(checkbox_min + 2, int(float(self.engine.settings.get('C_Size', [14, 65])[1]) * 1.12))
-        roi_max = max(checkbox_max + 4, int(float(self.engine.settings.get('ROI_Max', 200) or 200)))
-        if stats is not None:
-            for i in range(1, int(nf)):
-                x, y, w, h, area = stats[i]
-                if w < checkbox_min or h < checkbox_min:
-                    continue
-                if max(w, h) > max(roi_max, checkbox_max * 3):
-                    continue
-                aspect = w / float(max(h, 1))
-                rect_rel = fitz.Rect(x / ZOOM, y / ZOOM, (x + w) / ZOOM, (y + h) / ZOOM)
-                if checkbox_min <= w <= checkbox_max and checkbox_min <= h <= checkbox_max and 0.58 <= aspect <= 1.72:
-                    try:
-                        if self.engine.looks_like_checkbox(bin_checks, x, y, w, h, area):
-                            _add_candidate(rect_rel, 'check', 'recovered square option', overlap_limit=0.28)
-                            continue
-                    except Exception:
-                        pass
-                    try:
-                        if self.engine.looks_like_circle_option(bin_checks, x, y, w, h, area):
-                            _add_candidate(rect_rel, 'radio', 'recovered circle option', overlap_limit=0.28)
-                            continue
-                    except Exception:
-                        pass
-                if max(w, h) <= roi_max and min(w, h) >= checkbox_min and 0.52 <= aspect <= 1.85:
-                    try:
-                        for fx, fy, fw, fh in self.engine.find_checkbox_rects_in_roi(bin_checks, x, y, w, h):
-                            _add_candidate(fitz.Rect(fx / ZOOM, fy / ZOOM, (fx + fw) / ZOOM, (fy + fh) / ZOOM), 'check', 'recovered checkbox in local zone', overlap_limit=0.28)
-                    except Exception:
-                        pass
-                    try:
-                        for fx, fy, fw, fh in self.engine.find_circle_option_rects_in_roi(bin_checks, x, y, w, h):
-                            _add_candidate(fitz.Rect(fx / ZOOM, fy / ZOOM, (fx + fw) / ZOOM, (fy + fh) / ZOOM), 'radio', 'recovered radio in local zone', overlap_limit=0.28)
-                    except Exception:
-                        pass
-
-        try:
-            nf2, _, stats2, _ = cv2.connectedComponentsWithStats(bin_fields)
-        except Exception:
-            nf2, stats2 = 0, None
-        if stats2 is not None:
-            min_w = max(12, int(float(self.engine.settings.get('F_MinW', 15) or 15) * 0.75))
-            min_h = max(10, int(float(self.engine.settings.get('F_MinH', 35) or 35) * 0.45))
-            min_area = max(36, int(float(self.engine.settings.get('F_Area', 500) or 500) * 0.30))
-            crop_h, crop_w = crop.shape[:2]
-            for i in range(1, int(nf2)):
-                x, y, w, h, area = stats2[i]
-                if area < min_area or w < min_w or h < min_h:
-                    continue
-                if w >= crop_w * 0.96 or h >= crop_h * 0.22:
-                    continue
-                try:
-                    refined = self.engine._refine_field_rect_from_mask(
-                        bin_fields, x, y, w, h,
-                        zoom_factor=ZOOM,
-                        row_frac_thresh=0.35,
-                        col_frac_thresh=0.12,
-                        min_inner_h=max(10, int(min_h * 0.70)),
-                        pad_px=2,
-                    )
-                except Exception:
-                    refined = fitz.Rect(x / ZOOM, y / ZOOM, (x + w) / ZOOM, (y + h) / ZOOM)
-                _add_candidate(refined, 'field', 'recovered field-like area', overlap_limit=0.34)
-
-        try:
-            for ur in self.engine.find_unknown_fillable_rects(bin_fields, zoom_factor=ZOOM):
-                _add_candidate(ur, 'unknown', 'unresolved fillable candidate in local zone', overlap_limit=0.24)
-        except Exception:
-            pass
-
-        for item in seen:
-            rr = item['rect']
-            candidates.append({
-                'rect': [float(rr.x0), float(rr.y0), float(rr.x1), float(rr.y1)],
-                'type': str(item.get('type', 'unknown') or 'unknown'),
-                'reason': str(item.get('reason', 'repair candidate') or 'repair candidate'),
-                'source': str(item.get('source', 'scan') or 'scan'),
-                'score': round(float(item.get('score', 0.0) or 0.0), 4),
-            })
-
-        return candidates
-
-    def _cluster_repair_axis_positions(self, values, tol):
-        vals = sorted(float(v) for v in list(values or []))
-        if not vals:
-            return []
-        tol = max(float(tol or 0.0), 1.0)
-        clusters = [[vals[0]]]
-        for value in vals[1:]:
-            cur = clusters[-1]
-            center = sum(cur) / float(max(len(cur), 1))
-            if abs(value - center) <= tol:
-                cur.append(value)
-            else:
-                clusters.append([value])
-        return [sum(cluster) / float(max(len(cluster), 1)) for cluster in clusters]
-
-    def _repair_grid_like_candidates_from_summary(self, summary, page_idx=0):
-        candidates = []
-        if not isinstance(summary, dict) or not hasattr(self, 'engine'):
-            return candidates
-        if not bool(summary.get('grid_like')):
-            return candidates
-        zone = summary.get('zone')
-        if zone is None:
-            return candidates
-
-        ids = self._sanitize_box_id_list(
-            list(summary.get('local_ids', []) or []) +
-            list(summary.get('section_member_ids', []) or []) +
-            list(summary.get('anchor_ids', []) or [])
-        )
-        structural = []
-        existing_rects = []
-        for idx in ids:
-            if not (0 <= int(idx) < len(getattr(self.engine, 'all_boxes', []) or [])):
-                continue
+        if clear_saved_selection and page_hint >= 0 and hasattr(self, '_page_selected_box_ids'):
             try:
-                rr = fitz.Rect(self.engine.all_boxes[int(idx)])
+                self._page_selected_box_ids.pop(page_hint, None)
             except Exception:
-                continue
-            existing_rects.append(rr)
-            box_type = str((self.engine.box_types[int(idx)] if int(idx) < len(getattr(self.engine, 'box_types', []) or []) else '') or '')
-            if box_type in {'field', 'line', 'unknown'}:
-                structural.append((rr, box_type, int(idx)))
+                pass
 
-        if len(structural) < 3:
-            return candidates
-
-        widths = [max(r.width, 1.0) for r, _t, _i in structural]
-        heights = [max(r.height, 1.0) for r, _t, _i in structural]
-        med_w = float(np.median(widths)) if widths else 18.0
-        med_h = float(np.median(heights)) if heights else 8.0
-        med_aspect = med_w / float(max(med_h, 1.0))
-
-        row_tol = max(6.0, min(28.0, med_h * 0.85))
-        col_tol = max(8.0, min(44.0, med_w * 0.60))
-        row_centers = self._cluster_repair_axis_positions([((r.y0 + r.y1) / 2.0) for r, _t, _i in structural], row_tol)
-        col_centers = self._cluster_repair_axis_positions([((r.x0 + r.x1) / 2.0) for r, _t, _i in structural], col_tol)
-
-        row_count = max(len(row_centers), int(summary.get('section', {}).get('row_count', 1) or 1) if isinstance(summary.get('section'), dict) else len(row_centers))
-        col_count = max(len(col_centers), int(summary.get('section', {}).get('col_count', 1) or 1) if isinstance(summary.get('section'), dict) else len(col_centers))
-
-        if len(row_centers) < 1 or len(col_centers) < 2:
-            return candidates
-        if row_count < 2 and col_count < 2:
-            return candidates
-
+    def _mobile_repair_overlap_score(self, a, b):
         try:
-            raw_img = self.engine.get_raw_preview_pixmap(page_idx=int(page_idx or 0), preview_zoom=ZOOM)
-        except Exception:
-            raw_img = None
-        raw_bin = None
-        if raw_img is not None and getattr(raw_img, 'size', 0) != 0:
-            try:
-                raw_gray = cv2.cvtColor(raw_img, cv2.COLOR_BGR2GRAY)
-                raw_bin = cv2.threshold(raw_gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
-            except Exception:
-                raw_bin = None
-
-        def _overlap_existing(rect, thresh=0.22):
-            best = 0.0
-            for ex in existing_rects:
-                try:
-                    best = max(best, float(self.engine._rect_overlap_score(rect, ex)))
-                except Exception:
-                    pass
-            return best >= float(thresh)
-
-        def _zone_contains(rect):
-            cx = (rect.x0 + rect.x1) / 2.0
-            cy = (rect.y0 + rect.y1) / 2.0
-            return (zone.x0 <= cx <= zone.x1) and (zone.y0 <= cy <= zone.y1)
-
-        def _evidence_score(rect):
-            if raw_bin is None:
-                return 0.5
-            try:
-                x0 = max(0, int(rect.x0 * ZOOM))
-                y0 = max(0, int(rect.y0 * ZOOM))
-                x1 = min(raw_bin.shape[1], int(rect.x1 * ZOOM))
-                y1 = min(raw_bin.shape[0], int(rect.y1 * ZOOM))
-                if x1 - x0 < 4 or y1 - y0 < 4:
-                    return 0.0
-                roi = raw_bin[y0:y1, x0:x1]
-                if roi.size == 0:
-                    return 0.0
-                frac = cv2.countNonZero(roi) / float(max(roi.size, 1))
-                if frac <= 0:
-                    return 0.0
-                if frac > 0.92:
-                    return 0.0
-                border_h = max(1, int(min(roi.shape[0], roi.shape[1]) * 0.16))
-                border_w = max(1, int(min(roi.shape[0], roi.shape[1]) * 0.16))
-                top = roi[:border_h, :]
-                bottom = roi[-border_h:, :]
-                left = roi[:, :border_w]
-                right = roi[:, -border_w:]
-                border_frac = max(
-                    cv2.countNonZero(top) / float(max(top.size, 1)),
-                    cv2.countNonZero(bottom) / float(max(bottom.size, 1)),
-                    cv2.countNonZero(left) / float(max(left.size, 1)),
-                    cv2.countNonZero(right) / float(max(right.size, 1)),
-                )
-                return max(frac * 0.9, border_frac * 1.15)
-            except Exception:
+            ra = a if isinstance(a, fitz.Rect) else fitz.Rect(*a)
+            rb = b if isinstance(b, fitz.Rect) else fitz.Rect(*b)
+            inter = _rect_intersection_area(ra, rb)
+            if inter <= 0:
                 return 0.0
+            area_a = max(float(ra.width) * float(ra.height), 1e-6)
+            area_b = max(float(rb.width) * float(rb.height), 1e-6)
+            iou = inter / float(max(area_a + area_b - inter, 1e-6))
+            cover = inter / float(max(min(area_a, area_b), 1e-6))
+            return float(max(iou, cover))
+        except Exception:
+            return 0.0
 
-        inferred = []
-        line_like = med_aspect >= 3.6
-        candidate_w = max(8.0, med_w)
-        candidate_h = max(5.0, med_h)
-        if line_like:
-            candidate_h = max(4.0, min(candidate_h, candidate_w * 0.38))
-
-        for row_c in row_centers:
-            for col_c in col_centers:
-                rect = fitz.Rect(
-                    col_c - (candidate_w / 2.0),
-                    row_c - (candidate_h / 2.0),
-                    col_c + (candidate_w / 2.0),
-                    row_c + (candidate_h / 2.0),
-                )
-                if not _zone_contains(rect):
-                    continue
-                if _overlap_existing(rect, thresh=0.24):
-                    continue
-                evidence = _evidence_score(rect)
-                if evidence < (0.030 if line_like else 0.020):
-                    continue
-                inferred.append({
-                    'rect': rect,
-                    'type': ('line' if line_like else 'field'),
-                    'reason': ('inferred missing grid-like slot' if not line_like else 'inferred missing split-entry line'),
-                    'score': round(float(evidence), 4),
-                    'source': 'grid_like',
-                })
-
-        def _dedupe(items):
-            out = []
-            for item in list(items or []):
-                try:
-                    rr = fitz.Rect(item.get('rect', []))
-                except Exception:
-                    continue
-                dup = False
-                for kept in out:
-                    try:
-                        if float(self.engine._rect_overlap_score(rr, fitz.Rect(kept.get('rect', [])))) >= 0.42:
-                            dup = True
-                            break
-                    except Exception:
-                        pass
-                if not dup:
-                    new_item = dict(item)
-                    new_item['rect'] = rr
-                    out.append(new_item)
-            return out
-
-        return _dedupe(inferred)
-
-    def _dedupe_repair_candidates(self, items):
-        out = []
-        if not hasattr(self, 'engine'):
-            return out
-        ordered = sorted(
-            list(items or []),
-            key=lambda item: (
-                0 if str(item.get('source', '') or '') == 'grid_like' else 1,
-                0 if str(item.get('type', '') or '') in {'field', 'line'} else 1,
-                -float(item.get('score', 0.0) or 0.0),
-            ),
-        )
-        for item in ordered:
+    def _extract_mobile_candidate_features(self, rect, kind, source, zone, local_existing, anchor_rects):
+        try:
+            rr = rect if isinstance(rect, fitz.Rect) else fitz.Rect(*rect)
+        except Exception:
+            return {}
+        kind = str(kind or 'field')
+        source = str(source or 'scan')
+        zone = zone if isinstance(zone, fitz.Rect) else fitz.Rect(*zone)
+        width = max(float(rr.width), 1.0)
+        height = max(float(rr.height), 1.0)
+        aspect = width / max(height, 1.0)
+        anchor_overlap = 0.0
+        for ar in list(anchor_rects or []):
             try:
-                rr = fitz.Rect(item.get('rect', []))
+                anchor_overlap = max(anchor_overlap, float(self._mobile_repair_overlap_score(rr, ar)))
+            except Exception:
+                pass
+        same_kind = []
+        for item in list(local_existing or []):
+            try:
+                ex_rect = item[0] if isinstance(item, (list, tuple)) and len(item) >= 1 else None
+                ex_kind = str(item[1] if isinstance(item, (list, tuple)) and len(item) >= 2 else '')
+                ex_rect = ex_rect if isinstance(ex_rect, fitz.Rect) else fitz.Rect(*ex_rect)
             except Exception:
                 continue
-            duplicate = False
-            for kept in out:
-                try:
-                    score = float(self.engine._rect_overlap_score(rr, fitz.Rect(kept.get('rect', []))))
-                except Exception:
-                    score = 0.0
-                if score >= 0.44:
-                    duplicate = True
-                    break
-            if duplicate:
+            if ex_kind == kind:
+                same_kind.append(ex_rect)
+        size_similarity = 0.0
+        if same_kind:
+            med_w = sorted([max(float(r.width), 1.0) for r in same_kind])[len(same_kind)//2]
+            med_h = sorted([max(float(r.height), 1.0) for r in same_kind])[len(same_kind)//2]
+            dw = min(abs(width - med_w) / max(med_w, 1.0), 1.0)
+            dh = min(abs(height - med_h) / max(med_h, 1.0), 1.0)
+            size_similarity = max(0.0, 1.0 - ((dw + dh) * 0.5))
+        structural_support = 0.0
+        support_hits = 0
+        for ex_rect in same_kind:
+            try:
+                ex_cx = (ex_rect.x0 + ex_rect.x1) * 0.5
+                ex_cy = (ex_rect.y0 + ex_rect.y1) * 0.5
+            except Exception:
                 continue
-            new_item = dict(item)
-            new_item['rect'] = rr
-            out.append(new_item)
-        return out
+            cx = (rr.x0 + rr.x1) * 0.5
+            cy = (rr.y0 + rr.y1) * 0.5
+            x_close = abs(ex_cx - cx) <= max(width, ex_rect.width) * 0.55
+            y_close = abs(ex_cy - cy) <= max(height, ex_rect.height) * 0.55
+            row_like = abs(ex_cy - cy) <= max(height, ex_rect.height) * 0.45
+            col_like = abs(ex_cx - cx) <= max(width, ex_rect.width) * 0.45
+            if kind == 'line' and row_like:
+                support_hits += 1
+            elif kind == 'field' and (row_like or col_like or (x_close and y_close)):
+                support_hits += 1
+            elif kind == 'check' and (row_like or col_like):
+                support_hits += 1
+        if support_hits > 0:
+            structural_support = min(1.0, support_hits / 3.0)
+        source_bonus = 0.0
+        if source in {'grid_align', 'grid_edge'}:
+            source_bonus += 0.04
+        if source in {'faint_field', 'partial_box'}:
+            source_bonus -= 0.01
+        if source in {'red_scan', 'check_scan', 'field_scan', 'line_scan'}:
+            source_bonus += 0.02
+        aspect_penalty = 0.0
+        if kind == 'check':
+            if aspect < 0.55 or aspect > 1.85:
+                aspect_penalty += 0.08
+        elif kind == 'line':
+            if aspect < 1.8:
+                aspect_penalty += 0.10
+        elif kind == 'field':
+            if width < 10.0 or height < 5.0:
+                aspect_penalty += 0.10
+        edge_distance = min(abs(rr.x0 - zone.x0), abs(zone.x1 - rr.x1), abs(rr.y0 - zone.y0), abs(zone.y1 - rr.y1))
+        edge_penalty = 0.04 if edge_distance <= 2.0 else 0.0
+        return {
+            'width': round(width, 3),
+            'height': round(height, 3),
+            'aspect': round(aspect, 4),
+            'anchor_overlap': round(float(anchor_overlap), 6),
+            'size_similarity': round(float(size_similarity), 6),
+            'structural_support': round(float(structural_support), 6),
+            'source_bonus': round(float(source_bonus), 6),
+            'aspect_penalty': round(float(aspect_penalty), 6),
+            'edge_penalty': round(float(edge_penalty), 6),
+        }
 
-
-    def _repair_confidence_band(self, score):
+    def _compute_mobile_candidate_penalty(self, features):
         try:
-            value = float(score or 0.0)
+            aspect_penalty = float((features or {}).get('aspect_penalty', 0.0) or 0.0)
+            edge_penalty = float((features or {}).get('edge_penalty', 0.0) or 0.0)
+            anchor_overlap = float((features or {}).get('anchor_overlap', 0.0) or 0.0)
+            size_similarity = float((features or {}).get('size_similarity', 0.0) or 0.0)
         except Exception:
-            value = 0.0
-        if value >= 0.78:
+            return 0.0
+        penalty = aspect_penalty + edge_penalty
+        if anchor_overlap < 0.05:
+            penalty += 0.03
+        if size_similarity < 0.22:
+            penalty += 0.03
+        return round(float(max(0.0, min(0.22, penalty))), 6)
+
+    def _compute_mobile_candidate_confidence(self, base_score, features):
+        try:
+            score = float(base_score or 0.0)
+        except Exception:
+            score = 0.0
+        try:
+            source_bonus = float((features or {}).get('source_bonus', 0.0) or 0.0)
+            anchor_overlap = float((features or {}).get('anchor_overlap', 0.0) or 0.0)
+            size_similarity = float((features or {}).get('size_similarity', 0.0) or 0.0)
+            structural_support = float((features or {}).get('structural_support', 0.0) or 0.0)
+        except Exception:
+            source_bonus = 0.0
+            anchor_overlap = 0.0
+            size_similarity = 0.0
+            structural_support = 0.0
+        score += source_bonus
+        score += min(0.06, anchor_overlap * 0.10)
+        score += min(0.05, size_similarity * 0.05)
+        score += min(0.05, structural_support * 0.05)
+        score -= float(self._compute_mobile_candidate_penalty(features))
+        return max(0.0, min(0.99, round(float(score), 6)))
+
+
+    def _prune_mobile_candidate_redundancy(self, candidates):
+        pruned = []
+        kind_rank = {'field': 0, 'check': 1, 'line': 2}
+        for item in sorted(list(candidates or []), key=lambda entry: (-float(entry.get('score', 0.0) or 0.0), kind_rank.get(str(entry.get('kind', '')), 9), (entry.get('rect').y0 if entry.get('rect') is not None else 0.0), (entry.get('rect').x0 if entry.get('rect') is not None else 0.0))):
+            rect = item.get('rect')
+            kind = str(item.get('kind', '') or '')
+            if rect is None or not kind:
+                continue
+            try:
+                rr = rect if isinstance(rect, fitz.Rect) else fitz.Rect(*rect)
+            except Exception:
+                continue
+            keep = True
+            for kept in pruned:
+                try:
+                    kr = kept.get('rect') if isinstance(kept.get('rect'), fitz.Rect) else fitz.Rect(kept.get('rect'))
+                except Exception:
+                    continue
+                kk = str(kept.get('kind', '') or '')
+                overlap = float(self._mobile_repair_overlap_score(rr, kr))
+                if kk == kind and overlap >= 0.72:
+                    keep = False
+                    break
+                if {kk, kind} == {'field', 'line'} and overlap >= 0.78:
+                    kept_score = float(kept.get('score', 0.0) or 0.0)
+                    item_score = float(item.get('score', 0.0) or 0.0)
+                    # Prefer the stronger candidate unless scores are almost tied and the line is much wider.
+                    if kept_score >= item_score + 0.03:
+                        keep = False
+                        break
+                    if item_score <= kept_score + 0.02:
+                        kept_w = max(float(kr.width), 1.0)
+                        kept_h = max(float(kr.height), 1.0)
+                        item_w = max(float(rr.width), 1.0)
+                        item_h = max(float(rr.height), 1.0)
+                        kept_aspect = kept_w / kept_h
+                        item_aspect = item_w / item_h
+                        if kind == 'line' and item_aspect >= kept_aspect * 1.35:
+                            continue
+                        keep = False
+                        break
+            if keep:
+                enriched = dict(item)
+                enriched['rect'] = rr
+                pruned.append(enriched)
+        return pruned
+
+    def _generate_mobile_repair_candidates(self, page_idx, zone, local_existing, local_existing_ids, anchor_ids):
+        engine = getattr(self, 'engine', None)
+        if engine is None:
+            return None
+        try:
+            img = engine._render_pdf_page_bgr(engine.pdf_path, page_idx=int(page_idx), preview_zoom=ZOOM)
+        except Exception:
+            img = None
+        if img is None or getattr(img, 'size', 0) == 0:
+            return None
+        if len(img.shape) == 2:
+            img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+        h_img, w_img = img.shape[:2]
+        full_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        base_bin = cv2.threshold(full_gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
+        bin_checks = base_bin.copy()
+        red_close_k = int(engine.settings.get('C_Close', 0) or 0)
+        red_open_k = int(engine.settings.get('C_Open', 0) or 0)
+        if red_close_k > 0:
+            bin_checks = cv2.morphologyEx(bin_checks, cv2.MORPH_CLOSE, np.ones((red_close_k, red_close_k), np.uint8))
+        if red_open_k > 0:
+            bin_checks = cv2.morphologyEx(bin_checks, cv2.MORPH_OPEN, np.ones((red_open_k, red_open_k), np.uint8))
+        field_close_k = int(engine.settings.get('F_Close', 1) or 1)
+        if field_close_k > 0:
+            bin_fields = cv2.morphologyEx(base_bin, cv2.MORPH_CLOSE, np.ones((field_close_k, field_close_k), np.uint8))
+        else:
+            bin_fields = base_bin
+        text_like_mask, text_like_meta = engine.build_text_like_mask(img)
+        header_cut = int((text_like_meta or {}).get('header_cut', 0) or 0)
+
+        candidates = []
+        candidate_type_counts = {'field': 0, 'check': 0, 'line': 0}
+        local_existing_rects = []
+        try:
+            for item in list(local_existing or []):
+                if isinstance(item, (list, tuple)) and len(item) >= 1:
+                    ex_rect = item[0]
+                else:
+                    ex_rect = item
+                ex_rect = ex_rect if isinstance(ex_rect, fitz.Rect) else fitz.Rect(*ex_rect)
+                local_existing_rects.append(ex_rect)
+        except Exception:
+            local_existing_rects = []
+        anchor_rects = []
+        try:
+            for box_id in list(anchor_ids or []):
+                if 0 <= int(box_id) < len(getattr(engine, 'all_boxes', []) or []):
+                    anchor_rects.append(engine.all_boxes[int(box_id)])
+        except Exception:
+            anchor_rects = []
+        source_counts = {}
+        tuning = {}
+        try:
+            tuning = getattr(engine, 'get_candidate_tuning', lambda: dict(CANDIDATE_TUNING_DEFAULTS))()
+        except Exception:
+            tuning = dict(CANDIDATE_TUNING_DEFAULTS)
+        min_candidate_score = float((tuning or {}).get('min_candidate_score', 0.34) or 0.34)
+        priors = {}
+        try:
+            priors = getattr(engine, 'get_candidate_learning_priors', lambda page_idx=0: {'pairs': {}, 'same_fp_events': 0})(page_idx=page_idx)
+        except Exception:
+            priors = {'pairs': {}, 'same_fp_events': 0}
+
+        def _inside_zone(rect):
+            return self._mobile_repair_overlap_score(zone, rect) >= 0.10
+
+        def _append_candidate(rect, kind, source, score):
+            try:
+                rect = rect if isinstance(rect, fitz.Rect) else fitz.Rect(*rect)
+            except Exception:
+                return False
+            if not _inside_zone(rect):
+                return False
+            kind = str(kind or 'field')
+            source = str(source or 'scan')
+            try:
+                base_score = float(score)
+            except Exception:
+                base_score = 0.0
+            bias = 0.0
+            try:
+                bias = float(getattr(engine, 'candidate_learning_adjustment', lambda *a, **k: 0.0)(kind, source, page_idx=page_idx, priors=priors) or 0.0)
+            except Exception:
+                bias = 0.0
+            raw_score = max(0.0, min(0.99, base_score + bias))
+            features = self._extract_mobile_candidate_features(rect, kind, source, zone, local_existing, anchor_rects)
+            score = self._compute_mobile_candidate_confidence(raw_score, features)
+            if score < float(min_candidate_score):
+                return False
+            if engine.should_suppress_text_like_rect(rect, text_like_mask, preview_zoom=ZOOM, header_cut=header_cut, overlap_thresh=0.16):
+                return False
+            for existing in local_existing_rects:
+                if self._mobile_repair_overlap_score(rect, existing) >= 0.50:
+                    return False
+            for existing in candidates:
+                if str(existing.get('kind', '')) != str(kind):
+                    continue
+                if self._mobile_repair_overlap_score(rect, existing.get('rect')) >= 0.52:
+                    merged_sources = list(existing.get('source_set', []) or [str(existing.get('source', '') or '')])
+                    if str(source) not in merged_sources:
+                        merged_sources.append(str(source))
+                    consensus_bonus = self._mobile_candidate_consensus_bonus(merged_sources)
+                    updated_score = max(float(score), float(existing.get('score', 0.0) or 0.0))
+                    updated_score = min(0.98, updated_score + consensus_bonus)
+                    if float(score) > float(existing.get('score', 0.0) or 0.0):
+                        existing['rect'] = rect
+                        existing['source'] = str(source)
+                        existing['raw_score'] = float(raw_score)
+                        existing['base_score'] = float(base_score)
+                        existing['learning_bias'] = float(bias)
+                        existing['features'] = dict(features or {})
+                    existing['source_set'] = merged_sources
+                    existing['support_count'] = int(len(merged_sources))
+                    existing['consensus_bonus'] = float(consensus_bonus)
+                    existing['score'] = float(updated_score)
+                    return True
+            source_list = [str(source)] if str(source) else []
+            consensus_bonus = self._mobile_candidate_consensus_bonus(source_list)
+            candidates.append({'rect': rect, 'kind': str(kind), 'source': str(source), 'source_set': source_list, 'support_count': int(len(source_list)), 'consensus_bonus': float(consensus_bonus), 'score': float(min(0.98, float(score) + consensus_bonus)), 'raw_score': float(raw_score), 'base_score': float(base_score), 'learning_bias': float(bias), 'features': dict(features or {})})
+            candidate_type_counts[str(kind)] = int(candidate_type_counts.get(str(kind), 0) or 0) + 1
+            source_counts[str(source)] = int(source_counts.get(str(source), 0) or 0) + 1
+            return True
+
+        try:
+            line_rects = engine.find_answer_lines(img, ZOOM, min_line_w=int(engine.settings.get('Line_MinW', 100) or 100), max_line_w=int(engine.settings.get('Line_MaxW', 1680) or 1680))
+            for lr in line_rects:
+                _append_candidate(lr, 'line', 'line_scan', 0.68)
+        except Exception:
+            pass
+
+        try:
+            red_candidates = engine.find_red_checkbox_candidates(
+                img,
+                zoom_factor=ZOOM,
+                min_sz=max(7, int(engine.settings.get('C_Size', (14, 65))[0]) - 5),
+                max_sz=min(int(engine.settings.get('C_Size', (14, 65))[1]), 42),
+                border_min=max(0.05, float(engine.settings.get('C_Border', 0.10)) * 0.7),
+                inner_max=min(0.75, float(engine.settings.get('C_Inner', 0.40)) + 0.20),
+                band_pct=max(0.10, min(float(engine.settings.get('C_BandPct', 0.18)), 0.16)),
+                aspect_tol=max(0.30, float(engine.settings.get('C_AspectTol', 0.10))),
+                fill_min=max(0.12, float(engine.settings.get('C_FillMin', 0.45)) * 0.45),
+                eps=max(0.04, float(engine.settings.get('C_Eps', 0.04))),
+            )
+            for rr in red_candidates:
+                _append_candidate(rr, 'check', 'red_scan', 0.79)
+        except Exception:
+            pass
+
+        try:
+            checkbox_min_sz = int(engine.settings.get('C_Size', (14, 65))[0])
+            checkbox_max_sz = int(engine.settings.get('C_Size', (14, 65))[1])
+            roi_max = int(engine.settings.get('ROI_Max', 200) or 200)
+            nf, _, sf, _ = cv2.connectedComponentsWithStats(bin_checks)
+            small_min = max(7, checkbox_min_sz - 5)
+            for i in range(1, nf):
+                x, y, w, h, area = sf[i]
+                if w >= w_img * 0.9:
+                    continue
+                rect = fitz.Rect(x / ZOOM, y / ZOOM, (x + w) / ZOOM, (y + h) / ZOOM)
+                if not _inside_zone(rect):
+                    continue
+                aspect = w / float(h) if h > 0 else 999.0
+                if small_min <= w <= checkbox_max_sz and small_min <= h <= checkbox_max_sz and 0.68 <= aspect <= 1.45:
+                    if engine.looks_like_checkbox(bin_checks, x, y, w, h, area):
+                        _append_candidate(rect, 'check', 'check_scan', 0.71)
+                elif max(w, h) <= roi_max and min(w, h) >= small_min and 0.55 <= aspect <= 1.75:
+                    for fx, fy, fw, fh in engine.find_checkbox_rects_in_roi(bin_checks, x, y, w, h):
+                        _append_candidate(fitz.Rect(fx / ZOOM, fy / ZOOM, (fx + fw) / ZOOM, (fy + fh) / ZOOM), 'check', 'check_roi', 0.66)
+        except Exception:
+            pass
+
+        try:
+            nf2, _, sf2, _ = cv2.connectedComponentsWithStats(bin_fields)
+            field_area_thresh = int(engine.settings.get('F_Area', 500) or 500)
+            field_min_w_val = int(engine.settings.get('F_MinW', 15) or 15)
+            field_min_h_val = int(engine.settings.get('F_MinH', 35) or 35)
+            for i in range(1, nf2):
+                x, y, w, h, area = sf2[i]
+                if w >= w_img * 0.90 or h >= h_img * 0.12 or area >= (w_img * h_img * 0.03):
+                    continue
+                if (w > 1200 and h > 120) or (w > 1600 and h > 80):
+                    continue
+                if h < field_min_h_val or w < field_min_w_val or area < field_area_thresh:
+                    continue
+                refined = engine._refine_field_rect_from_mask(bin_fields, x, y, w, h, zoom_factor=ZOOM, row_frac_thresh=0.45, col_frac_thresh=0.18, min_inner_h=max(18, int(field_min_h_val * 0.45)), pad_px=2)
+                _append_candidate(refined, 'field', 'field_scan', 0.74)
+        except Exception:
+            pass
+
+        try:
+            faint_field_candidates = engine.detect_faint_field_candidates(
+                img,
+                zoom_factor=ZOOM,
+                zone_rect=zone,
+                text_mask=text_like_mask,
+                header_cut=header_cut,
+            )
+            for item in faint_field_candidates:
+                _append_candidate(item.get('rect'), 'field', item.get('source', 'faint_field'), float(item.get('score', 0.56) or 0.56))
+        except Exception:
+            pass
+
+        try:
+            partial_box_candidates = engine.detect_partial_box_candidates(
+                img,
+                zoom_factor=ZOOM,
+                zone_rect=zone,
+                text_mask=text_like_mask,
+                header_cut=header_cut,
+            )
+            for item in partial_box_candidates:
+                _append_candidate(item.get('rect'), 'field', item.get('source', 'partial_box'), float(item.get('score', 0.52) or 0.52))
+        except Exception:
+            pass
+
+        try:
+            option_candidates = engine.detect_non_square_option_candidates(
+                img,
+                zoom_factor=ZOOM,
+                zone_rect=zone,
+                text_mask=text_like_mask,
+                header_cut=header_cut,
+            )
+            for item in option_candidates:
+                _append_candidate(item.get('rect'), 'check', item.get('source', 'radio_like'), float(item.get('score', 0.54) or 0.54))
+        except Exception:
+            pass
+
+        candidates = self._prune_mobile_candidate_redundancy(candidates)
+        candidates.sort(key=lambda item: (-float(item.get('score', 0.0) or 0.0), {'field': 0, 'check': 1, 'line': 2}.get(str(item.get('kind', '')), 9), item['rect'].y0, item['rect'].x0))
+        local_seed_pairs = []
+        for existing in list(local_existing or []):
+            if isinstance(existing, (list, tuple)) and len(existing) >= 2:
+                try:
+                    ex_rect = existing[0] if isinstance(existing[0], fitz.Rect) else fitz.Rect(*existing[0])
+                except Exception:
+                    continue
+                ex_kind = str(existing[1] or '')
+                local_seed_pairs.append((ex_rect, ex_kind))
+        inferred_structured_count = self._infer_mobile_grid_like_candidates(zone, local_seed_pairs, candidates, _append_candidate)
+        candidates = self._prune_mobile_candidate_redundancy(candidates)
+        candidates.sort(key=lambda item: (-float(item.get('score', 0.0) or 0.0), {'field': 0, 'check': 1, 'line': 2}.get(str(item.get('kind', '')), 9), item['rect'].y0, item['rect'].x0))
+        return {
+            'candidates': candidates,
+            'candidate_type_counts': dict(candidate_type_counts),
+            'source_counts': dict(source_counts),
+            'inferred_structured_count': int(inferred_structured_count or 0),
+            'zone_rect': zone,
+            'anchor_ids': list(anchor_ids or []),
+            'learning_prior_pairs': int(len(dict((priors or {}).get('pairs', {}) or {}))),
+            'learning_prior_same_fp_events': int((priors or {}).get('same_fp_events', 0) or 0),
+            'candidate_min_score': float(min_candidate_score),
+        }
+
+    def _build_mobile_repair_proposal(self, anchor_ids, page_idx=0):
+        page_idx = int(page_idx or 0)
+        anchor_ids = sorted(set(int(x) for x in (anchor_ids or []) if isinstance(x, int) or str(x).isdigit()))
+        if not anchor_ids:
+            return None
+        engine = getattr(self, 'engine', None)
+        if engine is None:
+            return None
+        if int(getattr(engine, 'detected_page_idx', -1) or -1) != page_idx:
+            engine._restore_detection_for_page(page_idx, required_signature=engine._settings_signature())
+        anchor_rects = []
+        for box_id in anchor_ids:
+            if 0 <= int(box_id) < len(getattr(engine, 'all_boxes', []) or []):
+                try:
+                    anchor_rects.append(engine.all_boxes[int(box_id)])
+                except Exception:
+                    pass
+        if not anchor_rects:
+            return None
+
+        zone = fitz.Rect(anchor_rects[0])
+        for rect in anchor_rects[1:]:
+            zone = fitz.Rect(min(zone.x0, rect.x0), min(zone.y0, rect.y0), max(zone.x1, rect.x1), max(zone.y1, rect.y1))
+        pad_x = max(18.0, float(zone.width) * 0.65)
+        pad_y = max(18.0, float(zone.height) * 1.00)
+        zone = fitz.Rect(zone.x0 - pad_x, zone.y0 - pad_y, zone.x1 + pad_x, zone.y1 + pad_y)
+
+        local_existing = []
+        local_existing_ids = []
+        local_type_counts = {'field': 0, 'check': 0, 'line': 0}
+        all_boxes = list(getattr(engine, 'all_boxes', []) or [])
+        all_types = list(getattr(engine, 'box_types', []) or [])
+        for idx_box, rect in enumerate(all_boxes):
+            try:
+                if self._mobile_repair_overlap_score(zone, rect) >= 0.08:
+                    t = str(all_types[idx_box] if idx_box < len(all_types) else '')
+                    local_existing.append((rect, t))
+                    local_existing_ids.append(idx_box)
+                    if t in local_type_counts:
+                        local_type_counts[t] += 1
+            except Exception:
+                pass
+
+        candidate_payload = self._generate_mobile_repair_candidates(
+            page_idx=page_idx,
+            zone=zone,
+            local_existing=local_existing,
+            local_existing_ids=local_existing_ids,
+            anchor_ids=anchor_ids,
+        )
+        if candidate_payload is None:
+            return None
+        candidates = list(candidate_payload.get('candidates', []) or [])
+        candidate_type_counts = dict(candidate_payload.get('candidate_type_counts', {}) or {})
+        source_counts = dict(candidate_payload.get('source_counts', {}) or {})
+        inferred_structured_count = int(candidate_payload.get('inferred_structured_count', 0) or 0)
+        review_defaults = {}
+        for idx_item, item in enumerate(candidates):
+            bucket = self._mobile_repair_confidence_bucket(float(item.get('score', 0.0) or 0.0))
+            review_defaults[f'add:{idx_item}'] = bool(bucket != 'weak')
+
+        removal_candidates = []
+        removal_type_counts = {'field': 0, 'check': 0, 'line': 0}
+        removal_source_counts = {}
+
+        def _append_removal(existing_idx, rect, kind, reason, score):
+            key = f"{int(existing_idx)}:{str(kind)}"
+            for existing in removal_candidates:
+                if str(existing.get('review_key', '')) == key:
+                    if float(score) > float(existing.get('score', 0.0) or 0.0):
+                        existing['reason'] = str(reason)
+                        existing['score'] = float(score)
+                    return
+            removal_candidates.append({
+                'review_key': key,
+                'existing_index': int(existing_idx),
+                'rect': rect if isinstance(rect, fitz.Rect) else fitz.Rect(*rect),
+                'kind': str(kind),
+                'source': 'cleanup_local',
+                'reason': str(reason),
+                'score': float(score),
+            })
+            removal_type_counts[str(kind)] = int(removal_type_counts.get(str(kind), 0) or 0) + 1
+            removal_source_counts['cleanup_local'] = int(removal_source_counts.get('cleanup_local', 0) or 0) + 1
+
+        local_entries = []
+        for idx_existing, existing in zip(local_existing_ids, local_existing):
+            if isinstance(existing, (list, tuple)) and len(existing) >= 1:
+                rect = existing[0]
+                inferred_kind = str(existing[1] if len(existing) >= 2 else '')
+            else:
+                rect = existing
+                inferred_kind = ''
+            try:
+                rect = rect if isinstance(rect, fitz.Rect) else fitz.Rect(*rect)
+            except Exception:
+                continue
+            kind = str(inferred_kind or (all_types[idx_existing] if idx_existing < len(all_types) else ''))
+            local_entries.append({'idx': int(idx_existing), 'rect': rect, 'kind': kind})
+
+        anchor_set = set(int(x) for x in anchor_ids)
+        # Conservative fragment/line-conflict removals, mirroring existing cleanup logic
+        for entry in local_entries:
+            idx_existing = int(entry['idx'])
+            if idx_existing in anchor_set:
+                continue
+            rect = entry['rect']
+            kind = str(entry['kind'] or '')
+            if kind == 'field':
+                for other in local_entries:
+                    if other['idx'] == idx_existing or str(other['kind'] or '') != 'field':
+                        continue
+                    sr = rect
+                    br = other['rect']
+                    s_area = max(float(sr.width) * float(sr.height), 1e-6)
+                    b_area = max(float(br.width) * float(br.height), 1e-6)
+                    if b_area <= s_area or br.height < sr.height:
+                        continue
+                    x_overlap = _x_overlap_ratio(sr, br)
+                    gap = br.y0 - sr.y1
+                    inter = _rect_intersection_area(sr, br)
+                    cover_small = inter / max(s_area, 1e-6)
+                    if x_overlap >= 0.80 and 0 <= gap <= 6.0 and sr.height <= max(4.0, br.height * 0.45):
+                        _append_removal(idx_existing, sr, kind, 'small fragment under larger field', 0.78)
+                        break
+                    if inter > 0 and cover_small >= 0.75 and sr.y1 <= (br.y0 + br.height * 0.45):
+                        _append_removal(idx_existing, sr, kind, 'field fragment covered by larger field', 0.76)
+                        break
+            elif kind == 'line':
+                la = max(float(rect.width) * float(rect.height), 1e-6)
+                lmid_y = (rect.y0 + rect.y1) / 2.0
+                line_mid_x = (rect.x0 + rect.x1) / 2.0
+                for other in local_entries:
+                    if str(other['kind'] or '') != 'field':
+                        continue
+                    fr = other['rect']
+                    inter = _rect_intersection_area(rect, fr)
+                    overlap_ratio = inter / max(la, 1e-6)
+                    x_overlap = _x_intersection(rect, fr) / max(rect.width, 1e-6)
+                    gap_above = fr.y0 - rect.y1
+                    gap_below = rect.y0 - fr.y1
+                    near_top_band = fr.y0 <= rect.y1 <= (fr.y0 + fr.height * 0.55)
+                    if overlap_ratio >= 0.35:
+                        _append_removal(idx_existing, rect, kind, 'line conflicts with nearby field', 0.74)
+                        break
+                    if x_overlap >= 0.70 and (fr.y0 - 1.5) <= lmid_y <= (fr.y0 + fr.height * 0.60):
+                        _append_removal(idx_existing, rect, kind, 'line sits inside field top band', 0.71)
+                        break
+                    if x_overlap >= 0.70 and (0 <= gap_above <= 4.0 or 0 <= gap_below <= 4.0):
+                        _append_removal(idx_existing, rect, kind, 'line hugs nearby field edge', 0.69)
+                        break
+                    if (fr.x0 <= line_mid_x <= fr.x1) and near_top_band:
+                        _append_removal(idx_existing, rect, kind, 'line center falls inside field', 0.67)
+                        break
+
+        removal_candidates.sort(key=lambda item: (-float(item.get('score', 0.0) or 0.0), {'field': 0, 'line': 1, 'check': 2}.get(str(item.get('kind', '')), 9), item['rect'].y0, item['rect'].x0))
+        for idx_item, item in enumerate(removal_candidates):
+            bucket = self._mobile_repair_confidence_bucket(float(item.get('score', 0.0) or 0.0))
+            review_defaults[f'remove:{idx_item}'] = bool(bucket == 'strong')
+        try:
+            engine.cache_candidates_for_page(
+                page_idx,
+                candidates=candidates,
+                review_state=review_defaults,
+                anchor_ids=anchor_ids,
+                meta={
+                    'anchor_ids': list(anchor_ids),
+                    'existing_local_ids': list(local_existing_ids),
+                    'existing_local_count': int(len(local_existing)),
+                    'zone_rect': [float(zone.x0), float(zone.y0), float(zone.x1), float(zone.y1)],
+                    'inferred_structured_count': int(inferred_structured_count or 0),
+                    'candidate_type_counts': dict(candidate_type_counts),
+                    'source_counts': dict(source_counts),
+                    'detection_signature': str(getattr(engine, 'detected_settings_signature', '') or getattr(engine, '_settings_signature', lambda: '')() or ''),
+                    'fingerprint_key': str((((getattr(engine, 'current_detection_context', {}) or {}).get('fingerprint') or {}).get('fingerprint_key', '') or '')),
+                    'removal_review_keys': [f'remove:{idx}' for idx in range(len(removal_candidates))],
+                    'removal_candidates': [{
+                        'existing_index': int(item.get('existing_index', -1) or -1),
+                        'rect': [float(item['rect'].x0), float(item['rect'].y0), float(item['rect'].x1), float(item['rect'].y1)] if item.get('rect') is not None else [],
+                        'kind': str(item.get('kind', 'field') or 'field'),
+                        'reason': str(item.get('reason', '') or ''),
+                        'score': float(item.get('score', 0.0) or 0.0),
+                        'source': str(item.get('source', 'cleanup') or 'cleanup'),
+                    } for item in removal_candidates],
+                },
+            )
+        except Exception:
+            pass
+        return {
+            'page_idx': int(page_idx),
+            'anchor_ids': list(anchor_ids),
+            'anchor_rects': list(anchor_rects),
+            'zone_rect': zone,
+            'existing_local_ids': list(local_existing_ids),
+            'existing_local_count': int(len(local_existing_ids)),
+            'existing_local_type_counts': dict(local_type_counts),
+            'candidates': candidates,
+            'candidate_type_counts': dict(candidate_type_counts),
+            'source_counts': dict(source_counts),
+            'inferred_structured_count': int(inferred_structured_count or 0),
+            'removal_candidates': removal_candidates,
+            'removal_type_counts': dict(removal_type_counts),
+            'removal_source_counts': dict(removal_source_counts),
+        }
+
+    def cluster_grid_like_alignment(self, items):
+        rows = []
+        try:
+            ordered = sorted(list(items or []), key=lambda s: ((((s.get("rect").y0 + s.get("rect").y1) * 0.5) if isinstance(s.get("rect"), fitz.Rect) else 0.0), (s.get("rect").x0 if isinstance(s.get("rect"), fitz.Rect) else 0.0)))
+        except Exception:
+            ordered = list(items or [])
+        for item in ordered:
+            rect = item.get('rect')
+            try:
+                rect = rect if isinstance(rect, fitz.Rect) else fitz.Rect(*rect)
+            except Exception:
+                continue
+            cy = (rect.y0 + rect.y1) * 0.5
+            placed = False
+            for row in rows:
+                tol = max(8.0, float(row.get('med_h', max(rect.height, 1.0))) * 0.75)
+                if abs(cy - float(row.get('cy', cy))) <= tol:
+                    row['items'].append(dict(item, rect=rect))
+                    vals = [((it['rect'].y0 + it['rect'].y1) * 0.5) for it in row['items']]
+                    hs = [max(float(it['rect'].height), 1.0) for it in row['items']]
+                    ws = [max(float(it['rect'].width), 1.0) for it in row['items']]
+                    row['cy'] = sum(vals) / max(len(vals), 1)
+                    row['med_h'] = sorted(hs)[len(hs)//2]
+                    row['med_w'] = sorted(ws)[len(ws)//2]
+                    placed = True
+                    break
+            if not placed:
+                row_h = max(float(rect.height), 1.0)
+                row_w = max(float(rect.width), 1.0)
+                rows.append({'cy': cy, 'med_h': row_h, 'med_w': row_w, 'items': [dict(item, rect=rect)]})
+        for row in rows:
+            row['items'] = sorted(row.get('items', []), key=lambda s: s['rect'].x0)
+            if row['items']:
+                widths = [max(float(it['rect'].width), 1.0) for it in row['items']]
+                heights = [max(float(it['rect'].height), 1.0) for it in row['items']]
+                row['med_w'] = sorted(widths)[len(widths)//2]
+                row['med_h'] = sorted(heights)[len(heights)//2]
+        return rows
+
+    def score_grid_slot_candidate(self, inferred_rect, kind='field', med_w=0.0, med_h=0.0, gap=0.0, edge=False):
+        try:
+            rect = inferred_rect if isinstance(inferred_rect, fitz.Rect) else fitz.Rect(*inferred_rect)
+        except Exception:
+            return 0.0
+        width = max(float(rect.width), 1.0)
+        height = max(float(rect.height), 1.0)
+        med_w = max(float(med_w or width), 1.0)
+        med_h = max(float(med_h or height), 1.0)
+        ratio_penalty = min(abs(width - med_w) / med_w, 1.0) * 0.08
+        height_penalty = min(abs(height - med_h) / med_h, 1.0) * 0.06
+        gap_penalty = 0.0
+        if gap:
+            gap_penalty = min(abs(float(gap) - med_w) / max(med_w, 1.0), 1.0) * 0.07
+        base = 0.66 if str(kind or 'field') == 'field' else 0.61
+        if edge:
+            base -= 0.05
+        score = base - ratio_penalty - height_penalty - gap_penalty
+        return max(0.42, min(0.88, float(score)))
+
+    def infer_missing_slots_from_alignment(self, rows, kind, zone, append_candidate):
+        inferred = 0
+        try:
+            zone = zone if isinstance(zone, fitz.Rect) else fitz.Rect(*zone)
+        except Exception:
+            return 0
+        for row in list(rows or []):
+            row_items = sorted(list(row.get('items', []) or []), key=lambda s: s['rect'].x0)
+            if len(row_items) < 2:
+                continue
+            med_w = max(float(row.get('med_w', 0.0) or 0.0), 1.0)
+            med_h = max(float(row.get('med_h', 0.0) or 0.0), 1.0)
+            if med_w <= 6 or med_h <= 4:
+                continue
+            for left, right in zip(row_items, row_items[1:]):
+                lr = left['rect']; rr = right['rect']
+                gap = float(rr.x0 - lr.x1)
+                if gap < med_w * 0.35 or gap > med_w * 2.40:
+                    continue
+                x0 = lr.x1 + max(gap * 0.12, med_w * 0.08)
+                x1 = rr.x0 - max(gap * 0.12, med_w * 0.08)
+                if x1 <= x0:
+                    continue
+                inferred_rect = fitz.Rect(x0, min(lr.y0, rr.y0), x1, max(lr.y1, rr.y1))
+                if inferred_rect.width < med_w * 0.52:
+                    continue
+                score = self.score_grid_slot_candidate(inferred_rect, kind=kind, med_w=med_w, med_h=med_h, gap=gap, edge=False)
+                if append_candidate(inferred_rect, kind, 'grid_align', score):
+                    inferred += 1
+            if len(row_items) >= 3:
+                centers = [((it['rect'].x0 + it['rect'].x1) * 0.5) for it in row_items]
+                steps = [centers[i + 1] - centers[i] for i in range(len(centers) - 1)]
+                steps = [s for s in steps if med_w * 0.9 <= s <= med_w * 3.1]
+                if len(steps) >= 2:
+                    step = sorted(steps)[len(steps)//2]
+                    left_rect = row_items[0]['rect']
+                    right_rect = row_items[-1]['rect']
+                    for edge_rect, direction in ((left_rect, -1.0), (right_rect, 1.0)):
+                        cx = ((edge_rect.x0 + edge_rect.x1) * 0.5) + (step * direction)
+                        inferred_rect = fitz.Rect(cx - (med_w * 0.5), edge_rect.y0, cx + (med_w * 0.5), edge_rect.y1)
+                        if inferred_rect.x0 < zone.x0 or inferred_rect.x1 > zone.x1:
+                            continue
+                        score = self.score_grid_slot_candidate(inferred_rect, kind=kind, med_w=med_w, med_h=med_h, gap=step, edge=True)
+                        if append_candidate(inferred_rect, kind, 'grid_edge', score):
+                            inferred += 1
+        return int(inferred)
+
+    def _infer_mobile_grid_like_candidates(self, zone, local_existing, existing_candidates, append_candidate):
+        try:
+            seeds = []
+            for rect, kind in list(local_existing or []):
+                kind = str(kind or '')
+                if kind not in {'field', 'line'}:
+                    continue
+                try:
+                    rr = rect if isinstance(rect, fitz.Rect) else fitz.Rect(*rect)
+                except Exception:
+                    continue
+                seeds.append({'rect': rr, 'kind': kind, 'seed': 'existing'})
+            for cand in list(existing_candidates or []):
+                if not isinstance(cand, dict):
+                    continue
+                kind = str(cand.get('kind', '') or '')
+                if kind not in {'field', 'line'}:
+                    continue
+                rect = cand.get('rect')
+                try:
+                    rr = rect if isinstance(rect, fitz.Rect) else fitz.Rect(*rect)
+                except Exception:
+                    continue
+                seeds.append({'rect': rr, 'kind': kind, 'seed': 'candidate'})
+            if len(seeds) < 2:
+                return 0
+
+            inferred = 0
+            zone = zone if isinstance(zone, fitz.Rect) else fitz.Rect(*zone)
+            for kind in ('field', 'line'):
+                items = [s for s in seeds if s.get('kind') == kind]
+                if len(items) < 2:
+                    continue
+                rows = self.cluster_grid_like_alignment(items)
+                inferred += int(self.infer_missing_slots_from_alignment(rows, kind, zone, append_candidate) or 0)
+            return int(inferred)
+        except Exception:
+            return 0
+
+    def _mobile_repair_confidence_bucket(self, score):
+        try:
+            score = float(score)
+        except Exception:
+            score = 0.0
+        tuning = {}
+        try:
+            tuning = getattr(self.engine, 'get_candidate_tuning', lambda: dict(CANDIDATE_TUNING_DEFAULTS))()
+        except Exception:
+            tuning = dict(CANDIDATE_TUNING_DEFAULTS)
+        strong_score = float((tuning or {}).get('strong_score', 0.76) or 0.76)
+        moderate_score = float((tuning or {}).get('moderate_score', 0.58) or 0.58)
+        if score >= strong_score:
             return 'strong'
-        if value >= 0.56:
+        if score >= moderate_score:
             return 'moderate'
         return 'weak'
 
-    def _repair_confidence_label(self, score):
-        band = self._repair_confidence_band(score)
-        return {'strong': 'Strong', 'moderate': 'Moderate', 'weak': 'Weak'}.get(band, 'Weak')
 
-    def _score_repair_add_candidate(self, item, summary=None, page_idx=0):
-        if not isinstance(item, dict):
-            return 0.0
-        score = 0.24
+    def _mobile_candidate_consensus_bonus(self, sources):
         try:
-            score += min(max(float(item.get('score', 0.0) or 0.0), 0.0), 1.0) * 0.52
+            uniq = []
+            for src in list(sources or []):
+                s = str(src or '').strip()
+                if s and s not in uniq:
+                    uniq.append(s)
         except Exception:
-            pass
-        source = str(item.get('source', '') or '')
-        box_type = str(item.get('type', 'unknown') or 'unknown')
-        reason = str(item.get('reason', '') or '').lower()
-        if source == 'grid_like':
-            score += 0.10
-        elif source == 'scan':
-            score += 0.04
-        if box_type in {'field', 'line'}:
-            score += 0.10
-        elif box_type in {'check', 'radio'}:
-            score += 0.06
-        elif box_type == 'unknown':
-            score -= 0.12
-        if 'inferred' in reason:
-            score += 0.04
-        if 'recovered' in reason:
-            score += 0.03
-        if 'unknown' in reason or 'unresolved' in reason:
-            score -= 0.08
-        if isinstance(summary, dict):
-            local_count = len(list(summary.get('local_ids', []) or []))
-            if source == 'grid_like' and bool(summary.get('grid_like')):
-                score += 0.04
-            if local_count <= 2:
-                score -= 0.03
-        return max(0.0, min(0.99, round(float(score), 4)))
+            uniq = []
+        extra = max(0, len(uniq) - 1)
+        return round(float(min(0.09, extra * 0.03)), 6)
 
-    def _score_repair_remove_item(self, item, summary=None, page_idx=0):
-        if not isinstance(item, dict):
-            return 0.0
-        box_type = str(item.get('type', 'unknown') or 'unknown')
-        reason = str(item.get('reason', '') or '').lower()
-        source = str(item.get('best_source', '') or item.get('source', '') or '')
-        try:
-            overlap = min(max(float(item.get('best_overlap', 0.0) or 0.0), 0.0), 1.0)
-        except Exception:
-            overlap = 0.0
-        score = 0.26 + (overlap * 0.50)
-        if box_type == 'unknown':
-            score += 0.10
-        elif box_type in {'field', 'line'}:
-            score -= 0.02
-        if source == 'grid_like':
-            score += 0.08
-        if 'duplicate' in reason:
-            score += 0.06
-        if 'interference' in reason:
-            score += 0.08
-        if 'unresolved' in reason:
-            score += 0.04
-        if isinstance(summary, dict) and bool(summary.get('grid_like')) and source == 'grid_like':
-            score += 0.03
-        return max(0.0, min(0.99, round(float(score), 4)))
-
-    def _repair_remove_candidates_from_summary(self, summary, add_candidates, page_idx=0):
-        remove_items = []
-        if not isinstance(summary, dict) or not hasattr(self, 'engine'):
-            return remove_items
-        protected = set(self._sanitize_box_id_list(summary.get('anchor_ids', []) or [])) | set(self._sanitize_box_id_list(summary.get('section_member_ids', []) or []))
-        local_ids = self._sanitize_box_id_list(summary.get('local_ids', []) or [])
-        add_rects = []
-        for item in list(add_candidates or []):
-            try:
-                add_rects.append((fitz.Rect(item.get('rect', [])), str(item.get('source', '') or ''), str(item.get('type', '') or 'unknown'), float(item.get('confidence', item.get('score', 0.0) or 0.0) or 0.0)))
-            except Exception:
-                continue
-
-        for idx in local_ids:
-            if idx in protected:
-                continue
-            if not (0 <= int(idx) < len(getattr(self.engine, 'all_boxes', []) or [])):
-                continue
-            try:
-                rr = fitz.Rect(self.engine.all_boxes[int(idx)])
-            except Exception:
-                continue
-            box_type = str((self.engine.box_types[int(idx)] if int(idx) < len(getattr(self.engine, 'box_types', []) or []) else '') or '')
-            try:
-                mapped = str(self.engine.describe_box_mapping(int(idx), int(page_idx or 0))).strip() != 'EMPTY'
-            except Exception:
-                mapped = False
-            if mapped:
-                continue
-            best_overlap = 0.0
-            best_source = ''
-            best_type = ''
-            best_add_conf = 0.0
-            for add_rect, add_source, add_type, add_conf in add_rects:
-                try:
-                    score = float(self.engine._rect_overlap_score(rr, add_rect))
-                except Exception:
-                    score = 0.0
-                if score > best_overlap:
-                    best_overlap = score
-                    best_source = add_source
-                    best_type = add_type
-                    best_add_conf = add_conf
-            if box_type == 'unknown' and best_overlap >= 0.24:
-                reason = 'unresolved candidate overlapped by repaired detection'
-                if best_source == 'grid_like':
-                    reason = 'interference inside inferred grid-like slot'
-                remove_items.append({
-                    'box_id': int(idx),
-                    'type': box_type,
-                    'reason': reason,
-                    'best_overlap': round(float(best_overlap), 4),
-                    'best_source': best_source,
-                    'best_type': best_type,
-                    'paired_add_confidence': round(float(best_add_conf), 4),
-                })
-                continue
-            if box_type in {'field', 'line'} and best_source == 'grid_like' and best_type == box_type and best_overlap >= 0.55:
-                remove_items.append({
-                    'box_id': int(idx),
-                    'type': box_type,
-                    'reason': 'weak local duplicate replaced by aligned grid-like repair',
-                    'best_overlap': round(float(best_overlap), 4),
-                    'best_source': best_source,
-                    'best_type': best_type,
-                    'paired_add_confidence': round(float(best_add_conf), 4),
-                })
-                continue
-        unique = []
-        seen = set()
-        for item in remove_items:
-            key = int(item.get('box_id', -1))
-            if key < 0 or key in seen:
-                continue
-            seen.add(key)
-            unique.append(item)
-        return unique
-
-    def _build_repair_detection_proposal(self, box_ids, page_idx=0):
-        summary = self._collect_repair_detection_summary(box_ids, page_idx=page_idx)
-        proposal = dict(summary)
-        anchor_ids = self._sanitize_box_id_list(summary.get('anchor_ids', []) or [])
-        local_ids = self._sanitize_box_id_list(summary.get('local_ids', []) or [])
-        section_members = self._sanitize_box_id_list(summary.get('section_member_ids', []) or [])
-        protected = set(anchor_ids) | set(section_members)
-        keep_ids = []
-
-        add_candidates = []
-        add_candidates.extend(self._repair_detection_candidates_from_zone(summary.get('zone'), page_idx=page_idx, anchor_ids=anchor_ids))
-        add_candidates.extend(self._repair_grid_like_candidates_from_summary(summary, page_idx=page_idx))
-        add_candidates = self._dedupe_repair_candidates(add_candidates)
-        rescored_add = []
-        for item in add_candidates:
-            new_item = dict(item)
-            conf = self._score_repair_add_candidate(new_item, summary=summary, page_idx=page_idx)
-            new_item['confidence'] = conf
-            new_item['confidence_label'] = self._repair_confidence_label(conf)
-            new_item['confidence_band'] = self._repair_confidence_band(conf)
-            rescored_add.append(new_item)
-        add_candidates = sorted(
-            rescored_add,
-            key=lambda item: (
-                0 if str(item.get('confidence_band', 'weak')) == 'strong' else (1 if str(item.get('confidence_band', 'weak')) == 'moderate' else 2),
-                -float(item.get('confidence', 0.0) or 0.0),
-                0 if str(item.get('source', '') or '') == 'grid_like' else 1,
-                0 if str(item.get('type', '') or '') in {'field', 'line'} else 1,
-            ),
-        )
-
-        add_rects = []
-        for item in add_candidates:
-            try:
-                add_rects.append((fitz.Rect(item.get('rect', [])), item))
-            except Exception:
-                continue
-
-        unknown_set = set(self._sanitize_box_id_list(summary.get('unknown_ids', []) or []))
-        for idx in local_ids:
-            if not (0 <= int(idx) < len(getattr(self.engine, 'all_boxes', []) or [])):
-                continue
-            try:
-                rr = fitz.Rect(self.engine.all_boxes[int(idx)])
-            except Exception:
-                continue
-            box_type = str((self.engine.box_types[int(idx)] if int(idx) < len(getattr(self.engine, 'box_types', []) or []) else '') or '')
-            try:
-                mapped = str(self.engine.describe_box_mapping(int(idx), int(page_idx or 0))).strip() != 'EMPTY'
-            except Exception:
-                mapped = False
-            best_add_overlap = 0.0
-            best_source = ''
-            for add_rect, meta in add_rects:
-                try:
-                    score = float(self.engine._rect_overlap_score(rr, add_rect))
-                except Exception:
-                    score = 0.0
-                if score > best_add_overlap:
-                    best_add_overlap = score
-                    best_source = str(meta.get('source', '') or '')
-            if int(idx) in protected or mapped:
-                keep_ids.append(int(idx))
-                continue
-            if box_type == 'unknown' and (best_add_overlap >= 0.28 or int(idx) in unknown_set):
-                reason = 'unresolved candidate near anchors'
-                if best_source == 'grid_like':
-                    reason = 'unresolved candidate inside grid-like repair area'
-                continue
-            keep_ids.append(int(idx))
-
-        remove_items = self._repair_remove_candidates_from_summary(summary, add_candidates, page_idx=page_idx)
-        rescored_remove = []
-        for item in remove_items:
-            new_item = dict(item)
-            conf = self._score_repair_remove_item(new_item, summary=summary, page_idx=page_idx)
-            new_item['confidence'] = conf
-            new_item['confidence_label'] = self._repair_confidence_label(conf)
-            new_item['confidence_band'] = self._repair_confidence_band(conf)
-            rescored_remove.append(new_item)
-        remove_items = sorted(
-            rescored_remove,
-            key=lambda item: (
-                0 if str(item.get('confidence_band', 'weak')) == 'strong' else (1 if str(item.get('confidence_band', 'weak')) == 'moderate' else 2),
-                -float(item.get('confidence', 0.0) or 0.0),
-                0 if str(item.get('best_source', '') or '') == 'grid_like' else 1,
-            ),
-        )
-
-        proposal['add_candidates'] = add_candidates
-        proposal['remove_items'] = remove_items
-        proposal['remove_ids'] = [int(item.get('box_id', -1)) for item in remove_items if int(item.get('box_id', -1)) >= 0]
-        proposal['keep_ids'] = self._sanitize_box_id_list(keep_ids)
-        proposal['candidate_types'] = sorted(set(str(item.get('type', 'unknown') or 'unknown') for item in add_candidates))
-        proposal['candidate_sources'] = sorted(set(str(item.get('source', 'scan') or 'scan') for item in add_candidates))
-        proposal['grid_inferred_count'] = sum(1 for item in add_candidates if str(item.get('source', '') or '') == 'grid_like')
-        proposal['strong_add_count'] = sum(1 for item in add_candidates if str(item.get('confidence_band', '')) == 'strong')
-        proposal['moderate_add_count'] = sum(1 for item in add_candidates if str(item.get('confidence_band', '')) == 'moderate')
-        proposal['weak_add_count'] = sum(1 for item in add_candidates if str(item.get('confidence_band', '')) == 'weak')
-        proposal['strong_remove_count'] = sum(1 for item in remove_items if str(item.get('confidence_band', '')) == 'strong')
-        proposal['moderate_remove_count'] = sum(1 for item in remove_items if str(item.get('confidence_band', '')) == 'moderate')
-        proposal['weak_remove_count'] = sum(1 for item in remove_items if str(item.get('confidence_band', '')) == 'weak')
-        return proposal
-
-    def _repair_proposal_summary_lines(self, proposal):
-        lines = []
-        anchor_ids = self._sanitize_box_id_list(proposal.get('anchor_ids', []) or [])
-        page_idx = int(proposal.get('page_idx', 0) or 0)
-        zone = proposal.get('zone')
-        if zone is not None:
-            lines.append(f"Repair zone: {max(zone.width, 0):.1f} × {max(zone.height, 0):.1f}")
-        lines.append(f"Example boxes: {anchor_ids}")
-        lines.append(f"Page: {page_idx}")
-        lines.append(f"Nearby detections in zone: {len(list(proposal.get('local_ids', []) or []))}")
-        lines.append(f"Suggested additions: {len(list(proposal.get('add_candidates', []) or []))}")
-        lines.append(f"Suggested removals: {len(list(proposal.get('remove_ids', []) or []))}")
-        add_bucket = f"Add confidence: strong {int(proposal.get('strong_add_count', 0) or 0)} • moderate {int(proposal.get('moderate_add_count', 0) or 0)} • weak {int(proposal.get('weak_add_count', 0) or 0)}"
-        rem_bucket = f"Remove confidence: strong {int(proposal.get('strong_remove_count', 0) or 0)} • moderate {int(proposal.get('moderate_remove_count', 0) or 0)} • weak {int(proposal.get('weak_remove_count', 0) or 0)}"
-        lines.append(add_bucket)
-        lines.append(rem_bucket)
-        if proposal.get('candidate_types'):
-            lines.append(f"Detected candidate types: {', '.join(str(x) for x in proposal.get('candidate_types', []))}")
-        if proposal.get('candidate_sources'):
-            source_labels = []
-            for src in list(proposal.get('candidate_sources', []) or []):
-                src = str(src or '')
-                source_labels.append('grid-like inference' if src == 'grid_like' else ('local scan' if src == 'scan' else src))
-            lines.append(f"Candidate sources: {', '.join(source_labels)}")
-        grid_inferred_count = int(proposal.get('grid_inferred_count', 0) or 0)
-        if proposal.get('grid_like'):
-            lines.append('Grid-like behavior detected: reconstruct this area by alignment/structure, not only full borders.')
-        if grid_inferred_count > 0:
-            lines.append(f"Inferred missing structured slots: {grid_inferred_count}")
-        add_preview = []
-        for item in list(proposal.get('add_candidates', []) or [])[:8]:
-            reason = str(item.get('reason', 'repair candidate') or 'repair candidate')
-            source = str(item.get('source', '') or '')
-            conf_txt = f"[{self._repair_confidence_label(item.get('confidence', 0.0))} {float(item.get('confidence', 0.0) or 0.0):.2f}]"
-            if source == 'grid_like':
-                reason = reason + ' • grid-like'
-            add_preview.append(f"+ {conf_txt} {item.get('type', 'unknown')}: {reason}")
-        rem_preview = [f"- [{self._repair_confidence_label(item.get('confidence', 0.0))} {float(item.get('confidence', 0.0) or 0.0):.2f}] Box {item.get('box_id')}: {item.get('reason', 'remove candidate')}" for item in list(proposal.get('remove_items', []) or [])[:8]]
-        if add_preview:
-            lines.append('')
-            lines.append('Suggested additions:')
-            lines.extend(add_preview)
-        if rem_preview:
-            lines.append('')
-            lines.append('Suggested removals:')
-            lines.extend(rem_preview)
-        if not add_preview and not rem_preview:
-            lines.append('')
-            lines.append('No safe add/remove suggestions yet. Keep the original detection or choose clearer example boxes.')
-        return lines
-
-    def _match_box_ids_for_rects(self, rects, page_idx=0, min_score=0.35):
-        matched = []
-        rects = [fitz.Rect(r) for r in list(rects or [])]
-        for rr in rects:
-            best_id = None
-            best_score = 0.0
-            for idx, existing in enumerate(list(getattr(self.engine, 'all_boxes', []) or [])):
-                try:
-                    score = float(self.engine._rect_overlap_score(rr, fitz.Rect(existing)))
-                except Exception:
-                    score = 0.0
-                if score > best_score:
-                    best_score = score
-                    best_id = idx
-            if best_id is not None and best_score >= float(min_score):
-                matched.append(int(best_id))
-        return self._sanitize_box_id_list(matched)
-
-    def _filtered_repair_detection_proposal(self, proposal, add_selected=None, remove_selected=None):
+    def _build_mobile_repair_review_payload(self, proposal):
         if not isinstance(proposal, dict):
-            return {
-                'anchor_ids': [],
-                'page_idx': self.current_page_idx(),
-                'add_candidates': [],
-                'remove_ids': [],
-                'remove_items': [],
-            }
-        filtered = dict(proposal)
-        add_candidates = list(proposal.get('add_candidates', []) or [])
-        remove_items = list(proposal.get('remove_items', []) or [])
-
-        if add_selected is None:
-            add_selected_idx = set(range(len(add_candidates)))
-        else:
-            add_selected_idx = set(int(x) for x in list(add_selected or []) if isinstance(x, int) or str(x).isdigit())
-        if remove_selected is None:
-            remove_selected_idx = set(range(len(remove_items)))
-        else:
-            remove_selected_idx = set(int(x) for x in list(remove_selected or []) if isinstance(x, int) or str(x).isdigit())
-
-        filtered_add = [item for idx, item in enumerate(add_candidates) if idx in add_selected_idx]
-        filtered_remove_items = [item for idx, item in enumerate(remove_items) if idx in remove_selected_idx]
-        filtered_remove_ids = [int(item.get('box_id')) for item in filtered_remove_items if isinstance(item, dict) and (isinstance(item.get('box_id'), int) or str(item.get('box_id')).isdigit())]
-
-        filtered['add_candidates'] = filtered_add
-        filtered['remove_items'] = filtered_remove_items
-        filtered['remove_ids'] = sorted(set(filtered_remove_ids))
-        filtered['candidate_types'] = sorted(set(str(item.get('type', 'unknown') or 'unknown') for item in filtered_add))
-        filtered['candidate_sources'] = sorted(set(str(item.get('source', '') or '') for item in filtered_add if str(item.get('source', '') or '').strip()))
-        filtered['grid_inferred_count'] = sum(1 for item in filtered_add if str(item.get('source', '') or '') == 'grid_like')
-        return filtered
-
-    def _apply_repair_detection_proposal(self, proposal):
-        if not isinstance(proposal, dict) or not hasattr(self, 'engine'):
-            self.set_status('Repair proposal is unavailable.', kind='error', force=True)
-            return False
-        page_idx = int(proposal.get('page_idx', self.current_page_idx()) or self.current_page_idx())
+            return None
+        review_items = []
+        add_counts = {'strong': 0, 'moderate': 0, 'weak': 0}
+        remove_counts = {'strong': 0, 'moderate': 0, 'weak': 0}
+        candidates = list(proposal.get('candidates', []) or [])
+        removal_candidates = list(proposal.get('removal_candidates', []) or [])
+        stored_review_state = {}
         try:
-            self._prepare_page_context(page_idx, clear_selection_if_missing=False)
+            page_idx = int(proposal.get('page_idx', 0) or 0)
+            proposal_anchor_ids = [int(x) for x in (proposal.get('anchor_ids', []) or []) if isinstance(x, int) or str(x).isdigit()]
+            stored_review_state = dict(getattr(self.engine, 'get_candidates_for_page')(page_idx, anchor_ids=proposal_anchor_ids).get('review_state', {}) or {})
         except Exception:
-            pass
-        self.engine._ensure_detection_for_page(page_idx)
+            stored_review_state = {}
+        tuning = {}
+        try:
+            tuning = getattr(self.engine, 'get_candidate_tuning', lambda: dict(CANDIDATE_TUNING_DEFAULTS))()
+        except Exception:
+            tuning = dict(CANDIDATE_TUNING_DEFAULTS)
+        auto_check_add_score = float((tuning or {}).get('auto_check_add_score', 0.58) or 0.58)
+        auto_check_remove_score = float((tuning or {}).get('auto_check_remove_score', 0.76) or 0.76)
+        for idx_item, item in enumerate(candidates):
+            kind = str(item.get('kind', '') or 'field')
+            source = str(item.get('source', '') or 'scan')
+            score = float(item.get('score', 0.0) or 0.0)
+            bucket = self._mobile_repair_confidence_bucket(score)
+            add_counts[bucket] = int(add_counts.get(bucket, 0) or 0) + 1
+            default_checked = bool(stored_review_state.get(f'add:{idx_item}', score >= auto_check_add_score))
+            source_set = [str(s) for s in (item.get('source_set', []) or []) if str(s).strip()]
+            support_count = int(item.get('support_count', len(source_set) if source_set else 1) or 1)
+            label = f"Add {kind} from {source.replace('_', ' ')}"
+            if source in {'grid_infer', 'grid_align', 'grid_edge'}:
+                label = f"Add {kind} from grid-like structure"
+            elif support_count > 1 or len(source_set) > 1:
+                merged_names = ', '.join(s.replace('_', ' ') for s in source_set[:3])
+                label = f"Add {kind} from combined evidence"
+                if merged_names:
+                    label += f" • {merged_names}"
+            review_items.append({
+                'review_key': f'add:{idx_item}',
+                'action': 'add',
+                'candidate_index': int(idx_item),
+                'kind': kind,
+                'source': source,
+                'score': score,
+                'bucket': bucket,
+                'label': label,
+                'support_count': int(support_count),
+                'source_set': list(source_set),
+                'checked': bool(default_checked),
+            })
+        for idx_item, item in enumerate(removal_candidates):
+            kind = str(item.get('kind', '') or 'field')
+            source = str(item.get('source', '') or 'cleanup_local')
+            score = float(item.get('score', 0.0) or 0.0)
+            bucket = self._mobile_repair_confidence_bucket(score)
+            remove_counts[bucket] = int(remove_counts.get(bucket, 0) or 0) + 1
+            default_checked = bool(stored_review_state.get(f'remove:{idx_item}', score >= auto_check_remove_score))
+            label = f"Remove {kind} • {str(item.get('reason', '') or 'local interference')}"
+            review_items.append({
+                'review_key': f'remove:{idx_item}',
+                'action': 'remove',
+                'candidate_index': int(idx_item),
+                'existing_index': int(item.get('existing_index', -1) or -1),
+                'kind': kind,
+                'source': source,
+                'score': score,
+                'bucket': bucket,
+                'label': label,
+                'checked': bool(default_checked),
+            })
+        out = dict(proposal)
+        review_items.sort(key=lambda item: (0 if str(item.get('action')) == 'add' else 1, {'strong': 0, 'moderate': 1, 'weak': 2}.get(str(item.get('bucket', 'weak')), 9), -float(item.get('score', 0.0) or 0.0), str(item.get('kind', ''))))
+        out['review_items'] = review_items
+        out['review_count'] = len(review_items)
+        out['review_add_bucket_counts'] = add_counts
+        out['review_remove_bucket_counts'] = remove_counts
+        return out
 
-        anchor_ids = self._sanitize_box_id_list(proposal.get('anchor_ids', []) or [])
-        anchor_rects = []
-        for idx in anchor_ids:
-            if 0 <= int(idx) < len(getattr(self.engine, 'all_boxes', []) or []):
-                try:
-                    anchor_rects.append(fitz.Rect(self.engine.all_boxes[int(idx)]))
-                except Exception:
-                    pass
+    def _open_mobile_repair_review_popup(self, proposal):
+        proposal = self._build_mobile_repair_review_payload(proposal)
+        if not isinstance(proposal, dict):
+            self.set_status('No repair review proposal available.', kind='info', hold_seconds=2.0, force=True)
+            return
+        items = list(proposal.get('review_items', []) or [])
+        if not items:
+            self.set_status('Repair analysis found no new local changes to review.', kind='info', hold_seconds=2.2, force=True)
+            return
 
-        remove_ids = sorted(set(int(x) for x in list(proposal.get('remove_ids', []) or []) if isinstance(x, int) or str(x).isdigit()), reverse=True)
-        removed_count = len(remove_ids)
-        added_count = len(list(proposal.get('add_candidates', []) or []))
-        if added_count <= 0 and removed_count <= 0:
-            self.set_status('No repair changes were selected. Original detection kept as-is.', kind='warning', force=True)
-            return False
+        palette = getattr(self, 'ui_palette', {}) or {}
+        outer = BoxLayout(orientation='vertical', spacing=dp(10), padding=[dp(14), dp(14), dp(14), dp(14)])
+        self._style_popup_card(outer, palette.get('surface', (0.085, 0.105, 0.145, 1)), radius=dp(22))
 
-        for idx in remove_ids:
-            if 0 <= idx < len(getattr(self.engine, 'all_boxes', []) or []):
-                try:
-                    del self.engine.all_boxes[idx]
-                    del self.engine.box_types[idx]
-                except Exception:
-                    pass
+        title = Label(text='Review Repair Changes', color=palette.get('text', (0.93, 0.96, 1.0, 1)), size_hint_y=None, height=dp(28), halign='left', valign='middle', font_size=dp(18), bold=True)
+        title.bind(size=self._sync_label_text_size)
+        self._bind_auto_height_label(title, min_height=dp(28), extra_pad=dp(4))
+        outer.add_widget(title)
 
-        self.engine.unknown_fillables = [fitz.Rect(r) for r, t in zip(list(getattr(self.engine, 'all_boxes', []) or []), list(getattr(self.engine, 'box_types', []) or [])) if str(t or '') == 'unknown']
+        add_counts = dict(proposal.get('review_add_bucket_counts', {}) or {})
+        remove_counts = dict(proposal.get('review_remove_bucket_counts', {}) or {})
+        sub = Label(
+            text=(
+                f"Additions — strong {int(add_counts.get('strong', 0) or 0)} • moderate {int(add_counts.get('moderate', 0) or 0)} • weak {int(add_counts.get('weak', 0) or 0)}\n"
+                f"Removals — strong {int(remove_counts.get('strong', 0) or 0)} • moderate {int(remove_counts.get('moderate', 0) or 0)} • weak {int(remove_counts.get('weak', 0) or 0)}"
+            ),
+            color=palette.get('muted', (0.60, 0.68, 0.80, 1)),
+            size_hint_y=None,
+            halign='left',
+            valign='middle',
+            font_size=dp(11)
+        )
+        sub.bind(size=self._sync_label_text_size)
+        self._bind_auto_height_label(sub, min_height=dp(34), extra_pad=dp(6))
+        outer.add_widget(sub)
 
-        for item in list(proposal.get('add_candidates', []) or []):
+        state = {}
+        counter_lbl = Label(text='', color=palette.get('muted', (0.60, 0.68, 0.80, 1)), size_hint_y=None, halign='left', valign='middle', font_size=dp(10.5))
+        counter_lbl.bind(size=self._sync_label_text_size)
+        self._bind_auto_height_label(counter_lbl, min_height=dp(18), extra_pad=dp(4))
+        outer.add_widget(counter_lbl)
+
+        scroll = ScrollView(size_hint=(1, 1), do_scroll_x=False, bar_width=dp(6))
+        grid = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
+        grid.bind(minimum_height=grid.setter('height'))
+        for item in items[:160]:
+            row = BoxLayout(orientation='horizontal', spacing=dp(8), size_hint_y=None, padding=[dp(10), dp(8), dp(10), dp(8)])
+            row.bind(minimum_height=row.setter('height'))
+            self._style_popup_card(row, palette.get('surface_alt', (0.11, 0.135, 0.185, 1)), radius=dp(16))
+            chk = CheckBox(active=bool(item.get('checked', False)), size_hint=(None, None), size=(dp(24), dp(24)))
+            state[str(item.get('review_key'))] = chk
+            row.add_widget(chk)
+            body = BoxLayout(orientation='vertical', spacing=dp(2), size_hint_y=None)
+            body.bind(minimum_height=body.setter('height'))
+            bucket = str(item.get('bucket', 'weak') or 'weak')
+            score = float(item.get('score', 0.0) or 0.0)
+            action = str(item.get('action', 'add') or 'add')
+            bucket_text = bucket.capitalize()
+            line1 = Label(
+                text=f"{item.get('label', 'Change')} • {bucket_text} {score:.2f}",
+                color=palette.get('text', (0.93, 0.96, 1.0, 1)),
+                size_hint_y=None,
+                halign='left',
+                valign='middle',
+                font_size=dp(11.2),
+                bold=True
+            )
+            line1.bind(size=self._sync_label_text_size)
+            self._bind_auto_height_label(line1, min_height=dp(18), extra_pad=dp(4))
+            body.add_widget(line1)
+            detail = str(item.get('source', '')).replace('_', ' ')
+            if action == 'remove':
+                detail = f"Proposed local cleanup • {detail}"
+            else:
+                detail = f"Proposed addition • {detail}"
+            line2 = Label(text=detail, color=palette.get('muted', (0.60, 0.68, 0.80, 1)), size_hint_y=None, halign='left', valign='middle', font_size=dp(10.2))
+            line2.bind(size=self._sync_label_text_size)
+            self._bind_auto_height_label(line2, min_height=dp(16), extra_pad=dp(4))
+            body.add_widget(line2)
+            row.add_widget(body)
+            grid.add_widget(row)
+        scroll.add_widget(grid)
+        outer.add_widget(scroll)
+
+        btn_bar = GridLayout(cols=4, spacing=dp(8), size_hint_y=None, height=dp(44))
+        btn_all = self._make_compact_action_button('Select All', tone='ghost')
+        btn_none = self._make_compact_action_button('Select None', tone='ghost')
+        btn_close = self._make_compact_action_button('Close', tone='plain')
+        btn_apply = self._make_compact_action_button('Apply Checked', tone='primary')
+        btn_bar.add_widget(btn_all)
+        btn_bar.add_widget(btn_none)
+        btn_bar.add_widget(btn_close)
+        btn_bar.add_widget(btn_apply)
+        outer.add_widget(btn_bar)
+
+        popup = Popup(title='', separator_height=0, background='', background_color=(0, 0, 0, 0.80), content=outer, size_hint=(0.96 if getattr(self, 'ui_mobile', False) else 0.82, 0.88 if getattr(self, 'ui_mobile', False) else 0.74), auto_dismiss=True)
+        self._bind_popup_background_softening(popup)
+
+        def _persist_review_state(*_):
             try:
-                rr = fitz.Rect(item.get('rect', []))
-            except Exception:
-                continue
-            box_type = str(item.get('type', 'unknown') or 'unknown')
-            try:
-                if box_type == 'unknown':
-                    self.engine._append_unknown_fillable(rr, overlap_thresh=0.24)
-                else:
-                    self.engine._append_box_unique(rr, box_type, iou_thresh=(0.36 if box_type in {'check', 'radio'} else 0.42))
+                page_idx_local = int(proposal.get('page_idx', self.current_page_idx()) or 0)
+                review_snapshot = {str(key): bool(getattr(chk, 'active', False)) for key, chk in state.items()}
+                self.engine.update_candidate_review_state_for_page(page_idx_local, review_snapshot, anchor_ids=list(proposal.get('anchor_ids', []) or []))
             except Exception:
                 pass
 
-        try:
-            self.engine._cleanup_field_fragments()
-        except Exception:
-            pass
-        try:
-            self.engine._cleanup_line_field_conflicts()
-        except Exception:
-            pass
-        self.engine.unknown_fillables = [fitz.Rect(r) for r, t in zip(list(getattr(self.engine, 'all_boxes', []) or []), list(getattr(self.engine, 'box_types', []) or [])) if str(t or '') == 'unknown']
-        try:
-            self.engine.option_groups = self.engine._cluster_option_groups()
-        except Exception:
-            self.engine.option_groups = []
-        try:
-            self.engine.compound_sections = self.engine._contextualize_compound_sections(self.engine._cluster_compound_sections(), page_idx=page_idx)
-        except Exception:
-            self.engine.compound_sections = []
-        self.engine.detected_page_idx = int(page_idx)
-        self.engine.detected_settings_signature = self.engine._settings_signature()
-        try:
-            self.engine._cache_detection_for_page(page_idx)
-        except Exception:
-            pass
+        def _refresh_counter(*_):
+            active = sum(1 for chk in state.values() if bool(getattr(chk, 'active', False)))
+            inactive = max(0, len(state) - active)
+            counter_lbl.text = f"Checked changes: {active} • Unchecked: {inactive}"
+            _persist_review_state()
+        for chk in state.values():
+            chk.bind(active=lambda *_: _refresh_counter())
+        _refresh_counter()
 
-        new_anchor_ids = self._match_box_ids_for_rects(anchor_rects, page_idx=page_idx, min_score=0.28)
-        if not new_anchor_ids:
-            add_rects = []
-            for item in list(proposal.get('add_candidates', []) or [])[:4]:
+        def _set_all(active):
+            for chk in state.values():
+                chk.active = bool(active)
+            _refresh_counter()
+
+        btn_all.bind(on_release=lambda *_: _set_all(True))
+        btn_none.bind(on_release=lambda *_: _set_all(False))
+        btn_close.bind(on_release=lambda *_: popup.dismiss())
+        btn_apply.bind(on_release=lambda *_: self._apply_mobile_repair_review(proposal, state, popup=popup))
+        popup.open()
+
+    def _apply_mobile_repair_review(self, proposal, review_state, popup=None):
+        if not isinstance(proposal, dict):
+            self.set_status('No repair proposal to apply.', kind='warning', hold_seconds=2.0, force=True)
+            return
+        engine = getattr(self, 'engine', None)
+        if engine is None:
+            self.set_status('Repair apply failed: engine unavailable.', kind='warning', hold_seconds=2.0, force=True)
+            return
+        page_idx = int(proposal.get('page_idx', self.current_page_idx()) or 0)
+        detection_ready = False
+        try:
+            if int(getattr(engine, 'detected_page_idx', -1) or -1) == page_idx and bool(getattr(engine, 'all_boxes', []) or []):
+                detection_ready = True
+            else:
+                detection_ready = bool(engine._restore_detection_for_page(page_idx, required_signature=engine._settings_signature()))
+        except Exception:
+            detection_ready = False
+        if not detection_ready:
+            self.set_status('Repair apply requires a detected page. Run Detect again first.', kind='warning', hold_seconds=2.6, force=True)
+            return
+        candidates = list(proposal.get('candidates', []) or [])
+        removal_candidates = list(proposal.get('removal_candidates', []) or [])
+        review_items = list(proposal.get('review_items', []) or [])
+        selected_candidate_indices = []
+        selected_remove_indices = []
+        reviewed_decisions = []
+        for item in review_items:
+            review_key = str(item.get('review_key') or '')
+            chk = review_state.get(review_key)
+            is_active = bool(getattr(chk, 'active', False)) if chk is not None else bool(item.get('default_checked', False))
+            action = str(item.get('action') or '')
+            try:
+                idx = int(item.get('candidate_index'))
+            except Exception:
+                idx = -1
+            reviewed_decisions.append({
+                'review_key': review_key,
+                'action': action,
+                'accepted': bool(is_active),
+                'kind': str(item.get('kind', '') or ''),
+                'source': str(item.get('source', '') or ''),
+                'score': float(item.get('score', 0.0) or 0.0),
+                'reason': str(item.get('reason', '') or ''),
+                'rect': item.get('rect'),
+            })
+            if not is_active:
+                continue
+            if idx < 0:
+                continue
+            if action == 'add':
+                selected_candidate_indices.append(idx)
+            elif action == 'remove':
+                selected_remove_indices.append(idx)
+        selected_candidate_indices = sorted(set(selected_candidate_indices))
+        selected_remove_indices = sorted(set(selected_remove_indices))
+        if not selected_candidate_indices and not selected_remove_indices:
+            self.set_status('No repair changes were checked.', kind='info', hold_seconds=2.0, force=True)
+            return
+
+        all_boxes = list(getattr(engine, 'all_boxes', []) or [])
+        all_types = list(getattr(engine, 'box_types', []) or [])
+        added_rects = []
+        removed_ids = []
+        added_count = 0
+
+        anchor_ids = [int(x) for x in (proposal.get('anchor_ids', []) or []) if isinstance(x, int) or str(x).isdigit()]
+        anchor_refs = []
+        for idx in anchor_ids:
+            if 0 <= idx < len(all_boxes):
                 try:
-                    add_rects.append(fitz.Rect(item.get('rect', [])))
+                    anchor_refs.append((fitz.Rect(all_boxes[idx]), str(all_types[idx] if idx < len(all_types) else 'field')))
                 except Exception:
-                    pass
-            new_anchor_ids = self._match_box_ids_for_rects(add_rects, page_idx=page_idx, min_score=0.28)
-        self.engine.selected_box_ids = list(new_anchor_ids)
+                    continue
+
+        def _exists_close(rect, kind):
+            for idx_existing, existing in enumerate(all_boxes):
+                existing_kind = str(all_types[idx_existing] if idx_existing < len(all_types) else '')
+                if existing_kind != str(kind):
+                    continue
+                if self._mobile_repair_overlap_score(rect, existing) >= 0.50:
+                    return True
+            return False
+
+        for cand_idx in selected_candidate_indices:
+            if not (0 <= cand_idx < len(candidates)):
+                continue
+            cand = candidates[cand_idx]
+            rect = cand.get('rect') if isinstance(cand, dict) else None
+            kind = str(cand.get('kind', 'field') if isinstance(cand, dict) else 'field')
+            if rect is None:
+                continue
+            try:
+                rect = rect if isinstance(rect, fitz.Rect) else fitz.Rect(*rect)
+            except Exception:
+                continue
+            if _exists_close(rect, kind):
+                continue
+            all_boxes.append(rect)
+            all_types.append(kind)
+            added_rects.append((fitz.Rect(rect), kind))
+            added_count += 1
+
+        def _resolve_live_existing_index(item, min_score=0.45):
+            rect = item.get('rect') if isinstance(item, dict) else None
+            kind = str(item.get('kind', '') if isinstance(item, dict) else '')
+            try:
+                target_rect = rect if isinstance(rect, fitz.Rect) else fitz.Rect(*rect)
+            except Exception:
+                target_rect = None
+            best_idx = -1
+            best_score = 0.0
+            if target_rect is not None:
+                for idx_existing, existing in enumerate(all_boxes):
+                    existing_kind = str(all_types[idx_existing] if idx_existing < len(all_types) else '')
+                    if kind and existing_kind != kind:
+                        continue
+                    score = self._mobile_repair_overlap_score(target_rect, existing)
+                    if score > best_score:
+                        best_idx = idx_existing
+                        best_score = score
+                if best_idx >= 0 and best_score >= float(min_score):
+                    return int(best_idx)
+            try:
+                existing_index = int(item.get('existing_index', -1) or -1)
+            except Exception:
+                existing_index = -1
+            if 0 <= existing_index < len(all_boxes):
+                return existing_index
+            return -1
+
+        remove_existing_indices = []
+        for rem_idx in selected_remove_indices:
+            if not (0 <= rem_idx < len(removal_candidates)):
+                continue
+            item = removal_candidates[rem_idx]
+            existing_index = _resolve_live_existing_index(item, min_score=0.45)
+            if 0 <= existing_index < len(all_boxes):
+                remove_existing_indices.append(existing_index)
+
+        for existing_index in sorted(set(remove_existing_indices), reverse=True):
+            try:
+                all_boxes.pop(existing_index)
+                all_types.pop(existing_index)
+                removed_ids.append(existing_index)
+            except Exception:
+                pass
+
+        if not added_rects and not removed_ids:
+            self.set_status('Checked repair changes did not produce a local update.', kind='info', hold_seconds=2.4, force=True)
+            return
+
+        def _resolve_indices(refs, exclude=None, min_score=0.50):
+            resolved = []
+            used = set(int(x) for x in (exclude or []) if isinstance(x, int) or str(x).isdigit())
+            for rect, kind in refs:
+                best_idx = -1
+                best_score = 0.0
+                for idx_existing, existing in enumerate(all_boxes):
+                    if idx_existing in used:
+                        continue
+                    existing_kind = str(all_types[idx_existing] if idx_existing < len(all_types) else '')
+                    if kind and existing_kind != str(kind):
+                        continue
+                    score = self._mobile_repair_overlap_score(rect, existing)
+                    if score > best_score:
+                        best_idx = idx_existing
+                        best_score = score
+                if best_idx >= 0 and best_score >= float(min_score):
+                    used.add(best_idx)
+                    resolved.append(best_idx)
+            return resolved
+
+        resolved_anchor_ids = _resolve_indices(anchor_refs)
+        resolved_added_ids = _resolve_indices(added_rects, exclude=resolved_anchor_ids, min_score=0.45)
+
+        engine.all_boxes = all_boxes
+        engine.box_types = all_types
+        engine.detected_page_idx = int(page_idx)
+        engine.detected_settings_signature = engine._settings_signature()
+        engine._cache_detection_for_page(page_idx)
+        engine.selected_box_ids = sorted(set([idx for idx in resolved_anchor_ids if 0 <= idx < len(all_boxes)] + [idx for idx in resolved_added_ids if 0 <= idx < len(all_boxes)]))
         self._stash_page_selection(page_idx)
-        self.repair_anchor_box_ids = list(new_anchor_ids)
-        self.repair_anchor_page_idx = int(page_idx)
-        self.repair_mode_armed = False
-        self._update_selection_inspector()
-        self._update_bottom_statusbar()
-        self._render_session_page(page_idx=page_idx, reason='Repair merged into current detection')
-        self.set_status(
-            f"Repair merged for page {page_idx}.\n"
-            f"Added: {added_count}\n"
-            f"Removed: {removed_count}\n"
-            f"Original detection kept outside the local repair zone.",
-            kind='success',
-            force=True,
-        )
-        return True
-
-    def _open_repair_detection_popup(self, *_):
+        self._repair_anchor_box_ids = list(resolved_anchor_ids)
+        self._repair_anchor_page_idx = int(page_idx)
+        self._repair_last_proposal = None
         try:
-            sel_ids = sorted(set(int(x) for x in getattr(self.engine, "selected_box_ids", []) if isinstance(x, int) or str(x).isdigit())) if hasattr(self, "engine") else []
-            if not sel_ids:
-                self.set_status("Repair is optional. Select example boxes first if detection is incomplete.")
-                return
-            page_idx = self.current_page_idx()
-            summary = self._collect_repair_detection_summary(sel_ids, page_idx=page_idx)
-            proposal = self._build_repair_detection_proposal(sel_ids, page_idx=page_idx)
-            palette = getattr(self, "theme_palette", {}) or getattr(self, "ui_palette", {}) or {}
-            popup_body = BoxLayout(orientation="vertical", spacing=dp(8), padding=[dp(12), dp(12), dp(12), dp(12)])
-            title = Label(text="Repair Detection", color=palette.get("text", (1,1,1,1)), size_hint_y=None, height=dp(24), halign="left", valign="middle", font_size=dp(15), bold=True)
-            title.bind(size=self._sync_label_text_size)
-            popup_body.add_widget(title)
-            intro = Label(text="Use this only when the original detection looks incomplete. The selected box IDs are treated as example anchors, not automatically as noise.", color=palette.get("muted", (0.8,0.8,0.8,1)), size_hint_y=None, halign="left", valign="middle", font_size=dp(11))
-            intro.bind(size=self._sync_label_text_size)
-            self._bind_auto_height_label(intro, min_height=dp(52), extra_pad=dp(6))
-            popup_body.add_widget(intro)
-            section = summary.get("section") or {}
-            section_desc = self.engine.describe_box_section(sel_ids[0]) if sel_ids else ""
-            local_ids = list(summary.get("local_ids", []) or [])
-            unknown_ids = list(summary.get("unknown_ids", []) or [])
-            unmapped_ids = list(summary.get("unmapped_ids", []) or [])
-            section_members = list(summary.get("section_member_ids", []) or [])
-            zone_desc = "Local repair zone ready"
-            zone = summary.get("zone")
-            if zone is not None:
-                zone_desc = f"Local repair zone: {max(zone.width, 0):.1f} × {max(zone.height, 0):.1f}"
-            summary_lines = [
-                f"Example boxes: {sel_ids}",
-                f"Page: {page_idx}",
-                zone_desc,
-                f"Nearby detections in zone: {len(local_ids)}",
-                f"Unresolved candidates nearby: {len(unknown_ids)}",
-                f"Unmapped detections nearby: {len(unmapped_ids)}",
+            engine.clear_candidate_cache(page_idx=page_idx)
+        except Exception:
+            pass
+        try:
+            engine.record_candidate_review_batch(page_idx=page_idx, anchor_ids=anchor_ids, zone_rect=proposal.get('zone_rect'), reviewed_items=reviewed_decisions, source='repair_apply')
+        except Exception:
+            pass
+        if popup is not None:
+            try:
+                popup.dismiss()
+            except Exception:
+                pass
+        self._render_session_page(page_idx=page_idx, reason=f"Repair applied ({added_count} adds / {len(removed_ids)} removals)")
+        self.set_status(f"Repair applied: {added_count} addition{'s' if added_count != 1 else ''}, {len(removed_ids)} removal{'s' if len(removed_ids) != 1 else ''}. Candidate decisions were logged for learning.", kind='action', hold_seconds=3.0, force=True)
+
+    def _open_mobile_repair_analysis_popup(self, proposal):
+        if not isinstance(proposal, dict):
+            self.set_status('No repair proposal available.', kind='info', hold_seconds=2.0, force=True)
+            return
+        palette = getattr(self, 'ui_palette', {}) or {}
+        counts = dict(proposal.get('candidate_type_counts', {}) or {})
+        zone = proposal.get('zone_rect')
+        zone_text = ''
+        if zone is not None:
+            try:
+                zone_text = f"Repair zone: x {int(zone.x0)}–{int(zone.x1)} • y {int(zone.y0)}–{int(zone.y1)}"
+            except Exception:
+                zone_text = ''
+        outer = BoxLayout(orientation='vertical', spacing=dp(10), padding=[dp(14), dp(14), dp(14), dp(14)])
+        self._style_popup_card(outer, palette.get('surface', (0.085, 0.105, 0.145, 1)), radius=dp(22))
+        title = Label(text='Repair Analysis', color=palette.get('text', (0.93, 0.96, 1.0, 1)), size_hint_y=None, height=dp(28), halign='left', valign='middle', font_size=dp(18), bold=True)
+        title.bind(size=self._sync_label_text_size)
+        self._bind_auto_height_label(title, min_height=dp(28), extra_pad=dp(4))
+        outer.add_widget(title)
+        tuning = {}
+        try:
+            tuning = getattr(self.engine, 'get_candidate_tuning', lambda: dict(CANDIDATE_TUNING_DEFAULTS))()
+        except Exception:
+            tuning = dict(CANDIDATE_TUNING_DEFAULTS)
+        info_lines = [
+            f"Example boxes: {', '.join(str(i) for i in proposal.get('anchor_ids', [])[:12])}",
+            f"Local existing detections: {int(proposal.get('existing_local_count', 0) or 0)}",
+            f"Candidate tuning: min {float((tuning or {}).get('min_candidate_score', 0.34) or 0.34):.2f} • add≥{float((tuning or {}).get('auto_check_add_score', 0.58) or 0.58):.2f} • remove≥{float((tuning or {}).get('auto_check_remove_score', 0.76) or 0.76):.2f}",
+            f"Learning priors: {int(proposal.get('learning_prior_pairs', 0) or 0)} pair(s) • same-form events: {int(proposal.get('learning_prior_same_fp_events', 0) or 0)}",
+            f"Suggested additions — fields: {int(counts.get('field', 0) or 0)} • checks: {int(counts.get('check', 0) or 0)} • lines: {int(counts.get('line', 0) or 0)}",
+        ]
+        if int(proposal.get('inferred_structured_count', 0) or 0) > 0:
+            info_lines.append(f"Grid-like inferred slots: {int(proposal.get('inferred_structured_count', 0) or 0)}")
+        if zone_text:
+            info_lines.append(zone_text)
+        src_counts = proposal.get('source_counts', {}) or {}
+        if src_counts:
+            info_lines.append('Sources: ' + ' • '.join(f"{k.replace('_', ' ')} {v}" for k, v in sorted(src_counts.items())))
+        for line in info_lines:
+            lbl = Label(text=str(line), color=palette.get('text', (0.93, 0.96, 1.0, 1)), size_hint_y=None, halign='left', valign='middle', font_size=dp(11))
+            lbl.bind(size=self._sync_label_text_size)
+            self._bind_auto_height_label(lbl, min_height=dp(18), extra_pad=dp(4))
+            outer.add_widget(lbl)
+        scroll = ScrollView(size_hint=(1, 1), do_scroll_x=False, bar_width=dp(6))
+        grid = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
+        grid.bind(minimum_height=grid.setter('height'))
+        candidates = list(proposal.get('candidates', []) or [])
+        if not candidates:
+            empty = Label(text='No stronger local repair candidates were found around the selected examples.', color=palette.get('muted', (0.60, 0.68, 0.80, 1)), size_hint_y=None, halign='left', valign='middle', font_size=dp(11))
+            empty.bind(size=self._sync_label_text_size)
+            self._bind_auto_height_label(empty, min_height=dp(22), extra_pad=dp(6))
+            grid.add_widget(empty)
+        else:
+            for idx_item, item in enumerate(candidates[:12], start=1):
+                card = BoxLayout(orientation='vertical', spacing=dp(4), size_hint_y=None, padding=[dp(10), dp(8), dp(10), dp(8)])
+                card.bind(minimum_height=card.setter('height'))
+                self._style_popup_card(card, palette.get('surface_alt', (0.11, 0.135, 0.185, 1)), radius=dp(16))
+                rect = item.get('rect')
+                rect_text = ''
+                if rect is not None:
+                    try:
+                        rect_text = f"x {int(rect.x0)}–{int(rect.x1)} • y {int(rect.y0)}–{int(rect.y1)}"
+                    except Exception:
+                        rect_text = ''
+                line1 = Label(text=f"{idx_item}. {str(item.get('kind', '')).upper()} • {str(item.get('source', '')).replace('_', ' ')} • score {float(item.get('score', 0.0) or 0.0):.2f}", color=palette.get('text', (0.93, 0.96, 1.0, 1)), size_hint_y=None, halign='left', valign='middle', font_size=dp(11.5), bold=True)
+                line1.bind(size=self._sync_label_text_size)
+                self._bind_auto_height_label(line1, min_height=dp(20), extra_pad=dp(4))
+                card.add_widget(line1)
+                if rect_text:
+                    line2 = Label(text=rect_text, color=palette.get('muted', (0.60, 0.68, 0.80, 1)), size_hint_y=None, halign='left', valign='middle', font_size=dp(10.5))
+                    line2.bind(size=self._sync_label_text_size)
+                    self._bind_auto_height_label(line2, min_height=dp(18), extra_pad=dp(4))
+                    card.add_widget(line2)
+                grid.add_widget(card)
+        scroll.add_widget(grid)
+        outer.add_widget(scroll)
+        btn_row = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=dp(44))
+        btn_close = self._make_compact_action_button('Close', tone='plain')
+        btn_review = self._make_compact_action_button('Review Changes', tone='primary')
+        btn_row.add_widget(btn_close)
+        btn_row.add_widget(btn_review)
+        outer.add_widget(btn_row)
+        popup = Popup(title='', separator_height=0, background='', background_color=(0, 0, 0, 0.80), content=outer, size_hint=(0.96 if getattr(self, 'ui_mobile', False) else 0.82, 0.86 if getattr(self, 'ui_mobile', False) else 0.72), auto_dismiss=True)
+        self._bind_popup_background_softening(popup)
+        def _review_changes(*_):
+            self._repair_anchor_box_ids = list(proposal.get('anchor_ids', []) or [])
+            self._repair_anchor_page_idx = int(proposal.get('page_idx', 0) or 0)
+            self._repair_last_proposal = proposal
+            self.set_status(f"Repair analysis ready: {len(candidates)} local candidate{'s' if len(candidates) != 1 else ''} found. Review the checked changes before applying.", kind='action', hold_seconds=2.6, force=True)
+            try:
+                popup.dismiss()
+            except Exception:
+                pass
+            self._open_mobile_repair_review_popup(proposal)
+        btn_close.bind(on_release=lambda *_: popup.dismiss())
+        btn_review.bind(on_release=_review_changes)
+        popup.open()
+
+    def _run_mobile_repair_analysis(self, anchor_ids, page_idx=0, shell_popup=None):
+        proposal = self._build_mobile_repair_proposal(anchor_ids, page_idx=page_idx)
+        if proposal is None:
+            self.set_status('Repair analysis could not build a local proposal.', kind='warning', hold_seconds=2.4, force=True)
+            return
+        self._repair_anchor_box_ids = list(proposal.get('anchor_ids', []) or [])
+        self._repair_anchor_page_idx = int(proposal.get('page_idx', 0) or 0)
+        self._repair_last_proposal = proposal
+        if shell_popup is not None:
+            try:
+                shell_popup.dismiss()
+            except Exception:
+                pass
+        self._open_mobile_repair_analysis_popup(proposal)
+
+    def _open_mobile_repair_shell_popup(self, *_):
+        sel_ids = sorted(set(int(x) for x in getattr(self.engine, "selected_box_ids", []) if isinstance(x, int) or str(x).isdigit())) if hasattr(self, "engine") else []
+        if not sel_ids:
+            self.set_status("Select example boxes first, then tap Repair.", kind="info", hold_seconds=2.2, force=True)
+            return
+
+        palette = getattr(self, "ui_palette", {}) or {}
+        page_idx = int(self.current_page_idx()) if hasattr(self, 'current_page_idx') else 0
+        box_types = list(getattr(self.engine, 'box_types', []) or [])
+        counts = {
+            'field': sum(1 for t in box_types if str(t) == 'field'),
+            'check': sum(1 for t in box_types if str(t) == 'check'),
+            'line': sum(1 for t in box_types if str(t) == 'line'),
+        }
+
+        outer = BoxLayout(orientation="vertical", spacing=dp(10), padding=[dp(14), dp(14), dp(14), dp(14)])
+        self._style_popup_card(outer, palette.get("surface", (0.085, 0.105, 0.145, 1)), radius=dp(22))
+
+        head = BoxLayout(orientation="vertical", spacing=dp(6), size_hint_y=None)
+        head.bind(minimum_height=head.setter("height"))
+        title_lbl = Label(text="Repair Detection", color=palette.get("text", (0.93, 0.96, 1.0, 1)), size_hint_y=None, height=dp(28), halign="left", valign="middle", font_size=dp(18), bold=True)
+        title_lbl.bind(size=self._sync_label_text_size)
+        self._bind_auto_height_label(title_lbl, min_height=dp(28), extra_pad=dp(4))
+        sub_lbl = Label(text="Optional fallback when the original detection misses fields or includes interference.", color=palette.get("muted", (0.60, 0.68, 0.80, 1)), size_hint_y=None, halign="left", valign="middle", font_size=dp(11))
+        sub_lbl.bind(size=self._sync_label_text_size)
+        self._bind_auto_height_label(sub_lbl, min_height=dp(20), extra_pad=dp(6))
+        head.add_widget(title_lbl)
+        head.add_widget(sub_lbl)
+        outer.add_widget(head)
+
+        chip_row = GridLayout(cols=3, spacing=dp(8), size_hint_y=None, height=dp(38))
+        chip_row.add_widget(self._make_popup_chip(f"Page {page_idx}", tone="primary"))
+        chip_row.add_widget(self._make_popup_chip(f"Examples: {len(sel_ids)}", tone="accent"))
+        chip_row.add_widget(self._make_popup_chip("Base detect kept", tone="ghost"))
+        outer.add_widget(chip_row)
+
+        body = BoxLayout(orientation="vertical", spacing=dp(8), size_hint_y=None)
+        body.bind(minimum_height=body.setter("height"))
+        for text_line in [
+            f"Selected example boxes: {', '.join(str(i) for i in sel_ids[:12])}{' …' if len(sel_ids) > 12 else ''}",
+            f"Current page detections — fields: {counts['field']} • checks: {counts['check']} • lines: {counts['line']}",
+            "This step analyzes only the local area around your current examples. The original detection stays unchanged until a later confirm step.",
+        ]:
+            lbl = Label(text=text_line, color=palette.get("text", (0.93, 0.96, 1.0, 1)), size_hint_y=None, halign="left", valign="middle", font_size=dp(11))
+            lbl.bind(size=self._sync_label_text_size)
+            self._bind_auto_height_label(lbl, min_height=dp(18), extra_pad=dp(4))
+            body.add_widget(lbl)
+        outer.add_widget(body)
+
+        cached_proposal = None
+        try:
+            cached_proposal = self.engine.get_cached_mobile_repair_proposal(page_idx, anchor_ids=sel_ids)
+        except Exception:
+            cached_proposal = None
+        if cached_proposal:
+            cached_counts = dict(cached_proposal.get('candidate_type_counts', {}) or {})
+            cached_lines = [
+                f"Cached candidates ready — fields: {int(cached_counts.get('field', 0) or 0)} • checks: {int(cached_counts.get('check', 0) or 0)} • lines: {int(cached_counts.get('line', 0) or 0)}",
+                "You can resume the cached repair review for this same example selection, or run a fresh analysis.",
             ]
-            if section_members:
-                summary_lines.append(f"Recognized section members: {section_members}")
-            if section_desc:
-                summary_lines.append(f"Section summary: {section_desc}")
-            if bool(summary.get("grid_like", False)):
-                summary_lines.append("Grid-like behavior detected: treat this area as a structured section even if borders are incomplete.")
-            summary_lines.append("")
-            summary_lines.extend(self._repair_proposal_summary_lines(proposal))
-            summary_lbl = Label(text="\n".join(summary_lines), color=palette.get("text", (1,1,1,1)), size_hint_y=None, halign="left", valign="top", font_size=dp(11))
-            summary_lbl.bind(size=self._sync_label_text_size)
-            self._bind_auto_height_label(summary_lbl, min_height=dp(140), extra_pad=dp(6))
-            popup_body.add_widget(summary_lbl)
-
-            add_candidates = list(proposal.get('add_candidates', []) or [])
-            remove_items = list(proposal.get('remove_items', []) or [])
-            selected_add_idx = set(idx for idx, item in enumerate(add_candidates) if str(item.get('confidence_band', 'weak')) != 'weak')
-            selected_remove_idx = set(idx for idx, item in enumerate(remove_items) if str(item.get('confidence_band', 'weak')) != 'weak')
-
-            review_title = Label(text="Confirm repair changes", color=palette.get("text", (1,1,1,1)), size_hint_y=None, height=dp(24), halign="left", valign="middle", font_size=dp(13), bold=True)
-            review_title.bind(size=self._sync_label_text_size)
-            popup_body.add_widget(review_title)
-
-            review_hint = Label(text="Changes are ranked by confidence. Strong items start at the top. Weak items are left unchecked by default so interference is easier to ignore.", color=palette.get("muted", (0.8,0.8,0.8,1)), size_hint_y=None, halign="left", valign="middle", font_size=dp(10.5))
-            review_hint.bind(size=self._sync_label_text_size)
-            self._bind_auto_height_label(review_hint, min_height=dp(36), extra_pad=dp(4))
-            popup_body.add_widget(review_hint)
-
-            review_scroll = ScrollView(size_hint=(1, 1), do_scroll_x=False, bar_width=dp(6))
-            review_grid = GridLayout(cols=1, spacing=dp(6), size_hint_y=None)
-            review_grid.bind(minimum_height=review_grid.setter('height'))
-            review_scroll.add_widget(review_grid)
-            popup_body.add_widget(review_scroll)
-
-            review_count_lbl = Label(text="", color=palette.get("muted", (0.8,0.8,0.8,1)), size_hint_y=None, height=dp(18), halign="left", valign="middle", font_size=dp(10.5))
-            review_count_lbl.bind(size=self._sync_label_text_size)
-            popup_body.add_widget(review_count_lbl)
-
-            btn_cols = 1 if getattr(self, "ui_mobile", False) else 7
-            btn_row = GridLayout(cols=btn_cols, spacing=dp(8), size_hint_y=None, height=(dp(318) if getattr(self, "ui_mobile", False) else dp(42)))
-            btn_all = Button(text="Select All", size_hint_y=None, height=dp(42), background_normal="", background_color=palette.get("surface_alt", (0.2,0.2,0.2,1)), color=palette.get("text", (1,1,1,1)))
-            btn_none = Button(text="Select None", size_hint_y=None, height=dp(42), background_normal="", background_color=palette.get("surface_alt", (0.2,0.2,0.2,1)), color=palette.get("text", (1,1,1,1)))
-            btn_arm = Button(text="Use Selected as Repair Anchors", size_hint_y=None, height=dp(42), background_normal="", background_color=palette.get("primary", (0.2,0.6,0.9,1)), color=(1,1,1,1))
-            btn_apply = Button(text="Apply Repair Merge", size_hint_y=None, height=dp(42), background_normal="", background_color=palette.get("accent", (0.1,0.78,0.63,1)), color=(1,1,1,1))
-            btn_focus = Button(text="Focus First Anchor", size_hint_y=None, height=dp(42), background_normal="", background_color=palette.get("surface_alt", (0.2,0.2,0.2,1)), color=palette.get("text", (1,1,1,1)))
-            btn_section = Button(text="Open Section Assist", size_hint_y=None, height=dp(42), background_normal="", background_color=palette.get("surface_alt", (0.2,0.2,0.2,1)), color=palette.get("text", (1,1,1,1)))
-            btn_close = Button(text="Close", size_hint_y=None, height=dp(42), background_normal="", background_color=palette.get("surface_alt", (0.2,0.2,0.2,1)), color=palette.get("text", (1,1,1,1)))
-            for btn in [btn_all, btn_none, btn_arm, btn_apply, btn_focus, btn_section, btn_close]:
-                btn_row.add_widget(btn)
-            popup_body.add_widget(btn_row)
-            popup = Popup(title="", content=popup_body, size_hint=((0.95, 0.92) if getattr(self, "ui_mobile", False) else (0.78, 0.80)), auto_dismiss=True)
-
-            row_widgets = []
-            def _make_review_row(kind, idx, text_value, checked=True):
-                row = BoxLayout(orientation='horizontal', spacing=dp(8), size_hint_y=None, height=dp(42))
-                cb = CheckBox(active=bool(checked), size_hint=(None, None), size=(dp(28), dp(28)))
-                lbl = Label(text=text_value, color=palette.get('text', (1,1,1,1)), halign='left', valign='middle', font_size=dp(10.5))
+            for text_line in cached_lines:
+                lbl = Label(text=text_line, color=palette.get("muted", (0.60, 0.68, 0.80, 1)), size_hint_y=None, halign="left", valign="middle", font_size=dp(10.6))
                 lbl.bind(size=self._sync_label_text_size)
-                row.add_widget(cb)
-                row.add_widget(lbl)
-                row_widgets.append((kind, idx, cb))
-                return row
+                self._bind_auto_height_label(lbl, min_height=dp(18), extra_pad=dp(4))
+                body.add_widget(lbl)
 
-            if add_candidates:
-                header = Label(text='Proposed additions', color=palette.get('text', (1,1,1,1)), size_hint_y=None, height=dp(22), halign='left', valign='middle', font_size=dp(11.5), bold=True)
-                header.bind(size=self._sync_label_text_size)
-                review_grid.add_widget(header)
-                for idx, item in enumerate(add_candidates):
-                    source = str(item.get('source', '') or '')
-                    source_txt = 'grid-like' if source == 'grid_like' else ('local scan' if source == 'scan' else source)
-                    if source_txt:
-                        source_txt = f" • {source_txt}"
-                    conf_txt = f"[{str(item.get('confidence_label', self._repair_confidence_label(item.get('confidence', 0.0))) or 'Weak')} {float(item.get('confidence', 0.0) or 0.0):.2f}]"
-                    txt = f"+ {conf_txt} {item.get('type', 'unknown')}: {item.get('reason', 'repair candidate')}{source_txt}"
-                    review_grid.add_widget(_make_review_row('add', idx, txt, checked=(idx in selected_add_idx)))
-            if remove_items:
-                header = Label(text='Proposed removals', color=palette.get('text', (1,1,1,1)), size_hint_y=None, height=dp(22), halign='left', valign='middle', font_size=dp(11.5), bold=True)
-                header.bind(size=self._sync_label_text_size)
-                review_grid.add_widget(header)
-                for idx, item in enumerate(remove_items):
-                    conf_txt = f"[{str(item.get('confidence_label', self._repair_confidence_label(item.get('confidence', 0.0))) or 'Weak')} {float(item.get('confidence', 0.0) or 0.0):.2f}]"
-                    txt = f"- {conf_txt} Box {item.get('box_id')}: {item.get('reason', 'remove candidate')}"
-                    review_grid.add_widget(_make_review_row('remove', idx, txt, checked=(idx in selected_remove_idx)))
-            if not add_candidates and not remove_items:
-                empty_lbl = Label(text='No selectable repair changes were proposed for this zone yet.', color=palette.get('muted', (0.8,0.8,0.8,1)), size_hint_y=None, height=dp(42), halign='left', valign='middle', font_size=dp(10.5))
-                empty_lbl.bind(size=self._sync_label_text_size)
-                review_grid.add_widget(empty_lbl)
+        btn_row = GridLayout(cols=4 if cached_proposal else 3, spacing=dp(8), size_hint_y=None, height=dp(44))
+        btn_details = self._make_compact_action_button("Link Details", tone="ghost")
+        btn_arm = self._make_compact_action_button("Analyze", tone="primary")
+        btn_close = self._make_compact_action_button("Close", tone="plain")
+        if cached_proposal:
+            btn_resume = self._make_compact_action_button("Resume", tone="accent")
+            btn_row.add_widget(btn_resume)
+        btn_row.add_widget(btn_details)
+        btn_row.add_widget(btn_arm)
+        btn_row.add_widget(btn_close)
+        outer.add_widget(btn_row)
 
-            def _refresh_selection_state(*_):
-                selected_add_idx.clear()
-                selected_remove_idx.clear()
-                for kind, idx, cb in row_widgets:
-                    if bool(cb.active):
-                        if kind == 'add':
-                            selected_add_idx.add(int(idx))
-                        elif kind == 'remove':
-                            selected_remove_idx.add(int(idx))
-                total_selected = len(selected_add_idx) + len(selected_remove_idx)
-                total_available = len(add_candidates) + len(remove_items)
-                unchecked_total = max(total_available - total_selected, 0)
-                review_count_lbl.text = f"Selected changes: {total_selected} • additions {len(selected_add_idx)} • removals {len(selected_remove_idx)} • unchecked {unchecked_total}"
-                btn_apply.disabled = (total_selected <= 0)
-                btn_apply.text = f"Apply Repair Merge ({total_selected})" if total_selected > 0 else "Apply Repair Merge"
-
-            for _, _, cb in row_widgets:
-                cb.bind(active=_refresh_selection_state)
-            _refresh_selection_state()
-
-            def _set_all_rows(active):
-                for _, _, cb in row_widgets:
-                    cb.active = bool(active)
-                _refresh_selection_state()
-
-            def _arm_repair(*_):
-                self.repair_anchor_box_ids = list(sel_ids)
-                self.repair_anchor_page_idx = int(page_idx)
-                self.repair_mode_armed = True
-                self._update_selection_inspector()
-                self._update_bottom_statusbar()
-                self.set_status(f"Repair mode armed for page {page_idx} using example boxes {sel_ids}. Review this local area before changing mappings.")
+        popup = Popup(title="", separator_height=0, background="", background_color=(0, 0, 0, 0.80), content=outer, size_hint=(0.96 if getattr(self, 'ui_mobile', False) else 0.78, 0.64 if getattr(self, 'ui_mobile', False) else 0.52), auto_dismiss=True)
+        self._bind_popup_background_softening(popup)
+        def _resume_cached(*_):
+            if not cached_proposal:
+                return
+            self._repair_anchor_box_ids = list(cached_proposal.get('anchor_ids', []) or [])
+            self._repair_anchor_page_idx = int(cached_proposal.get('page_idx', page_idx) or page_idx)
+            self._repair_last_proposal = cached_proposal
+            try:
                 popup.dismiss()
+            except Exception:
+                pass
+            self._open_mobile_repair_review_popup(cached_proposal)
+        btn_details.bind(on_release=lambda *_: (popup.dismiss(), self.open_mapping_popup_for_selection(primary_box_id=sel_ids[0])))
+        if cached_proposal:
+            btn_resume.bind(on_release=_resume_cached)
+        btn_arm.bind(on_release=lambda *_: self._run_mobile_repair_analysis(sel_ids, page_idx=page_idx, shell_popup=popup))
+        btn_close.bind(on_release=lambda *_: popup.dismiss())
+        popup.open()
 
-            def _apply_repair(*_):
-                filtered = self._filtered_repair_detection_proposal(proposal, add_selected=selected_add_idx, remove_selected=selected_remove_idx)
-                if not list(filtered.get('add_candidates', []) or []) and not list(filtered.get('remove_ids', []) or []):
-                    self.set_status('No repair changes are checked. Original detection kept as-is.', kind='warning', force=True)
-                    return
-                popup.dismiss()
-                self._apply_repair_detection_proposal(filtered)
-
-            def _focus_anchor(*_):
-                try:
-                    self._focus_preview_box(sel_ids[0])
-                except Exception:
-                    pass
-
-            def _open_section(*_):
-                popup.dismiss()
-                self.on_section_assist(None)
-
-            btn_all.bind(on_release=lambda *_: _set_all_rows(True))
-            btn_none.bind(on_release=lambda *_: _set_all_rows(False))
-            btn_arm.bind(on_release=_arm_repair)
-            btn_apply.bind(on_release=_apply_repair)
-            btn_focus.bind(on_release=_focus_anchor)
-            btn_section.bind(on_release=_open_section)
-            btn_close.bind(on_release=lambda *_: popup.dismiss())
-            popup.open()
-        except Exception as e:
-            traceback.print_exc()
-            self.set_status(f"Repair popup error:\n{e}", kind="error", force=True)
-
-
+    
     def _toggle_mobile_inspect_panel(self, *_):
-        self._open_repair_detection_popup()
+        sel_ids = sorted(set(int(x) for x in getattr(self.engine, "selected_box_ids", []) if isinstance(x, int) or str(x).isdigit())) if hasattr(self, "engine") else []
+        if not sel_ids:
+            self.set_status("Select example boxes first, then tap Repair.", kind="info", hold_seconds=2.2, force=True)
+            self._set_mobile_quick_rail_visible(False)
+            return
+        self._set_mobile_quick_rail_visible(False)
+        self._open_mobile_repair_shell_popup()
+        self._refresh_mobile_hud_restore_button()
 
     def _refresh_mobile_action_visibility(self):
         if not getattr(self, "ui_mobile", False):
@@ -12934,12 +13043,750 @@ class FormAlchemistApp(MDApp):
     def _toggle_mobile_sidebar(self, *_):
         self._set_mobile_sidebar_state(not getattr(self, "_mobile_sidebar_open", False))
 
+    def _update_capture_button_state(self):
+        btn = getattr(self, 'btn_mobile_capture', None)
+        if btn is None:
+            return
+        try:
+            btn.text = 'Cancel Cap' if bool(getattr(self, '_capture_mode_active', False)) else 'Capture'
+        except Exception:
+            pass
+
+    def _clear_manual_capture_preview(self, preserve_mode=False):
+        self._capture_points = []
+        self._capture_preview_rect = None
+        self._capture_split_preview = []
+        self._capture_active_template = None
+        if not preserve_mode:
+            self._capture_mode_active = False
+            self._capture_page_idx = -1
+        preview = getattr(self, 'preview', None)
+        if preview is not None:
+            try:
+                preview.capture_mode_active = bool(self._capture_mode_active)
+            except Exception:
+                pass
+            if hasattr(preview, 'clear_capture_guides'):
+                preview.clear_capture_guides()
+        self._update_capture_button_state()
+
+    def _refresh_manual_capture_overlay(self):
+        preview = getattr(self, 'preview', None)
+        if preview is None or not hasattr(preview, 'set_capture_guides'):
+            return
+        try:
+            preview.capture_mode_active = bool(getattr(self, '_capture_mode_active', False))
+        except Exception:
+            pass
+        capture_rect = None
+        if isinstance(getattr(self, '_capture_preview_rect', None), fitz.Rect):
+            rect = self._capture_preview_rect
+            capture_rect = {'pdf_x': float(rect.x0), 'pdf_y': float(rect.y0), 'pdf_w': float(rect.width), 'pdf_h': float(rect.height)}
+        guide_rects = []
+        for rect in (getattr(self, '_capture_split_preview', []) or []):
+            try:
+                rect = fitz.Rect(rect)
+            except Exception:
+                continue
+            guide_rects.append({'pdf_x': float(rect.x0), 'pdf_y': float(rect.y0), 'pdf_w': float(rect.width), 'pdf_h': float(rect.height)})
+        preview.set_capture_guides(capture_rect=capture_rect, guide_rects=guide_rects, guide_points=list(getattr(self, '_capture_points', []) or []))
+
+    def _toggle_manual_area_capture_mode(self, *_):
+        if bool(getattr(self, '_capture_mode_active', False)):
+            self.set_status('Capture cancelled.')
+            self._clear_manual_capture_preview(preserve_mode=False)
+            return
+        page_idx = self.current_page_idx()
+        self._prepare_page_context(page_idx, clear_selection_if_missing=False)
+        has_live = bool(getattr(self.engine, 'all_boxes', [])) and int(getattr(self.engine, 'detected_page_idx', -1) or -1) == int(page_idx)
+        if (not has_live) and (not bool(self.engine._restore_detection_for_page(page_idx, required_signature=self.engine._settings_signature()))):
+            self.set_status('Run Detect first, then use Capture Missed Area.')
+            return
+        self._capture_mode_active = True
+        self._capture_page_idx = int(page_idx)
+        self._capture_points = []
+        self._capture_preview_rect = None
+        self._capture_split_preview = []
+        self._capture_active_template = None
+        self._refresh_manual_capture_overlay()
+        self._update_capture_button_state()
+        self.set_status(f'Capture Missed Area active on page {page_idx}. Tap the top-left corner.')
+
+    def _build_manual_area_rect_from_points(self, p1, p2):
+        try:
+            x0 = min(float(p1[0]), float(p2[0]))
+            y0 = min(float(p1[1]), float(p2[1]))
+            x1 = max(float(p1[0]), float(p2[0]))
+            y1 = max(float(p1[1]), float(p2[1]))
+        except Exception:
+            return None
+        tex = getattr(getattr(self, 'preview', None), 'texture', None)
+        if tex is not None:
+            x0 = max(0.0, min(x0, float(tex.width)))
+            y0 = max(0.0, min(y0, float(tex.height)))
+            x1 = max(0.0, min(x1, float(tex.width)))
+            y1 = max(0.0, min(y1, float(tex.height)))
+        if (x1 - x0) < 8 or (y1 - y0) < 8:
+            return None
+        zoom = float(getattr(self, '_last_preview_render_zoom', PREVIEW_SCALE) or PREVIEW_SCALE)
+        return fitz.Rect(x0 / zoom, y0 / zoom, x1 / zoom, y1 / zoom)
+
+    def on_preview_point_tap(self, img_pt, hit=None):
+        if not bool(getattr(self, '_capture_mode_active', False)):
+            return False
+        if img_pt is None:
+            return True
+        page_idx = self.current_page_idx()
+        if int(getattr(self, '_capture_page_idx', page_idx)) != int(page_idx):
+            self._clear_manual_capture_preview(preserve_mode=False)
+            return True
+        try:
+            point = (float(img_pt[0]), float(img_pt[1]))
+        except Exception:
+            return True
+        self._capture_points.append(point)
+        if len(self._capture_points) == 1:
+            self._refresh_manual_capture_overlay()
+            self.set_status('Top-left captured. Tap the bottom-right corner.')
+            return True
+        p1 = self._capture_points[0]
+        p2 = point
+        rect = self._build_manual_area_rect_from_points(p1, p2)
+        if rect is None:
+            self.set_status('Captured area is too small. Tap the top-left corner again.')
+            self._capture_points = []
+            self._capture_preview_rect = None
+            self._capture_split_preview = []
+            self._refresh_manual_capture_overlay()
+            return True
+        self._capture_points = [p1, p2]
+        self._capture_preview_rect = rect
+        analysis = None
+        try:
+            analysis = self.engine.analyze_manual_area_template(page_idx, rect)
+        except Exception:
+            analysis = None
+        if analysis is not None:
+            self._capture_split_preview = [fitz.Rect(r) for r in (analysis.get('resolved_rects', []) or [])]
+            self._capture_active_template = analysis
+        else:
+            self._capture_split_preview = []
+            self._capture_active_template = None
+        self._refresh_manual_capture_overlay()
+        self.set_status('Captured area ready. Review the preview rectangle.')
+        Clock.schedule_once(lambda dt: self._open_manual_area_capture_confirm_popup(), 0)
+        return True
+
+    def _open_manual_area_capture_confirm_popup(self):
+        analysis = dict(getattr(self, '_capture_active_template', {}) or {})
+        rect = analysis.get('source_rect') if analysis else getattr(self, '_capture_preview_rect', None)
+        if rect is None:
+            return
+        page_idx = int(analysis.get('page', self.current_page_idx()) or self.current_page_idx())
+        split_count = int(analysis.get('split_count', 1) or 1)
+        template_kind = str(analysis.get('template_kind', 'field') or 'field')
+        overlap = float(analysis.get('source_text_overlap', 0.0) or 0.0)
+        popup_box = BoxLayout(orientation='vertical', spacing=dp(10), padding=dp(12))
+        self._style_popup_card(popup_box, color=(self.ui_palette or {}).get('surface_alt', (0.11, 0.135, 0.185, 1)), radius=dp(18))
+        title_lbl = Label(text='Captured Area', color=(self.ui_palette or {}).get('text', (0.93, 0.96, 1.0, 1)), size_hint_y=None, height=dp(26), halign='left', valign='middle', font_size=dp(18), bold=True)
+        title_lbl.bind(size=self._sync_label_text_size)
+        popup_box.add_widget(title_lbl)
+        summary = Label(text=(f'Page {page_idx} • {template_kind}\n'
+                              f'Area: {rect.width:.1f} × {rect.height:.1f} pdf units\n'
+                              f"Smart split detected: {split_count} target{'s' if split_count != 1 else ''}\n"
+                              f'Text overlap ignored: {overlap:.2f}'),
+                        color=(self.ui_palette or {}).get('muted', (0.70, 0.78, 0.90, 1)),
+                        size_hint_y=None, height=dp(92), halign='left', valign='top', font_size=dp(12))
+        summary.bind(size=self._sync_label_text_size)
+        popup_box.add_widget(summary)
+        actions = GridLayout(cols=3, spacing=dp(8), size_hint_y=None, height=dp(88))
+        btn_use = self._make_compact_action_button('Use Area', tone='accent')
+        btn_similar = self._make_compact_action_button('Find Similar (Page)', tone='plain')
+        btn_similar_form = self._make_compact_action_button('Find Similar (Form)', tone='plain')
+        btn_retake = self._make_compact_action_button('Retake', tone='plain')
+        btn_cancel = self._make_compact_action_button('Cancel', tone='ghost')
+        actions.add_widget(btn_use)
+        actions.add_widget(btn_similar)
+        actions.add_widget(btn_similar_form)
+        actions.add_widget(btn_retake)
+        actions.add_widget(btn_cancel)
+        actions.add_widget(Widget())
+        popup_box.add_widget(actions)
+        popup = Popup(title='', separator_height=0, background='', background_color=(0,0,0,0.82), content=popup_box, size_hint=(0.90 if self.ui_mobile else 0.56, 0.42 if self.ui_mobile else 0.34), auto_dismiss=False)
+        def _apply(*_):
+            popup.dismiss()
+            self._apply_confirmed_manual_area_capture()
+        def _retake(*_):
+            popup.dismiss()
+            self._capture_points = []
+            self._capture_preview_rect = None
+            self._capture_split_preview = []
+            self._capture_active_template = None
+            self._refresh_manual_capture_overlay()
+            self.set_status('Retake capture: tap the top-left corner again.')
+        def _cancel(*_):
+            popup.dismiss()
+            self._clear_manual_capture_preview(preserve_mode=False)
+            self.set_status('Capture cancelled.')
+        btn_use.bind(on_release=_apply)
+        btn_similar.bind(on_release=lambda *_: (popup.dismiss(), self._freeze_active_manual_capture_template(), self._find_similar_for_active_capture_template()))
+        btn_similar_form.bind(on_release=lambda *_: (popup.dismiss(), self._freeze_active_manual_capture_template(), self._find_similar_in_form_for_active_capture_template()))
+        btn_retake.bind(on_release=_retake)
+        btn_cancel.bind(on_release=_cancel)
+        popup.open()
+
+    def _apply_confirmed_manual_area_capture(self):
+        analysis = dict(getattr(self, '_capture_active_template', {}) or {})
+        page_idx = int(analysis.get('page', self.current_page_idx()) or self.current_page_idx())
+        rect = analysis.get('source_rect') or getattr(self, '_capture_preview_rect', None)
+        if rect is None:
+            self.set_status('No captured area to apply.')
+            self._clear_manual_capture_preview(preserve_mode=False)
+            return
+        if not analysis:
+            analysis = self.engine.analyze_manual_area_template(page_idx, rect) or {'page': page_idx, 'source_rect': fitz.Rect(rect), 'resolved_rects': [fitz.Rect(rect)], 'resolved_types': ['field'], 'needs_split': False, 'split_count': 1, 'template_kind': 'field', 'source_text_overlap': 0.0, 'features': {}}
+        template = self.engine.save_area_template(analysis)
+        self._prepare_page_context(page_idx, clear_selection_if_missing=False)
+        has_live = bool(getattr(self.engine, 'all_boxes', [])) and int(getattr(self.engine, 'detected_page_idx', -1) or -1) == int(page_idx)
+        if (not has_live) and (not bool(self.engine._restore_detection_for_page(page_idx, required_signature=self.engine._settings_signature()))):
+            self.set_status('Run Detect again before applying captured area.')
+            self._clear_manual_capture_preview(preserve_mode=False)
+            return
+        merge_result = self.engine.merge_area_template_into_detections(page_idx, template) or {}
+        added_ids = list(merge_result.get('selected_ids', []) or [])
+        if not added_ids:
+            added_ids = self._resolve_live_box_ids_for_rect_refs(merge_result.get('added_refs', []) or [], min_score=0.45)
+        self._stash_page_selection(page_idx)
+        merged_sel = list(self._sanitize_box_id_list(list(getattr(self.engine, 'selected_box_ids', []) or []) + list(added_ids or [])))
+        self.engine.selected_box_ids = merged_sel
+        self._stash_page_selection(page_idx)
+        self._clear_manual_capture_preview(preserve_mode=False)
+        self._render_session_page(page_idx=page_idx, reason=f'Captured area applied ({len(added_ids)} added)')
+        split_note = 'split into smart green boxes' if bool(template.get('needs_split', False)) else 'used as one target'
+        self.set_status(f'Captured area applied on page {page_idx}. Added {len(added_ids)} detections and saved a template ({split_note}).')
+
+    def _ensure_saved_active_area_template(self, analysis=None):
+        analysis = dict(analysis or getattr(self, '_capture_active_template', {}) or {})
+        if not analysis:
+            return None
+        existing_id = str(analysis.get('template_id', '') or '')
+        if existing_id and existing_id in getattr(self.engine, 'area_template_index', {}):
+            return self.engine.area_template_index.get(existing_id)
+        template = self.engine.save_area_template(analysis)
+        if template is not None:
+            analysis['template_id'] = str(template.get('template_id', '') or '')
+            self._capture_active_template = analysis
+        return template
+
+    def _freeze_active_manual_capture_template(self):
+        analysis = dict(getattr(self, '_capture_active_template', {}) or {})
+        self._clear_manual_capture_preview(preserve_mode=False)
+        if analysis:
+            self._capture_active_template = analysis
+        return analysis
+
+    def _ensure_page_detection_ready_for_similar(self, page_idx, auto_detect=True, status_label='similar-area search'):
+        page_idx = int(page_idx or 0)
+        try:
+            self.apply_ui_settings_to_engine()
+        except Exception:
+            pass
+        self._prepare_page_context(page_idx, clear_selection_if_missing=False)
+        required_signature = str(self.engine._settings_signature() or '')
+        has_live = (
+            bool(getattr(self.engine, 'all_boxes', [])) and
+            int(getattr(self.engine, 'detected_page_idx', -1) or -1) == page_idx and
+            str(getattr(self.engine, 'detected_settings_signature', '') or '') == required_signature
+        )
+        if has_live:
+            return True, 'live'
+        if bool(self.engine._restore_detection_for_page(page_idx, required_signature=required_signature)):
+            self._restore_page_selection(page_idx, clear_if_missing=False)
+            return True, 'cache'
+        if not auto_detect:
+            return False, 'missing'
+        try:
+            self._clear_mobile_repair_state(page_idx=page_idx)
+        except Exception:
+            pass
+        try:
+            self.engine.prepare_learning_for_detection(page_idx=page_idx, allow_profile_apply=False)
+        except Exception:
+            pass
+        try:
+            self.engine.invalidate_detection_cache(page_idx=page_idx, clear_current=True)
+            self.engine.run_detection(page_idx=page_idx)
+            auto_template_result = self.engine.auto_apply_saved_area_templates_after_detection(page_idx=page_idx, max_matches_per_template=18, min_score=0.58) or {}
+            try:
+                self.engine.finalize_learning_after_detection(page_idx=page_idx)
+            except Exception:
+                pass
+            restored_sel = list(self._restore_page_selection(page_idx, clear_if_missing=True) or [])
+            auto_selected = [int(x) for x in (auto_template_result.get('selected_ids', []) or []) if isinstance(x, int) or str(x).isdigit()]
+            merged_sel = self._sanitize_box_id_list(restored_sel + auto_selected)
+            self.engine.selected_box_ids = list(merged_sel)
+            self._stash_page_selection(page_idx)
+            return True, 'fresh'
+        except Exception as e:
+            traceback.print_exc()
+            self.set_status(f'Could not refresh detection on page {page_idx} for {status_label}: {e}', kind='error', force=True)
+            return False, 'error'
+
+    def _collect_page_area_template_matches(self, template, page_idx, max_matches=18, prefer_fresh=True):
+        page_idx = int(page_idx or 0)
+        ok, _ = self._ensure_page_detection_ready_for_similar(page_idx, auto_detect=True, status_label='page similar-area search')
+        if not ok:
+            return []
+        template_id = str((template or {}).get('template_id', '') or '')
+        matches = []
+        if not prefer_fresh and template_id:
+            matches = self.engine.get_cached_area_template_matches(page_idx, template_id) or []
+        if not matches:
+            matches = self.engine.find_similar_area_templates_on_page(page_idx, template, max_matches=max_matches) or []
+            if template_id:
+                if matches:
+                    self.engine.cache_area_template_matches(page_idx, template_id, matches)
+                else:
+                    self.engine.invalidate_area_template_match_cache(page_idx=page_idx, template_id=template_id)
+        return list(matches or [])
+
+    def _collect_form_area_template_matches(self, template, max_total=36, per_page_max=10, prefer_fresh=True):
+        template_id = str((template or {}).get('template_id', '') or '')
+        matches = []
+        if not prefer_fresh and template_id:
+            matches = self.engine.get_cached_form_area_template_matches(template_id) or []
+        if not matches:
+            matches = self.engine.find_similar_area_templates_in_form(template, max_total=max_total, per_page_max=per_page_max) or []
+            if template_id:
+                if matches:
+                    self.engine.cache_form_area_template_matches(template_id, matches)
+                else:
+                    self.engine.invalidate_area_template_match_cache(template_id=template_id)
+        return list(matches or [])
+
+    def _find_similar_for_active_capture_template(self, *_):
+        if bool(getattr(self, '_capture_mode_active', False)):
+            self._freeze_active_manual_capture_template()
+        analysis = dict(getattr(self, '_capture_active_template', {}) or {})
+        page_idx = int(analysis.get('page', self.current_page_idx()) or self.current_page_idx())
+        rect = analysis.get('source_rect') or getattr(self, '_capture_preview_rect', None)
+        if rect is None:
+            self.set_status('No captured area available for similar-match search.')
+            return
+        if not analysis:
+            analysis = self.engine.analyze_manual_area_template(page_idx, rect) or {}
+            self._capture_active_template = dict(analysis or {})
+        template = self._ensure_saved_active_area_template(analysis)
+        if not template:
+            self.set_status('Failed to save captured template.')
+            return
+        matches = self._collect_page_area_template_matches(template, page_idx, max_matches=18, prefer_fresh=True)
+        if not matches:
+            self.set_status(f'Similar-area search finished, but no matching captured areas were found on page {page_idx}.')
+            return
+        self._open_area_template_match_review_popup(template, matches)
+
+    def _find_similar_in_form_for_active_capture_template(self):
+        if bool(getattr(self, '_capture_mode_active', False)):
+            self._freeze_active_manual_capture_template()
+        analysis = dict(getattr(self, '_capture_active_template', {}) or {})
+        page_idx = int(analysis.get('page', self.current_page_idx()) or self.current_page_idx())
+        rect = (analysis.get('source_rect') if analysis else None) or getattr(self, '_capture_preview_rect', None)
+        if rect is None:
+            self.set_status('No captured area available for form-wide search.')
+            return
+        if not analysis:
+            analysis = self.engine.analyze_manual_area_template(page_idx, rect) or {}
+            self._capture_active_template = dict(analysis or {})
+        template = self._ensure_saved_active_area_template(analysis)
+        if not template:
+            self.set_status('Failed to save captured template.')
+            return
+        matches = self._collect_form_area_template_matches(template, max_total=36, per_page_max=10, prefer_fresh=True)
+        if not matches:
+            self.set_status('Form-wide similar-area search finished, but no matching captured areas were found in this form.')
+            return
+        self._open_area_template_form_match_review_popup(template, matches)
+
+    def _open_area_template_match_review_popup(self, template, matches):
+        page_idx = int(template.get('page', self.current_page_idx()) or self.current_page_idx())
+        popup_box = BoxLayout(orientation='vertical', spacing=dp(10), padding=dp(12))
+        self._style_popup_card(popup_box, color=(self.ui_palette or {}).get('surface_alt', (0.11, 0.135, 0.185, 1)), radius=dp(18))
+        title_lbl = Label(text='Find Similar on This Page', color=(self.ui_palette or {}).get('text', (0.93, 0.96, 1.0, 1)), size_hint_y=None, height=dp(26), halign='left', valign='middle', font_size=dp(18), bold=True)
+        title_lbl.bind(size=self._sync_label_text_size)
+        popup_box.add_widget(title_lbl)
+        summary = Label(text=(f"Page {page_idx} • {template.get('template_kind', 'field')}\n"
+                              f"Template split targets: {int(template.get('split_count', 0) or 0)}\n"
+                              f"Similar regions found: {len(matches)}"),
+                        color=(self.ui_palette or {}).get('muted', (0.70, 0.78, 0.90, 1)),
+                        size_hint_y=None, height=dp(70), halign='left', valign='top', font_size=dp(12))
+        summary.bind(size=self._sync_label_text_size)
+        popup_box.add_widget(summary)
+        scroll = ScrollView(size_hint=(1, 1), do_scroll_x=False, bar_width=dp(5))
+        rows = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
+        rows.bind(minimum_height=rows.setter('height'))
+        scroll.add_widget(rows)
+        popup_box.add_widget(scroll)
+        template_id = str(template.get('template_id', '') or '')
+        stored_review_state = self.engine.get_area_template_match_review_state(page_idx, template_id) if template_id else {}
+        review_state = {}
+        for idx, match in enumerate(matches):
+            key = str(match.get('match_id', idx))
+            checked = bool(stored_review_state.get(key, bool(float(match.get('score', 0.0) or 0.0) >= 0.58)))
+            review_state[key] = checked
+            row = BoxLayout(orientation='horizontal', spacing=dp(8), size_hint_y=None, height=dp(56))
+            cb = CheckBox(active=checked, size_hint=(None, None), size=(dp(28), dp(28)))
+            lbl = Label(text=(f"[{idx + 1}] score {float(match.get('score', 0.0) or 0.0):.2f} • "
+                              f"{int(match.get('split_count', 0) or 0)} target{'s' if int(match.get('split_count', 0) or 0) != 1 else ''}\n"
+                              f"{str(match.get('reason', '') or 'structure match')}"),
+                        color=(self.ui_palette or {}).get('text', (0.93, 0.96, 1.0, 1)),
+                        halign='left', valign='middle', font_size=dp(11))
+            lbl.bind(size=self._sync_label_text_size)
+            def _sync_state(inst, value, review_key=key):
+                review_state[review_key] = bool(value)
+            cb.bind(active=_sync_state)
+            row.add_widget(cb)
+            row.add_widget(lbl)
+            row._match_index = idx
+            rows.add_widget(row)
+        actions = GridLayout(cols=4, spacing=dp(8), size_hint_y=None, height=dp(40))
+        btn_all = self._make_compact_action_button('Select All', tone='plain')
+        btn_none = self._make_compact_action_button('Select None', tone='ghost')
+        btn_apply = self._make_compact_action_button('Apply Checked', tone='accent')
+        btn_cancel = self._make_compact_action_button('Cancel', tone='ghost')
+        for btn in (btn_all, btn_none, btn_apply, btn_cancel):
+            actions.add_widget(btn)
+        popup_box.add_widget(actions)
+        popup = Popup(title='', separator_height=0, background='', background_color=(0,0,0,0.82), content=popup_box, size_hint=(0.92 if self.ui_mobile else 0.62, 0.78 if self.ui_mobile else 0.68), auto_dismiss=False)
+        def _set_all(flag):
+            for child in rows.children:
+                for widget in child.children:
+                    if isinstance(widget, CheckBox):
+                        widget.active = bool(flag)
+        def _apply(*_):
+            chosen = []
+            for idx, match in enumerate(matches):
+                key = str(match.get('match_id', idx))
+                if review_state.get(key, False):
+                    chosen.append(match)
+            if template_id:
+                self.engine.update_area_template_match_review_state(page_idx, template_id, review_state)
+            popup.dismiss()
+            self._apply_area_template_match_candidates(template, chosen)
+        btn_all.bind(on_release=lambda *_: _set_all(True))
+        btn_none.bind(on_release=lambda *_: _set_all(False))
+        btn_apply.bind(on_release=_apply)
+        btn_cancel.bind(on_release=lambda *_: popup.dismiss())
+        popup.open()
+
+    def _apply_area_template_match_candidates(self, template, matches):
+        page_idx = int(template.get('page', self.current_page_idx()) or self.current_page_idx())
+        if not matches:
+            self.set_status('No similar area matches selected.')
+            return
+        ok, _ = self._ensure_page_detection_ready_for_similar(page_idx, auto_detect=True, status_label='page similar-area apply')
+        if not ok:
+            return
+        merge_result = self.engine.merge_area_template_matches_into_detections(page_idx, matches) or {}
+        self.engine.invalidate_area_template_match_cache(page_idx=page_idx, template_id=str(template.get('template_id', '') or ''))
+        added_ids = list(merge_result.get('selected_ids', []) or [])
+        if not added_ids:
+            added_ids = self._resolve_live_box_ids_for_rect_refs(merge_result.get('added_refs', []) or [], min_score=0.45)
+        self._stash_page_selection(page_idx)
+        merged_sel = list(self._sanitize_box_id_list(list(getattr(self.engine, 'selected_box_ids', []) or []) + list(added_ids or [])))
+        self.engine.selected_box_ids = merged_sel
+        self._stash_page_selection(page_idx)
+        self._render_session_page(page_idx=page_idx, reason=f'Similar areas applied ({len(added_ids)} added)')
+        self._capture_active_template = None
+        if added_ids:
+            self.set_status(f'Applied {len(added_ids)} detections from similar captured areas on page {page_idx}.')
+        else:
+            self.set_status(f'Similar-area matches were processed on page {page_idx}, but no new detections were added.')
+
+
+    def _open_area_template_form_match_review_popup(self, template, matches):
+        popup_box = BoxLayout(orientation='vertical', spacing=dp(10), padding=dp(12))
+        self._style_popup_card(popup_box, color=(self.ui_palette or {}).get('surface_alt', (0.11, 0.135, 0.185, 1)), radius=dp(18))
+        title_lbl = Label(text='Find Similar in This Form', color=(self.ui_palette or {}).get('text', (0.93, 0.96, 1.0, 1)), size_hint_y=None, height=dp(26), halign='left', valign='middle', font_size=dp(18), bold=True)
+        title_lbl.bind(size=self._sync_label_text_size)
+        popup_box.add_widget(title_lbl)
+        page_hits = sorted(set(int(item.get('page', 0) or 0) for item in (matches or [])))
+        summary = Label(text=(f"Template: {str(template.get('template_kind', 'field') or 'field')}\n"
+                              f"Pages with matches: {', '.join(str(p) for p in page_hits)}\n"
+                              f"Similar regions found: {len(matches)}"),
+                        color=(self.ui_palette or {}).get('muted', (0.70, 0.78, 0.90, 1)),
+                        size_hint_y=None, height=dp(70), halign='left', valign='top', font_size=dp(12))
+        summary.bind(size=self._sync_label_text_size)
+        popup_box.add_widget(summary)
+        scroll = ScrollView(size_hint=(1, 1), do_scroll_x=False, bar_width=dp(5))
+        rows = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
+        rows.bind(minimum_height=rows.setter('height'))
+        scroll.add_widget(rows)
+        popup_box.add_widget(scroll)
+        template_id = str(template.get('template_id', '') or '')
+        saved_review = self.engine.get_form_area_template_match_review_state(template_id) if template_id else {}
+        review_state = {}
+        for idx, match in enumerate(matches):
+            key = str(match.get('match_id', idx))
+            checked = bool(saved_review.get(key, float(match.get('score', 0.0) or 0.0) >= 0.60))
+            review_state[key] = checked
+            row = BoxLayout(orientation='horizontal', spacing=dp(8), size_hint_y=None, height=dp(58))
+            cb = CheckBox(active=checked, size_hint=(None, None), size=(dp(28), dp(28)))
+            lbl = Label(text=(f"P{int(match.get('page', 0) or 0)} • score {float(match.get('score', 0.0) or 0.0):.2f} • "
+                              f"{int(match.get('split_count', 0) or 0)} target{'s' if int(match.get('split_count', 0) or 0) != 1 else ''}\n"
+                              f"{str(match.get('reason', '') or 'structure match')}"),
+                        color=(self.ui_palette or {}).get('text', (0.93, 0.96, 1.0, 1)),
+                        halign='left', valign='middle', font_size=dp(11))
+            lbl.bind(size=self._sync_label_text_size)
+            def _sync_state(inst, value, review_key=key):
+                review_state[review_key] = bool(value)
+            cb.bind(active=_sync_state)
+            row.add_widget(cb)
+            row.add_widget(lbl)
+            row._match_index = idx
+            rows.add_widget(row)
+        actions = GridLayout(cols=6, spacing=dp(8), size_hint_y=None, height=dp(40))
+        btn_all = self._make_compact_action_button('Select All', tone='plain')
+        btn_none = self._make_compact_action_button('Select None', tone='ghost')
+        btn_this = self._make_compact_action_button(f'Select P{int(self.current_page_idx())}', tone='plain')
+        btn_clear_this = self._make_compact_action_button(f'Clear P{int(self.current_page_idx())}', tone='ghost')
+        btn_apply = self._make_compact_action_button('Apply Checked', tone='accent')
+        btn_cancel = self._make_compact_action_button('Cancel', tone='ghost')
+        for btn in (btn_all, btn_none, btn_this, btn_clear_this, btn_apply, btn_cancel):
+            actions.add_widget(btn)
+        popup_box.add_widget(actions)
+        popup = Popup(title='', separator_height=0, background='', background_color=(0,0,0,0.82), content=popup_box, size_hint=(0.96 if self.ui_mobile else 0.72, 0.82 if self.ui_mobile else 0.76), auto_dismiss=False)
+        current_page = int(self.current_page_idx())
+        def _set_all(flag):
+            for child in rows.children:
+                for widget in child.children:
+                    if isinstance(widget, CheckBox):
+                        widget.active = bool(flag)
+        def _set_current_page(flag):
+            for idx, match in enumerate(matches):
+                if int(match.get('page', 0) or 0) != current_page:
+                    continue
+                key = str(match.get('match_id', idx))
+                review_state[key] = bool(flag)
+            for child in rows.children:
+                try:
+                    match_idx = getattr(child, '_match_index', None)
+                    if match_idx is None:
+                        continue
+                    match = matches[int(match_idx)]
+                    if int(match.get('page', 0) or 0) != current_page:
+                        continue
+                    for widget in child.children:
+                        if isinstance(widget, CheckBox):
+                            widget.active = bool(flag)
+                except Exception:
+                    continue
+        def _apply(*_):
+            chosen = []
+            for idx, match in enumerate(matches):
+                key = str(match.get('match_id', idx))
+                if review_state.get(key, False):
+                    chosen.append(match)
+            if template_id:
+                self.engine.update_form_area_template_match_review_state(template_id, review_state)
+            popup.dismiss()
+            self._apply_area_template_form_match_candidates(template, chosen)
+        for idx, child in enumerate(rows.children):
+            pass
+        btn_all.bind(on_release=lambda *_: _set_all(True))
+        btn_none.bind(on_release=lambda *_: _set_all(False))
+        btn_this.bind(on_release=lambda *_: _set_current_page(True))
+        btn_clear_this.bind(on_release=lambda *_: _set_current_page(False))
+        btn_apply.bind(on_release=_apply)
+        btn_cancel.bind(on_release=lambda *_: popup.dismiss())
+        popup.open()
+
+    def _apply_area_template_form_match_candidates(self, template, matches):
+        if not matches:
+            self.set_status('No form-wide similar area matches selected.')
+            return
+        by_page = {}
+        for item in (matches or []):
+            if not isinstance(item, dict):
+                continue
+            page_idx = int(item.get('page', 0) or 0)
+            by_page.setdefault(page_idx, []).append(item)
+        added_total = 0
+        selected_ids = []
+        current_page = int(self.current_page_idx())
+        template_id = str((template or {}).get('template_id', '') or '')
+        touched_pages = []
+        skipped_pages = []
+        for page_idx in sorted(by_page):
+            ok, _ = self._ensure_page_detection_ready_for_similar(page_idx, auto_detect=True, status_label='form-wide similar-area apply')
+            if not ok:
+                skipped_pages.append(int(page_idx))
+                continue
+            merge_result = self.engine.merge_area_template_matches_into_detections(page_idx, by_page[page_idx]) or {}
+            touched_pages.append(int(page_idx))
+            try:
+                if template_id:
+                    self.engine.invalidate_area_template_match_cache(page_idx=page_idx, template_id=template_id)
+                    self.engine.invalidate_area_template_match_cache(template_id=template_id)
+            except Exception:
+                pass
+            page_added = list(merge_result.get('selected_ids', []) or [])
+            if not page_added:
+                page_added = self._resolve_live_box_ids_for_rect_refs(merge_result.get('added_refs', []) or [], min_score=0.45)
+            added_total += len(page_added)
+            if page_idx == current_page:
+                selected_ids.extend(page_added)
+        if selected_ids:
+            self._stash_page_selection(current_page)
+            merged_sel = list(self._sanitize_box_id_list(list(getattr(self.engine, 'selected_box_ids', []) or []) + list(selected_ids or [])))
+            self.engine.selected_box_ids = merged_sel
+            self._stash_page_selection(current_page)
+        self._render_session_page(page_idx=current_page, reason=f'Form-wide similar areas applied ({added_total} added)')
+        self._capture_active_template = None
+        if touched_pages:
+            pages_txt = ', '.join(str(p) for p in sorted(set(touched_pages)))
+            if added_total > 0:
+                msg = f'Applied {added_total} detections from similar captured areas across this form (pages {pages_txt}).'
+            else:
+                msg = f'Form-wide similar-area matches were processed on pages {pages_txt}, but no new detections were added.'
+            if skipped_pages:
+                skipped_txt = ', '.join(str(p) for p in sorted(set(skipped_pages)))
+                msg += f' Skipped pages: {skipped_txt}.'
+            self.set_status(msg)
+        else:
+            self.set_status('No form-wide similar areas could be applied to the current detection state.')
+
+    def _templates_for_page(self, page_idx=None):
+        try:
+            page_idx = int(self.current_page_idx() if page_idx is None else page_idx)
+        except Exception:
+            page_idx = int(self.current_page_idx())
+        items = list(((getattr(self.engine, 'area_templates_by_page', {}) or {}).get(page_idx, []) or []))
+        items.sort(key=lambda item: str(item.get('created_at', '') or ''), reverse=True)
+        return items
+
+    def _delete_saved_area_template(self, template_id, page_idx=None):
+        template_id = str(template_id or '').strip()
+        if not template_id:
+            return False
+        try:
+            page_idx = int(self.current_page_idx() if page_idx is None else page_idx)
+        except Exception:
+            page_idx = int(self.current_page_idx())
+        page_items = list(((getattr(self.engine, 'area_templates_by_page', {}) or {}).get(page_idx, []) or []))
+        kept = [item for item in page_items if str(item.get('template_id', '') or '') != template_id]
+        changed = len(kept) != len(page_items)
+        if changed:
+            if kept:
+                self.engine.area_templates_by_page[page_idx] = kept
+            else:
+                try:
+                    del self.engine.area_templates_by_page[page_idx]
+                except Exception:
+                    pass
+            try:
+                self.engine.invalidate_area_template_match_cache(page_idx=page_idx, template_id=template_id)
+            except Exception:
+                pass
+        try:
+            if template_id in (getattr(self.engine, 'area_template_index', {}) or {}):
+                del self.engine.area_template_index[template_id]
+        except Exception:
+            pass
+        return bool(changed)
+
+    def _run_saved_area_template_on_current_page(self, template):
+        if not isinstance(template, dict):
+            self.set_status('Saved template is unavailable.')
+            return
+        page_idx = int(self.current_page_idx())
+        matches = self._collect_page_area_template_matches(template, page_idx, max_matches=18, prefer_fresh=True)
+        if not matches:
+            self.set_status(f'Similar-area search finished, but no matching regions were found for this template on page {page_idx}.')
+            return
+        self._capture_active_template = None
+        self._open_area_template_match_review_popup(template, matches)
+
+    def _find_similar_in_form_for_saved_template(self, template):
+        if not isinstance(template, dict):
+            self.set_status('Saved template is unavailable.')
+            return
+        matches = self._collect_form_area_template_matches(template, max_total=36, per_page_max=10, prefer_fresh=True)
+        if not matches:
+            self.set_status('Form-wide similar-area search finished, but no matching regions were found for this template in the current form.')
+            return
+        self._capture_active_template = None
+        self._open_area_template_form_match_review_popup(template, matches)
+
+    def _open_area_template_library_popup(self, *_):
+        if bool(getattr(self, '_capture_mode_active', False)):
+            self._freeze_active_manual_capture_template()
+        page_idx = int(self.current_page_idx())
+        popup_box = BoxLayout(orientation='vertical', spacing=dp(10), padding=dp(12))
+        self._style_popup_card(popup_box, color=(self.ui_palette or {}).get('surface_alt', (0.11, 0.135, 0.185, 1)), radius=dp(18))
+        title_lbl = Label(text='Saved Area Templates', color=(self.ui_palette or {}).get('text', (0.93, 0.96, 1.0, 1)), size_hint_y=None, height=dp(26), halign='left', valign='middle', font_size=dp(18), bold=True)
+        title_lbl.bind(size=self._sync_label_text_size)
+        popup_box.add_widget(title_lbl)
+        summary = Label(text='', color=(self.ui_palette or {}).get('muted', (0.70, 0.78, 0.90, 1)), size_hint_y=None, height=dp(30), halign='left', valign='middle', font_size=dp(12))
+        summary.bind(size=self._sync_label_text_size)
+        popup_box.add_widget(summary)
+        scroll = ScrollView(size_hint=(1, 1), do_scroll_x=False, bar_width=dp(5))
+        rows = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
+        rows.bind(minimum_height=rows.setter('height'))
+        scroll.add_widget(rows)
+        popup_box.add_widget(scroll)
+        footer = GridLayout(cols=1, spacing=dp(8), size_hint_y=None, height=dp(40))
+        btn_close = self._make_compact_action_button('Close', tone='ghost')
+        footer.add_widget(btn_close)
+        popup_box.add_widget(footer)
+        popup = Popup(title='', separator_height=0, background='', background_color=(0,0,0,0.82), content=popup_box, size_hint=(0.92 if self.ui_mobile else 0.64, 0.78 if self.ui_mobile else 0.72), auto_dismiss=False)
+
+        def _refresh_rows():
+            rows.clear_widgets()
+            current_templates = self._templates_for_page(page_idx)
+            current_count = len(current_templates)
+            summary.text = f"Page {page_idx} • {current_count} saved template{'s' if current_count != 1 else ''}"
+            if not current_templates:
+                empty_lbl = Label(text='No saved templates for this page yet.', color=(self.ui_palette or {}).get('muted', (0.70, 0.78, 0.90, 1)), size_hint_y=None, height=dp(42), halign='left', valign='middle', font_size=dp(12))
+                empty_lbl.bind(size=self._sync_label_text_size)
+                rows.add_widget(empty_lbl)
+                return
+            for idx, template in enumerate(current_templates, start=1):
+                row = BoxLayout(orientation='vertical', spacing=dp(6), size_hint_y=None, padding=[dp(8), dp(8), dp(8), dp(8)])
+                row.height = dp(82)
+                self._style_popup_card(row, color=(self.ui_palette or {}).get('surface_soft', (0.135, 0.16, 0.215, 1)), radius=dp(14))
+                split_count = int(template.get('split_count', 0) or 0)
+                template_kind = str(template.get('template_kind', 'field') or 'field')
+                created_at = str(template.get('created_at', '') or '')
+                info = Label(text=(f"[{idx}] {template_kind} • {split_count} target{'s' if split_count != 1 else ''}\n"
+                                   f"Created: {created_at}"),
+                             color=(self.ui_palette or {}).get('text', (0.93, 0.96, 1.0, 1)),
+                             halign='left', valign='middle', font_size=dp(11))
+                info.bind(size=self._sync_label_text_size)
+                row.add_widget(info)
+                actions = GridLayout(cols=3, spacing=dp(8), size_hint_y=None, height=dp(32))
+                btn_run = self._make_compact_action_button('Find Similar (Page)', tone='plain')
+                btn_form = self._make_compact_action_button('Find Similar (Form)', tone='plain')
+                btn_delete = self._make_compact_action_button('Delete', tone='danger')
+                btn_run.bind(on_release=lambda *_ , tpl=template: (popup.dismiss(), self._run_saved_area_template_on_current_page(tpl)))
+                btn_form.bind(on_release=lambda *_ , tpl=template: (popup.dismiss(), self._find_similar_in_form_for_saved_template(tpl)))
+                btn_delete.bind(on_release=lambda *_ , tpl=template: (self._delete_saved_area_template(str(tpl.get('template_id', '') or ''), page_idx=page_idx), _refresh_rows(), self.set_status('Saved template deleted.')))
+                actions.add_widget(btn_run)
+                actions.add_widget(btn_form)
+                actions.add_widget(btn_delete)
+                row.add_widget(actions)
+                rows.add_widget(row)
+
+        _refresh_rows()
+        btn_close.bind(on_release=lambda *_: popup.dismiss())
+        popup.open()
+
     def on_preview_box_hover(self, hit):
         is_mobile = bool(getattr(self, "ui_mobile", False))
         verb = "Selected" if is_mobile else "Hover"
         if not hit or "id" not in hit:
             if hasattr(self, "inspector_hover_lbl") and self.inspector_hover_lbl is not None:
-                self.inspector_hover_lbl.text = ("Tap or drag over a box to review it. Use Repair only if detection is incomplete." if is_mobile else "Hover a box to review it. Use Repair only if detection is incomplete.")
+                self.inspector_hover_lbl.text = ("Tap or drag over a box to review it." if is_mobile else "Hover a box to review it.")
             if hasattr(self, "desktop_status_detail_lbl") and self.desktop_status_detail_lbl is not None:
                 self.desktop_status_detail_lbl.text = "Ready • No box targeted"
             self._update_preview_hud(hit=None)
@@ -13310,11 +14157,10 @@ class FormAlchemistApp(MDApp):
         if inspect_btn is None:
             return
         has_selection = bool(sel_ids)
-        repair_armed = bool(getattr(self, "repair_mode_armed", False)) and int(getattr(self, "repair_anchor_page_idx", -1)) == int(self.current_page_idx())
         try:
-            inspect_btn.text = "Repair*" if repair_armed else "Repair"
-            inspect_btn.tone = ("secondary" if has_selection else "ghost")
-            inspect_btn.opacity = (1.0 if has_selection else 0.92)
+            inspect_btn.text = "Repair"
+            inspect_btn.tone = "secondary" if has_selection else "ghost"
+            inspect_btn.opacity = 1.0 if has_selection else 0.92
             if hasattr(inspect_btn, "_update_graphics"):
                 inspect_btn._update_graphics()
             inspect_btn.disabled = False
@@ -13367,8 +14213,7 @@ class FormAlchemistApp(MDApp):
             map_txt = hit.get("mapping") or "Unmapped"
             verb = "Selected" if getattr(self, "ui_mobile", False) else "Hover"
             title = f"{verb} • Box {box_id}"
-            group_txt = str(hit.get("group", "") or "").strip()
-            detail = f"Type: {self._friendly_box_type_label(hit.get('t', 'field'))} • Rect: {rect_txt}" + (f" • {group_txt}" if group_txt else "")
+            detail = f"Type: {hit.get('t', 'field')} • Rect: {rect_txt}"
             mapping = f"Mapping: {map_txt}"
         elif sel_ids:
             first = sel_ids[0]
@@ -13379,12 +14224,11 @@ class FormAlchemistApp(MDApp):
                 rect_txt = f"{int(rect.x0)},{int(rect.y0)} → {int(rect.x1)},{int(rect.y1)}"
             map_txt = self.engine.describe_box_mapping(first, self.current_page_idx())
             title = f"Selected • {len(sel_ids)} box{'es' if len(sel_ids) != 1 else ''}"
-            group_txt = self.engine.describe_box_group(first)
-            detail = f"Focus: {first} • {self._friendly_box_type_label(box_type)} • {rect_txt}" + (f" • {group_txt}" if group_txt else "")
+            detail = f"Focus: {first} • {box_type} • {rect_txt}"
             mapping = f"Mapping: {map_txt if map_txt and map_txt != 'EMPTY' else 'Unmapped'}"
         else:
             title = "Preview HUD"
-            detail = ("Tap or drag over a box to review it here. Use Repair only if detection is incomplete." if getattr(self, "ui_mobile", False) else "Hover or tap a box to review it here. Use Repair only if detection is incomplete.")
+            detail = ("Tap or drag over a box to see its details here." if getattr(self, "ui_mobile", False) else "Hover or tap a box to see its details here.")
             mapping = "Mapping: —"
 
         if hasattr(self, "preview_hud_title_lbl") and self.preview_hud_title_lbl is not None:
@@ -13432,12 +14276,10 @@ class FormAlchemistApp(MDApp):
     def _update_text_tuning_summary(self):
         tuning = self._normalized_text_tuning_ui()
         self.text_tuning_ui = dict(tuning)
-        preset_label = os.path.basename(DEFAULT_PROFILE_SOURCE or '').strip() or 'embedded default'
         summary = (
             f"FIT INSIDE • CENTERED • {'UPPERCASE' if tuning.get('uppercase', True) else 'ORIGINAL CASE'}\n"
             f"Overall {tuning['overall_scale']:.2f} • Box {tuning['box_scale']:.2f} • Line {tuning['line_scale']:.2f} • Grid {tuning['grid_scale']:.2f}\n"
-            f"Inset X {tuning['content_inset_x']:.2f} • Inset Y {tuning['content_inset_y']:.2f} • Line height {tuning['line_expand_h_mul']:.2f}x / min {int(tuning['line_min_effective_h_px'])} px\n"
-            f"Preset base: {preset_label}"
+            f"Inset X {tuning['content_inset_x']:.2f} • Inset Y {tuning['content_inset_y']:.2f} • Line height {tuning['line_expand_h_mul']:.2f}x / min {int(tuning['line_min_effective_h_px'])} px"
         )
         lbl = getattr(self, "text_tuning_summary_lbl", None)
         if lbl is not None:
@@ -13454,8 +14296,7 @@ class FormAlchemistApp(MDApp):
         title_lbl = Label(text="Text Fit & Font Console", color=palette.get("text", (0.93, 0.96, 1.0, 1)), size_hint_y=None, height=dp(28), halign="left", valign="middle", font_size=dp(18), bold=True)
         title_lbl.bind(size=self._sync_label_text_size)
         self._bind_auto_height_label(title_lbl, min_height=dp(28), extra_pad=dp(4))
-        preset_hint = os.path.basename(DEFAULT_PROFILE_SOURCE or "").strip() or "embedded default"
-        sub_lbl = Label(text=f"Adjust font fitting, centering, and line height. Apply now refreshes the current preview and also affects export. Default base: {preset_hint}", color=palette.get("muted", (0.60, 0.68, 0.80, 1)), size_hint_y=None, height=dp(20), halign="left", valign="middle", font_size=dp(11))
+        sub_lbl = Label(text="Adjust font fitting, centering, and line height. Apply now refreshes the current preview and also affects export.", color=palette.get("muted", (0.60, 0.68, 0.80, 1)), size_hint_y=None, height=dp(20), halign="left", valign="middle", font_size=dp(11))
         sub_lbl.bind(size=self._sync_label_text_size)
         self._bind_auto_height_label(sub_lbl, min_height=dp(20), extra_pad=dp(6))
         head.add_widget(title_lbl)
@@ -14561,8 +15402,6 @@ class FormAlchemistApp(MDApp):
             "session_preview_mode": str(self._session_preview_mode(page_idx)),
             "status_kind": str(getattr(self, "_status_kind", "info") or "info"),
             "mobile_sidebar_open": bool(getattr(self, "_mobile_sidebar_open", False)),
-            "learning_auto_apply": bool(self._learning_auto_apply_enabled()),
-            "section_automation_enabled": bool(getattr(self.engine, "section_automation_enabled", True)),
         }
         if hasattr(self, "_page_selected_box_ids"):
             try:
@@ -14585,9 +15424,6 @@ class FormAlchemistApp(MDApp):
     def _reset_config_runtime_state(self):
         self.engine.all_boxes = []
         self.engine.box_types = []
-        self.engine.option_groups = []
-        self.engine.unknown_fillables = []
-        self.engine.compound_sections = []
         self.engine.geom = self.engine._empty_geom()
         self.engine.semantic_targets = self.engine._empty_semantic_targets()
         self.engine.selected_box_ids = []
@@ -14595,9 +15431,6 @@ class FormAlchemistApp(MDApp):
         self.engine.detected_settings_signature = None
         self.engine.boxes_by_page = {}
         self.engine.box_types_by_page = {}
-        self.engine.option_groups_by_page = {}
-        self.engine.unknown_fillables_by_page = {}
-        self.engine.compound_sections_by_page = {}
         self.engine.geom_by_page = {}
         self.engine.semantic_targets_by_page = {}
         self.engine.boxes_settings_signature_by_page = {}
@@ -14620,8 +15453,8 @@ class FormAlchemistApp(MDApp):
     def _config_ready_preview_hint(self):
         if getattr(self, "ui_mobile", False):
             mode_txt = "Select ON" if bool(getattr(self, "mobile_select_mode", False)) else "Select OFF"
-            return f"Preview ready. {mode_txt} • Tap to select • Double-tap to link • Repair optional."
-        return "Preview ready. Tap to select • Double-tap a box to link it • Repair optional."
+            return f"Preview ready. {mode_txt} • Tap a box to select • Map if correct • Repair only if needed."
+        return "Preview ready. Tap a box to select • Map if correct • Repair only if needed."
 
     def _clear_config_import_selection_state(self, clear_page_cache=True, update_hint=True):
         self.engine.selected_box_ids = []
@@ -14714,20 +15547,6 @@ class FormAlchemistApp(MDApp):
         selected_record_label = str(ui_state.get("selected_record_label", cfg.get("selected_record_label", "") if isinstance(cfg, dict) else "") or "").strip()
         selected_record_key = str(ui_state.get("selected_record_key", cfg.get("selected_record_key", "") if isinstance(cfg, dict) else "") or "").strip()
         restored_record_label_source = str(ui_state.get("record_label_source_column", cfg.get("record_label_source_column", "") if isinstance(cfg, dict) else "") or "").strip()
-        restored_learning_auto_apply = bool(ui_state.get("learning_auto_apply", True))
-        restored_section_automation_enabled = bool(ui_state.get("section_automation_enabled", True))
-        self.learning_auto_apply = restored_learning_auto_apply
-        try:
-            self.engine.section_automation_enabled = restored_section_automation_enabled
-        except Exception:
-            pass
-        if hasattr(self, "learning_auto_apply_chk"):
-            try:
-                self.learning_auto_apply_chk.unbind(active=self.on_learning_auto_apply_change)
-            except Exception:
-                pass
-            self.learning_auto_apply_chk.active = restored_learning_auto_apply
-            self.learning_auto_apply_chk.bind(active=self.on_learning_auto_apply_change)
         if restored_record_label_source and getattr(self.engine, "df", None) is not None and not self.engine.df.empty and restored_record_label_source in list(self.engine.df.columns):
             try:
                 self.engine.rebuild_record_labels(source_column=restored_record_label_source)
@@ -14909,17 +15728,17 @@ class FormAlchemistApp(MDApp):
 
             self.apply_ui_settings_to_engine()
             page_idx = self.current_page_idx()
+            self._clear_mobile_repair_state(page_idx=page_idx)
             prev_count = len(getattr(self.engine, "all_boxes", []) or []) if getattr(self.engine, "detected_page_idx", None) == page_idx else 0
-            auto_apply = self._learning_auto_apply_enabled()
-            ctx = self.engine.prepare_learning_for_detection(page_idx=page_idx, allow_profile_apply=auto_apply)
+            ctx = self.engine.prepare_learning_for_detection(page_idx=page_idx, allow_profile_apply=False)
             profile_applied = bool((ctx or {}).get("profile_applied", False))
             profile_matched = bool((ctx or {}).get("matched_profile"))
-            if profile_applied:
-                self.push_engine_settings_to_ui()
             self.engine.invalidate_detection_cache(page_idx=page_idx, clear_current=True)
             self.engine.run_detection(page_idx=page_idx)
+            auto_template_result = self.engine.auto_apply_saved_area_templates_after_detection(page_idx=page_idx, max_matches_per_template=18, min_score=0.58) or {}
             self.engine.finalize_learning_after_detection(page_idx=page_idx)
-            self.engine.selected_box_ids = []
+            template_selected = list(auto_template_result.get('selected_ids', []) or [])
+            self.engine.selected_box_ids = template_selected if template_selected else []
             self._stash_page_selection(page_idx)
             counts = self._box_type_counts()
             if profile_applied:
@@ -14928,23 +15747,20 @@ class FormAlchemistApp(MDApp):
                 profile_msg = "\nLearned profile: matched but skipped (manual tuning kept)"
             else:
                 profile_msg = "\nLearned profile: no match"
-            contextual_sections = sum(
-                1 for s in list(getattr(self.engine, 'compound_sections', []) or [])
-                if str((s or {}).get('label_text', '') or '').strip()
-            )
+            auto_tpl_count = int(auto_template_result.get('template_count', 0) or 0)
+            auto_tpl_added = int(auto_template_result.get('added_count', 0) or 0)
+            auto_tpl_matches = int(auto_template_result.get('match_count', 0) or 0)
+            auto_tpl_msg = ''
+            if auto_tpl_count > 0:
+                auto_tpl_msg = f"\nTemplates: {auto_tpl_count} saved • {auto_tpl_matches} strong match{'es' if auto_tpl_matches != 1 else ''} • {auto_tpl_added} added"
             summary = (
                 f"Detection done.\n"
                 f"Page: {page_idx}\n"
                 f"Boxes: {prev_count} -> {len(self.engine.all_boxes)}"
                 f"\nChecks: {counts.get('check', 0)}"
-                f"\nCircles: {counts.get('radio', 0)}"
-                f"\nOption Groups: {len(getattr(self.engine, 'option_groups', []) or [])}"
-                f"\nCompound Sections: {len(getattr(self.engine, 'compound_sections', []) or [])}"
-                f"\nContext-Labeled Sections: {contextual_sections}"
-                f"\nUnknown / Custom: {counts.get('unknown', 0)}"
                 f"\nLines: {counts.get('line', 0)}"
                 f"\nFields: {counts.get('field', 0)}"
-                f"\nCache: refreshed{profile_msg}"
+                f"\nCache: refreshed{profile_msg}{auto_tpl_msg}"
             )
             self._persist_runtime_session_state(current_page_idx=page_idx)
             Clock.schedule_once(lambda dt: self.on_preview(None), 0)
@@ -14960,112 +15776,6 @@ class FormAlchemistApp(MDApp):
         except Exception as e:
             traceback.print_exc()
             self.set_status(f"Preview error:\n{e}")
-
-    def on_section_automation_toggle(self, instance, value):
-        try:
-            self.engine.section_automation_enabled = bool(value)
-            self._persist_runtime_session_state(current_page_idx=self.current_page_idx())
-            self._update_selection_inspector()
-            self._update_preview_hud()
-            self._update_bottom_statusbar()
-            self.set_status("Section helpers enabled." if bool(value) else "Section helpers disabled.")
-        except Exception as e:
-            self.set_status(f"Section helper toggle error:\n{e}", kind="error", force=True)
-
-    def _selected_section_context(self):
-        ids = sorted(set(int(x) for x in getattr(self.engine, "selected_box_ids", []) if isinstance(x, int) or str(x).isdigit()))
-        if not ids:
-            return None, None
-        first = ids[0]
-        section = self.engine.get_compound_section_for_box(first)
-        return first, section
-
-    def on_section_assist(self, instance):
-        try:
-            first, section = self._selected_section_context()
-            if first is None or not section:
-                self.set_status("Select a box inside a recognized section first.")
-                return
-            page_idx = self.current_page_idx()
-            columns = []
-            try:
-                columns = [str(c) for c in list(getattr(self.engine, 'df', None).columns)] if getattr(self.engine, 'df', None) is not None else []
-            except Exception:
-                columns = []
-            palette = getattr(self, 'theme_palette', {}) or {}
-            popup_body = BoxLayout(orientation='vertical', spacing=dp(8), padding=[dp(12), dp(12), dp(12), dp(12)])
-            title = Label(text='Section Assist', color=palette.get('text', (1,1,1,1)), size_hint_y=None, height=dp(24), halign='left', valign='middle', font_size=dp(15), bold=True)
-            title.bind(size=self._sync_label_text_size)
-            popup_body.add_widget(title)
-            section_desc = self.engine.describe_box_section(first) or 'Section detected'
-            desc_lbl = Label(text=section_desc, color=palette.get('muted', (0.8,0.8,0.8,1)), size_hint_y=None, halign='left', valign='middle', font_size=dp(11))
-            desc_lbl.bind(size=self._sync_label_text_size)
-            self._bind_auto_height_label(desc_lbl, min_height=dp(34), extra_pad=dp(4))
-            popup_body.add_widget(desc_lbl)
-            sugg_lbl = Label(text='', color=palette.get('text', (1,1,1,1)), size_hint_y=None, halign='left', valign='top', font_size=dp(11))
-            sugg_lbl.bind(size=self._sync_label_text_size)
-            self._bind_auto_height_label(sugg_lbl, min_height=dp(78), extra_pad=dp(6))
-            popup_body.add_widget(sugg_lbl)
-            toggle_row = BoxLayout(orientation='horizontal', spacing=dp(8), size_hint_y=None, height=dp(40))
-            chk = CheckBox(active=bool(getattr(self.engine, 'section_automation_enabled', True)))
-            def _toggle_local(_, value):
-                self.engine.section_automation_enabled = bool(value)
-                if hasattr(self, 'section_auto_chk') and self.section_auto_chk is not None:
-                    try:
-                        self.section_auto_chk.unbind(active=self.on_section_automation_toggle)
-                    except Exception:
-                        pass
-                    self.section_auto_chk.active = bool(value)
-                    self.section_auto_chk.bind(active=self.on_section_automation_toggle)
-            chk.bind(active=_toggle_local)
-            toggle_row.add_widget(chk)
-            toggle_row.add_widget(Label(text='Enable section helpers for preview/export', color=palette.get('text', (1,1,1,1)), halign='left', valign='middle', font_size=dp(11)))
-            popup_body.add_widget(toggle_row)
-
-            btn_row = GridLayout(cols=1 if getattr(self, 'ui_mobile', False) else 3, spacing=dp(8), size_hint_y=None, height=dp(128) if getattr(self, 'ui_mobile', False) else dp(42))
-            btn_refresh = Button(text='Refresh Suggestions', size_hint_y=None, height=dp(42), background_normal='', background_color=palette.get('surface_alt', (0.2,0.2,0.2,1)), color=palette.get('text', (1,1,1,1)))
-            btn_apply = Button(text='Auto-Link Unmapped Fields', size_hint_y=None, height=dp(42), background_normal='', background_color=palette.get('primary', (0.2,0.6,0.9,1)), color=(1,1,1,1))
-            btn_close = Button(text='Close', size_hint_y=None, height=dp(42), background_normal='', background_color=palette.get('surface_alt', (0.2,0.2,0.2,1)), color=palette.get('text', (1,1,1,1)))
-            btn_row.add_widget(btn_refresh)
-            btn_row.add_widget(btn_apply)
-            btn_row.add_widget(btn_close)
-            popup_body.add_widget(btn_row)
-            popup = Popup(title='', content=popup_body, size_hint=(0.92, 0.82) if getattr(self, 'ui_mobile', False) else (0.74, 0.72), auto_dismiss=True)
-
-            def _render_suggestions(*_):
-                suggestions = self.engine.preview_section_auto_links(section, page_idx=page_idx, available_columns=columns)
-                action_hints = self.engine.get_section_action_suggestions(first)
-                lines = []
-                if action_hints:
-                    lines.append('Hints: ' + ' | '.join(action_hints))
-                if suggestions:
-                    lines.append('Suggested auto-links:')
-                    for item in suggestions[:8]:
-                        lines.append(f"• Box {item.get('box_idx')} → {item.get('column')}  (score {item.get('score', 0):.1f})")
-                else:
-                    lines.append('No safe auto-links found for this section yet.')
-                sugg_lbl.text = '\n'.join(lines)
-
-            def _apply_links(*_):
-                result = self.engine.apply_section_auto_links(section, page_idx=page_idx, available_columns=columns)
-                applied = int(result.get('applied', 0))
-                suggested = int(result.get('suggested', 0))
-                errs = list(result.get('errors', []) or [])
-                self._sync_box_selection_ui()
-                self.on_preview(None)
-                self._persist_runtime_session_state(current_page_idx=page_idx)
-                extra = ('\nErrors: ' + '; '.join(errs)) if errs else ''
-                self.set_status(f"Section assist finished. Applied {applied} of {suggested} suggested links.{extra}")
-                _render_suggestions()
-
-            btn_refresh.bind(on_release=_render_suggestions)
-            btn_apply.bind(on_release=_apply_links)
-            btn_close.bind(on_release=lambda *_: popup.dismiss())
-            _render_suggestions()
-            popup.open()
-        except Exception as e:
-            traceback.print_exc()
-            self.set_status(f"Section assist error:\n{e}", kind="error", force=True)
 
     def on_assign_mapping(self, instance):
         try:
@@ -15243,6 +15953,7 @@ class FormAlchemistApp(MDApp):
         try:
             self.set_status(f"Loading PDF...\n{os.path.basename(path)}")
             total = self.engine.load_pdf(path)
+            self._clear_mobile_repair_state(page_idx=0, clear_selection=True)
             self._persist_runtime_session_state(current_page_idx=0)
 
             cur_idx = self.current_page_idx()
@@ -15301,6 +16012,7 @@ class FormAlchemistApp(MDApp):
                 self.set_status(f"Loading PDF...\n{os.path.basename(path)}")
 
                 total = self.engine.load_pdf(path)
+                self._clear_mobile_repair_state(page_idx=0, clear_selection=True)
                 self.engine.persist_learning_session(current_page_idx=0)
 
                 cur_idx = self.current_page_idx()
