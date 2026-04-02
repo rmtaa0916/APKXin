@@ -1897,6 +1897,10 @@ class FormAlchemistEngine:
         self.area_template_match_cache = {}
         self.area_template_match_review_state = {}
         self.area_template_index = {}
+        self.manual_area_search_cache = {}
+        self.repair_patches_by_page = {}
+        self.repair_patch_index = {}
+        self.sticky_detections_by_page = {}
 
         self.learning_storage = LearningStorage(app_name="form_alchemist")
         self.learning_enabled = True
@@ -2016,6 +2020,7 @@ class FormAlchemistEngine:
                     'split_count': int(item.get('split_count', 0) or 0),
                     'source_text_overlap': float(item.get('source_text_overlap', 0.0) or 0.0),
                     'features': dict(item.get('features', {}) or {}),
+                    'shape_template': dict(item.get('shape_template', {}) or {}),
                     'created_at': str(item.get('created_at', '') or ''),
                 })
             if serial:
@@ -2025,8 +2030,11 @@ class FormAlchemistEngine:
     def _deserialize_area_templates(self, payload):
         self.area_templates_by_page = {}
         self.area_template_index = {}
+        self.repair_patches_by_page = {}
+        self.repair_patch_index = {}
         self.area_template_match_cache = {}
         self.area_template_match_review_state = {}
+        self.manual_area_search_cache = {}
         if not isinstance(payload, dict):
             return
         for page_key, items in payload.items():
@@ -2060,6 +2068,7 @@ class FormAlchemistEngine:
                     'split_count': int(item.get('split_count', len(resolved_rects)) or len(resolved_rects)),
                     'source_text_overlap': float(item.get('source_text_overlap', 0.0) or 0.0),
                     'features': dict(item.get('features', {}) or {}),
+                    'shape_template': dict(item.get('shape_template', {}) or {}),
                     'created_at': str(item.get('created_at', '') or _utc_now_iso()),
                 }
                 page_items.append(template)
@@ -2084,8 +2093,16 @@ class FormAlchemistEngine:
         if crop.size == 0:
             return None
         text_mask, _ = self.build_text_like_mask(crop, header_band_pct=0.10)
+        try:
+            text_reject_mask = cv2.dilate(text_mask, np.ones((3, 3), np.uint8), iterations=1)
+        except Exception:
+            text_reject_mask = text_mask
         gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-        base_bin = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
+        base_bin_raw = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
+        try:
+            base_bin = cv2.bitwise_and(base_bin_raw, cv2.bitwise_not(text_reject_mask))
+        except Exception:
+            base_bin = base_bin_raw
         field_close_k = max(0, int(self.settings.get('F_Close', 1) or 0))
         bin_fields = cv2.morphologyEx(base_bin, cv2.MORPH_CLOSE, np.ones((field_close_k, field_close_k), np.uint8)) if field_close_k > 0 else base_bin
         bin_checks = base_bin.copy()
@@ -2104,7 +2121,7 @@ class FormAlchemistEngine:
         for lr in self.find_answer_lines(crop, zoom_factor=1.0, min_line_w=min_line_w, max_line_w=max_line_w):
             local_rect = fitz.Rect(lr)
             rect = fitz.Rect(local_rect.x0 + x0, local_rect.y0 + y0, local_rect.x1 + x0, local_rect.y1 + y0)
-            if not self.should_suppress_text_like_rect(local_rect, text_mask, preview_zoom=1.0, header_cut=int(crop.shape[0] * 0.08), overlap_thresh=0.18):
+            if not self._manual_capture_reject_text_artifact(local_rect, 'line', text_mask, crop.shape):
                 local_rects.append(rect)
                 local_types.append('line')
         # checks
@@ -2118,7 +2135,7 @@ class FormAlchemistEngine:
             if self.looks_like_checkbox(bin_checks, xx, yy, ww, hh, area):
                 local_rect = fitz.Rect(xx, yy, xx + ww, yy + hh)
                 rect = fitz.Rect((xx + x0), (yy + y0), (xx + ww + x0), (yy + hh + y0))
-                if not self.should_suppress_text_like_rect(local_rect, text_mask, preview_zoom=1.0, header_cut=int(crop.shape[0] * 0.08), overlap_thresh=0.22):
+                if not self._manual_capture_reject_text_artifact(local_rect, 'check', text_mask, crop.shape):
                     local_rects.append(rect)
                     local_types.append('check')
         # fields
@@ -2135,7 +2152,7 @@ class FormAlchemistEngine:
             refined = self._refine_field_rect_from_mask(bin_fields, xx, yy, ww, hh, zoom_factor=1.0, row_frac_thresh=0.40, col_frac_thresh=0.14, min_inner_h=max(8, field_min_h // 2), pad_px=1)
             local_rect = fitz.Rect(refined)
             rect = fitz.Rect(local_rect.x0 + x0, local_rect.y0 + y0, local_rect.x1 + x0, local_rect.y1 + y0)
-            if not self.should_suppress_text_like_rect(local_rect, text_mask, preview_zoom=1.0, header_cut=int(crop.shape[0] * 0.08), overlap_thresh=0.16):
+            if not self._manual_capture_reject_text_artifact(local_rect, 'field', text_mask, crop.shape):
                 local_rects.append(rect)
                 local_types.append('field')
 
@@ -2164,7 +2181,18 @@ class FormAlchemistEngine:
         if dedup_rects:
             union = fitz.Rect(min(r.x0 for r in dedup_rects), min(r.y0 for r in dedup_rects), max(r.x1 for r in dedup_rects), max(r.y1 for r in dedup_rects))
             union_cover = (union.width * union.height) / float(max(source_rect.width * ZOOM * source_rect.height * ZOOM, 1.0))
-        needs_split = len(dedup_rects) >= 2
+        prefers_single_field = False
+        if len(dedup_rects) >= 2:
+            try:
+                prefers_single_field = bool(self._manual_capture_force_single_field_from_enclosing_box(source_rect, dedup_rects, dedup_types))
+            except Exception:
+                prefers_single_field = False
+            if not prefers_single_field:
+                try:
+                    prefers_single_field = bool(self._manual_capture_prefers_single_field(crop, source_rect, dedup_rects, dedup_types, base_bin=base_bin, bin_fields=bin_fields))
+                except Exception:
+                    prefers_single_field = False
+        needs_split = len(dedup_rects) >= 2 and not prefers_single_field
         if len(dedup_rects) <= 0:
             resolved_rects = [fitz.Rect(source_rect)]
             resolved_types = ['field']
@@ -2173,7 +2201,7 @@ class FormAlchemistEngine:
             resolved_types = list(dedup_types)
         else:
             resolved_rects = [fitz.Rect(source_rect)]
-            resolved_types = [dedup_types[0] if dedup_types else 'field']
+            resolved_types = ['field' if prefers_single_field else (dedup_types[0] if dedup_types else 'field')]
         type_counts = {}
         for kind in resolved_types:
             type_counts[kind] = int(type_counts.get(kind, 0) or 0) + 1
@@ -2195,8 +2223,391 @@ class FormAlchemistEngine:
                 'raw_internal_count': int(len(dedup_rects)),
                 'union_cover_ratio': float(round(union_cover, 6)),
                 'type_counts': type_counts,
+                'prefers_single_field': bool(prefers_single_field),
             },
+            'shape_template': {},
         }
+
+    def _shape_template_from_contour(self, contour, roi_shape, source_rect, score=0.0, candidate_index=0):
+        try:
+            rr = source_rect if isinstance(source_rect, fitz.Rect) else fitz.Rect(source_rect)
+        except Exception:
+            return {}
+        if contour is None or len(contour) < 3:
+            return {}
+        roi_h = int(max(1, roi_shape[0] if isinstance(roi_shape, (list, tuple)) else roi_shape[0]))
+        roi_w = int(max(1, roi_shape[1] if isinstance(roi_shape, (list, tuple)) else roi_shape[1]))
+        try:
+            peri = float(cv2.arcLength(contour, True))
+            area = float(cv2.contourArea(contour))
+            x, y, w, h = cv2.boundingRect(contour)
+            approx = cv2.approxPolyDP(contour, max(1.0, 0.02 * peri), True)
+            moments = cv2.HuMoments(cv2.moments(contour)).flatten().tolist()
+            contour_pts = contour.reshape(-1, 2)
+        except Exception:
+            return {}
+        pdf_pts = []
+        norm_pts = []
+        for px, py in contour_pts.tolist():
+            nx = float(px) / float(max(roi_w, 1))
+            ny = float(py) / float(max(roi_h, 1))
+            norm_pts.append([round(nx, 6), round(ny, 6)])
+            pdf_pts.append([round(float(rr.x0 + (nx * rr.width)), 4), round(float(rr.y0 + (ny * rr.height)), 4)])
+        bbox_rect = fitz.Rect(rr.x0 + (float(x) / max(roi_w, 1)) * rr.width, rr.y0 + (float(y) / max(roi_h, 1)) * rr.height, rr.x0 + (float(x + w) / max(roi_w, 1)) * rr.width, rr.y0 + (float(y + h) / max(roi_h, 1)) * rr.height)
+        return {
+            'candidate_index': int(candidate_index),
+            'score': float(round(score, 6)),
+            'roi_size_px': [int(roi_w), int(roi_h)],
+            'norm_points': norm_pts,
+            'pdf_points': pdf_pts,
+            'hu_moments': [float(round(v, 10)) for v in moments],
+            'bbox_rect': self._serialize_rect(bbox_rect),
+            'bbox_aspect': float(round(float(w) / float(max(h, 1)), 6)),
+            'area_ratio': float(round(area / float(max(roi_w * roi_h, 1)), 6)),
+            'extent': float(round(area / float(max(w * h, 1)), 6)),
+            'vertices': int(len(approx) if approx is not None else 0),
+            'kind_hint': 'shape',
+        }
+
+    def extract_shape_candidates_from_roi(self, page_idx, source_rect, max_candidates=8):
+        page_idx = int(page_idx or 0)
+        try:
+            rr = source_rect if isinstance(source_rect, fitz.Rect) else fitz.Rect(source_rect)
+        except Exception:
+            return []
+        if rr.width <= 1 or rr.height <= 1:
+            return []
+        img = self._render_pdf_page_bgr(self.pdf_path, page_idx=page_idx, preview_zoom=ZOOM)
+        if img is None or getattr(img, 'size', 0) == 0:
+            return []
+        h_img, w_img = img.shape[:2]
+        x0 = max(0, min(int(math.floor(rr.x0 * ZOOM)), w_img - 1))
+        y0 = max(0, min(int(math.floor(rr.y0 * ZOOM)), h_img - 1))
+        x1 = max(x0 + 1, min(int(math.ceil(rr.x1 * ZOOM)), w_img))
+        y1 = max(y0 + 1, min(int(math.ceil(rr.y1 * ZOOM)), h_img))
+        crop = img[y0:y1, x0:x1].copy()
+        if crop is None or getattr(crop, 'size', 0) == 0:
+            return []
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if len(crop.shape) == 3 else crop
+        text_mask, _ = self.build_text_like_mask(crop, header_band_pct=0.10)
+        try:
+            light_text_mask = cv2.dilate(text_mask, np.ones((2, 2), np.uint8), iterations=1)
+        except Exception:
+            light_text_mask = text_mask
+        work_masks = []
+        try:
+            otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
+            work_masks.append(('otsu', otsu))
+        except Exception:
+            pass
+        try:
+            adapt = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 21, 5)
+            work_masks.append(('adaptive', adapt))
+        except Exception:
+            pass
+        try:
+            edges = cv2.Canny(gray, 60, 160)
+            edges = cv2.dilate(edges, np.ones((2, 2), np.uint8), iterations=1)
+            work_masks.append(('edge', edges))
+        except Exception:
+            pass
+        seen = []
+        candidates = []
+        roi_h, roi_w = gray.shape[:2]
+        roi_cx = roi_w * 0.5
+        roi_cy = roi_h * 0.5
+        for source_name, mask in work_masks:
+            try:
+                if light_text_mask is not None and getattr(light_text_mask, 'size', 0) != 0:
+                    mask = cv2.bitwise_and(mask, cv2.bitwise_not(light_text_mask))
+            except Exception:
+                pass
+            try:
+                mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+            except Exception:
+                pass
+            try:
+                contours, _ = cv2.findContours(mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+            except Exception:
+                contours = []
+            for c in contours:
+                try:
+                    area = float(cv2.contourArea(c))
+                    peri = float(cv2.arcLength(c, True))
+                    x, y, w, h = cv2.boundingRect(c)
+                except Exception:
+                    continue
+                if area <= 8 or peri <= 0 or w < 4 or h < 4:
+                    continue
+                if w >= roi_w * 0.985 and h >= roi_h * 0.985:
+                    continue
+                border_touch = 0
+                if x <= 1: border_touch += 1
+                if y <= 1: border_touch += 1
+                if (x + w) >= (roi_w - 1): border_touch += 1
+                if (y + h) >= (roi_h - 1): border_touch += 1
+                if border_touch >= 3:
+                    continue
+                extent = float(area / float(max(w * h, 1)))
+                if extent <= 0.02:
+                    continue
+                approx = cv2.approxPolyDP(c, max(1.0, 0.03 * peri), True)
+                vertices = int(len(approx) if approx is not None else 0)
+                cx = x + (w * 0.5)
+                cy = y + (h * 0.5)
+                center_penalty = min(1.0, (abs(cx - roi_cx) / max(roi_w, 1)) + (abs(cy - roi_cy) / max(roi_h, 1)))
+                area_ratio = float(area / float(max(roi_w * roi_h, 1)))
+                compactness = float((4.0 * math.pi * area) / max(peri * peri, 1e-6))
+                edge_hug_penalty = 0.08 * float(border_touch)
+                score = (area_ratio * 0.85) + (extent * 0.30) + (min(max(compactness, 0.0), 1.0) * 0.16) - (center_penalty * 0.12) - edge_hug_penalty
+                if vertices == 4:
+                    score += 0.10
+                if 0.55 <= (float(w) / float(max(h, 1))) <= 1.60:
+                    score += 0.06
+                norm_box = (round(x / max(roi_w, 1), 2), round(y / max(roi_h, 1), 2), round(w / max(roi_w, 1), 2), round(h / max(roi_h, 1), 2))
+                if norm_box in seen:
+                    continue
+                seen.append(norm_box)
+                sig = self._shape_template_from_contour(c, (roi_h, roi_w), rr, score=score, candidate_index=len(candidates))
+                if not sig:
+                    continue
+                sig['source'] = str(source_name)
+                sig['resolved_rects'] = [fitz.Rect(sig['bbox_rect'])] if sig.get('bbox_rect') else [fitz.Rect(rr)]
+                sig['resolved_types'] = ['check' if int(sig.get('vertices', 0) or 0) == 4 and float(sig.get('bbox_aspect', 1.0) or 1.0) <= 1.6 else 'field']
+                sig['split_count'] = 1
+                sig['needs_split'] = False
+                sig['template_kind'] = 'shape_template'
+                candidates.append(sig)
+        candidates.sort(key=lambda item: float(item.get('score', 0.0) or 0.0), reverse=True)
+        final = []
+        for cand in candidates:
+            try:
+                cand_rect = fitz.Rect(cand.get('bbox_rect')) if cand.get('bbox_rect') is not None else None
+            except Exception:
+                cand_rect = None
+            duplicate = False
+            for prev in final:
+                try:
+                    prev_rect = fitz.Rect(prev.get('bbox_rect')) if prev.get('bbox_rect') is not None else None
+                except Exception:
+                    prev_rect = None
+                if cand_rect is not None and prev_rect is not None and self._rect_iou(cand_rect, prev_rect) >= 0.55:
+                    duplicate = True
+                    break
+            if not duplicate:
+                final.append(cand)
+            if len(final) >= max(1, int(max_candidates or 3)):
+                break
+        return final
+
+    def extract_shape_candidates_from_page(self, page_idx, template_shape=None, max_candidates=160):
+        page_idx = int(page_idx or 0)
+        img = self._render_pdf_page_bgr(self.pdf_path, page_idx=page_idx, preview_zoom=ZOOM)
+        if img is None or getattr(img, 'size', 0) == 0:
+            return []
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if len(img.shape) == 3 else img
+        text_mask, _ = self.build_text_like_mask(img, header_band_pct=0.10)
+        try:
+            light_text_mask = cv2.dilate(text_mask, np.ones((2, 2), np.uint8), iterations=1)
+        except Exception:
+            light_text_mask = text_mask
+        work_masks = []
+        try:
+            otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
+            work_masks.append(('otsu', otsu))
+        except Exception:
+            pass
+        try:
+            adapt = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 25, 6)
+            work_masks.append(('adaptive', adapt))
+        except Exception:
+            pass
+        try:
+            edges = cv2.Canny(gray, 60, 160)
+            edges = cv2.dilate(edges, np.ones((2, 2), np.uint8), iterations=1)
+            work_masks.append(('edge', edges))
+        except Exception:
+            pass
+        h_img, w_img = gray.shape[:2]
+        tpl_aspect = 0.0
+        tpl_area_ratio = 0.0
+        if isinstance(template_shape, dict):
+            try:
+                tpl_aspect = float(template_shape.get('bbox_aspect', 0.0) or 0.0)
+            except Exception:
+                tpl_aspect = 0.0
+            try:
+                tpl_area_ratio = float(template_shape.get('area_ratio', 0.0) or 0.0)
+            except Exception:
+                tpl_area_ratio = 0.0
+        seen = []
+        candidates = []
+        for source_name, mask in work_masks:
+            try:
+                if light_text_mask is not None and getattr(light_text_mask, 'size', 0) != 0:
+                    mask = cv2.bitwise_and(mask, cv2.bitwise_not(light_text_mask))
+            except Exception:
+                pass
+            try:
+                mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+            except Exception:
+                pass
+            try:
+                contours, _ = cv2.findContours(mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+            except Exception:
+                contours = []
+            for c in contours:
+                try:
+                    area = float(cv2.contourArea(c))
+                    peri = float(cv2.arcLength(c, True))
+                    x, y, w, h = cv2.boundingRect(c)
+                except Exception:
+                    continue
+                if area <= 10 or peri <= 0 or w < 4 or h < 4:
+                    continue
+                if w >= w_img * 0.985 and h >= h_img * 0.985:
+                    continue
+                border_touch = 0
+                if x <= 1: border_touch += 1
+                if y <= 1: border_touch += 1
+                if (x + w) >= (w_img - 1): border_touch += 1
+                if (y + h) >= (h_img - 1): border_touch += 1
+                if border_touch >= 3:
+                    continue
+                area_ratio = float(area / float(max(w * h, 1)))
+                if area_ratio <= 0.02:
+                    continue
+                bbox_aspect = float(w) / float(max(h, 1))
+                norm_box = (round(x / max(w_img, 1), 3), round(y / max(h_img, 1), 3), round(w / max(w_img, 1), 3), round(h / max(h_img, 1), 3))
+                if norm_box in seen:
+                    continue
+                seen.append(norm_box)
+                pdf_rr = fitz.Rect(float(x) / ZOOM, float(y) / ZOOM, float(x + w) / ZOOM, float(y + h) / ZOOM)
+                sig = self._shape_template_from_contour(c, (h_img, w_img), pdf_rr, score=0.0, candidate_index=len(candidates))
+                if not sig:
+                    continue
+                compactness = float((4.0 * math.pi * area) / max(peri * peri, 1e-6))
+                score = (min(float(sig.get('area_ratio', 0.0) or 0.0), 1.0) * 0.50) + (min(max(compactness, 0.0), 1.0) * 0.16) - (0.08 * float(border_touch))
+                if tpl_aspect > 0:
+                    score += max(0.0, 1.0 - min(abs(tpl_aspect - bbox_aspect) / 1.30, 1.0)) * 0.18
+                if tpl_area_ratio > 0:
+                    score += max(0.0, 1.0 - min(abs(tpl_area_ratio - float(sig.get('area_ratio', 0.0) or 0.0)) / 0.35, 1.0)) * 0.12
+                if int(sig.get('vertices', 0) or 0) == 4:
+                    score += 0.05
+                sig['score'] = float(score)
+                sig['source'] = str(source_name)
+                sig['resolved_rects'] = [fitz.Rect(sig['bbox_rect'])] if sig.get('bbox_rect') else [fitz.Rect(pdf_rr)]
+                sig['resolved_types'] = ['check' if int(sig.get('vertices', 0) or 0) == 4 and float(sig.get('bbox_aspect', 1.0) or 1.0) <= 1.6 else 'field']
+                sig['split_count'] = 1
+                sig['needs_split'] = False
+                sig['template_kind'] = 'shape_template'
+                candidates.append(sig)
+        candidates.sort(key=lambda item: float(item.get('score', 0.0) or 0.0), reverse=True)
+        final = []
+        for cand in candidates:
+            try:
+                cand_rect = fitz.Rect(cand.get('bbox_rect')) if cand.get('bbox_rect') is not None else None
+            except Exception:
+                cand_rect = None
+            duplicate = False
+            for prev in final:
+                try:
+                    prev_rect = fitz.Rect(prev.get('bbox_rect')) if prev.get('bbox_rect') is not None else None
+                except Exception:
+                    prev_rect = None
+                if cand_rect is not None and prev_rect is not None and self._rect_iou(cand_rect, prev_rect) >= 0.70:
+                    duplicate = True
+                    break
+            if not duplicate:
+                final.append(cand)
+            if len(final) >= max(1, int(max_candidates or 160)):
+                break
+        return final
+
+    def build_shape_template_analysis(self, page_idx, source_rect, candidate):
+        try:
+            rr = source_rect if isinstance(source_rect, fitz.Rect) else fitz.Rect(source_rect)
+        except Exception:
+            return None
+        candidate = dict(candidate or {})
+        resolved_rects = []
+        for rect in (candidate.get('resolved_rects', []) or []):
+            try:
+                resolved_rects.append(rect if isinstance(rect, fitz.Rect) else fitz.Rect(rect))
+            except Exception:
+                pass
+        if not resolved_rects:
+            try:
+                resolved_rects = [fitz.Rect(candidate.get('bbox_rect'))] if candidate.get('bbox_rect') is not None else [fitz.Rect(rr)]
+            except Exception:
+                resolved_rects = [fitz.Rect(rr)]
+        resolved_types = [str(v) for v in (candidate.get('resolved_types', []) or [])]
+        if not resolved_types:
+            resolved_types = ['field']
+        shape_template = dict(candidate or {})
+        shape_template['source_rect'] = self._serialize_rect(rr)
+        return {
+            'page': int(page_idx or 0),
+            'source_rect': fitz.Rect(rr),
+            'resolved_rects': resolved_rects,
+            'resolved_types': resolved_types,
+            'needs_split': False,
+            'split_count': len(resolved_rects),
+            'template_kind': 'shape_template',
+            'source_text_overlap': 0.0,
+            'features': {
+                'crop_width_px': int(candidate.get('roi_size_px', [0, 0])[0] or 0),
+                'crop_height_px': int(candidate.get('roi_size_px', [0, 0])[1] or 0),
+                'raw_internal_count': 1,
+                'union_cover_ratio': float(candidate.get('area_ratio', 0.0) or 0.0),
+                'type_counts': {str(resolved_types[0]): 1},
+                'prefers_single_field': True,
+                'shape_score': float(candidate.get('score', 0.0) or 0.0),
+            },
+            'shape_template': shape_template,
+        }
+
+    def _shape_similarity_score(self, template_shape, candidate_shape):
+        try:
+            tpl_hu = np.array(list(template_shape.get('hu_moments', []) or []), dtype=np.float64)
+            cand_hu = np.array(list(candidate_shape.get('hu_moments', []) or []), dtype=np.float64)
+        except Exception:
+            return 0.0
+        if tpl_hu.size != 7 or cand_hu.size != 7:
+            return 0.0
+        try:
+            h1 = np.sign(tpl_hu) * np.log10(np.abs(tpl_hu) + 1e-12)
+            h2 = np.sign(cand_hu) * np.log10(np.abs(cand_hu) + 1e-12)
+            hu_dist = float(np.linalg.norm(h1 - h2))
+        except Exception:
+            hu_dist = 99.0
+        hu_sim = 1.0 / (1.0 + hu_dist)
+        aspect_tpl = float(template_shape.get('bbox_aspect', 1.0) or 1.0)
+        aspect_cand = float(candidate_shape.get('bbox_aspect', 1.0) or 1.0)
+        aspect_sim = max(0.0, 1.0 - min(abs(aspect_tpl - aspect_cand) / 1.25, 1.0))
+        area_tpl = float(template_shape.get('area_ratio', 0.0) or 0.0)
+        area_cand = float(candidate_shape.get('area_ratio', 0.0) or 0.0)
+        size_sim = max(0.0, 1.0 - min(abs(area_tpl - area_cand) / 0.30, 1.0))
+        try:
+            tpl_cnt = np.array(template_shape.get('norm_points', []) or [], dtype=np.float32).reshape(-1, 1, 2)
+            cand_cnt = np.array(candidate_shape.get('norm_points', []) or [], dtype=np.float32).reshape(-1, 1, 2)
+            contour_diff = float(cv2.matchShapes(tpl_cnt, cand_cnt, cv2.CONTOURS_MATCH_I1, 0.0)) if tpl_cnt.size and cand_cnt.size else 99.0
+        except Exception:
+            contour_diff = 99.0
+        contour_sim = 1.0 / (1.0 + max(contour_diff, 0.0))
+        score = (contour_sim * 0.40) + (hu_sim * 0.25) + (aspect_sim * 0.20) + (size_sim * 0.15)
+        return float(max(0.0, min(score, 0.99)))
+
+    def _shape_template_preview_path(self, shape_template, preview_zoom=PREVIEW_SCALE):
+        points = []
+        for pt in (dict(shape_template or {}).get('pdf_points', []) or []):
+            if not isinstance(pt, (list, tuple)) or len(pt) < 2:
+                continue
+            try:
+                points.append([float(pt[0]) * float(preview_zoom or PREVIEW_SCALE), float(pt[1]) * float(preview_zoom or PREVIEW_SCALE)])
+            except Exception:
+                continue
+        return points
 
     def _page_detection_cache_token(self, page_idx):
         try:
@@ -2394,6 +2805,7 @@ class FormAlchemistEngine:
             'split_count': int(analysis.get('split_count', 0) or 0),
             'source_text_overlap': float(analysis.get('source_text_overlap', 0.0) or 0.0),
             'features': dict(analysis.get('features', {}) or {}),
+            'shape_template': dict(analysis.get('shape_template', {}) or {}),
             'created_at': _utc_now_iso(),
         }
         self.area_templates_by_page.setdefault(page_idx, []).append(template)
@@ -2455,6 +2867,361 @@ class FormAlchemistEngine:
                     used.add(best_idx)
                     selected_ids.append(best_idx)
         return {'added_refs': added_refs, 'selected_ids': sorted(set(int(x) for x in selected_ids if isinstance(x, int) or str(x).isdigit()))}
+
+
+    def _manual_area_search_scope_key(self, page_idx):
+        try:
+            page_idx = int(page_idx or 0)
+        except Exception:
+            page_idx = 0
+        return f"{page_idx}|{self._page_detection_cache_token(page_idx)}"
+
+    def _get_manual_area_search_cache_entry(self, page_idx, page_img=None):
+        try:
+            page_idx = int(page_idx or 0)
+        except Exception:
+            page_idx = 0
+        scope_key = self._manual_area_search_scope_key(page_idx)
+        cache = dict(getattr(self, 'manual_area_search_cache', {}) or {})
+        entry = cache.get(scope_key)
+        if isinstance(entry, dict):
+            if page_img is not None and entry.get('page_img') is None:
+                entry['page_img'] = page_img
+            return entry
+        if page_img is None:
+            page_img = self._render_pdf_page_bgr(self.pdf_path, page_idx=page_idx, preview_zoom=ZOOM)
+        if page_img is None or getattr(page_img, 'size', 0) == 0:
+            return None
+        gray = cv2.cvtColor(page_img, cv2.COLOR_BGR2GRAY)
+        base_bin = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
+        try:
+            page_text_mask, _ = self.build_text_like_mask(page_img, header_band_pct=0.10)
+            page_text_mask = cv2.dilate(page_text_mask, np.ones((3, 3), np.uint8), iterations=1)
+            struct_bin = cv2.bitwise_and(base_bin, cv2.bitwise_not(page_text_mask))
+        except Exception:
+            page_text_mask = None
+            struct_bin = base_bin
+        n, _, stats, _ = cv2.connectedComponentsWithStats(struct_bin)
+        entry = {
+            'scope_key': scope_key,
+            'page_img': page_img,
+            'gray': gray,
+            'struct_bin': struct_bin,
+            'stats': stats,
+            'component_count': int(n),
+            'candidate_rects': None,
+            'signature_cache': {},
+        }
+        cache = {k: v for k, v in cache.items() if str(k).endswith(str(self._page_detection_cache_token(page_idx))) is False or k == scope_key}
+        cache[scope_key] = entry
+        self.manual_area_search_cache = cache
+        return entry
+
+    def _get_cached_manual_area_signature(self, page_idx, rect, page_img=None):
+        entry = self._get_manual_area_search_cache_entry(page_idx, page_img=page_img)
+        if not isinstance(entry, dict):
+            return self._build_manual_area_structural_signature(page_idx, rect, page_img=page_img)
+        try:
+            rect_obj = fitz.Rect(rect)
+        except Exception:
+            return None
+        rect_key_payload = self._serialize_rect(rect_obj)
+        if isinstance(rect_key_payload, list):
+            rect_key = tuple(rect_key_payload)
+        elif isinstance(rect_key_payload, tuple):
+            rect_key = rect_key_payload
+        else:
+            rect_key = tuple(list(rect_key_payload)) if rect_key_payload is not None and not isinstance(rect_key_payload, (str, bytes, int, float, bool)) else rect_key_payload
+        sig_cache = entry.setdefault('signature_cache', {})
+        sig = sig_cache.get(rect_key)
+        if sig is None:
+            sig = self._build_manual_area_structural_signature(page_idx, rect_obj, page_img=entry.get('page_img'))
+            sig_cache[rect_key] = sig
+        return sig
+
+
+    def _manual_capture_text_overlap_expanded(self, local_rect, text_mask, pad_px=4):
+        try:
+            rr = fitz.Rect(local_rect)
+        except Exception:
+            return 0.0
+        if text_mask is None or getattr(text_mask, 'size', 0) == 0:
+            return 0.0
+        h, w = text_mask.shape[:2]
+        x0 = max(0, int(math.floor(rr.x0)) - int(max(0, pad_px)))
+        y0 = max(0, int(math.floor(rr.y0)) - int(max(0, pad_px)))
+        x1 = min(w, int(math.ceil(rr.x1)) + int(max(0, pad_px)))
+        y1 = min(h, int(math.ceil(rr.y1)) + int(max(0, pad_px)))
+        if x1 <= x0 or y1 <= y0:
+            return 0.0
+        roi = text_mask[y0:y1, x0:x1]
+        if roi.size == 0:
+            return 0.0
+        return float(np.count_nonzero(roi)) / float(max(roi.size, 1))
+
+
+    def _manual_capture_force_single_field_from_enclosing_box(self, source_rect, dedup_rects, dedup_types):
+        try:
+            source_rect = source_rect if isinstance(source_rect, fitz.Rect) else fitz.Rect(source_rect)
+        except Exception:
+            return False
+        rects = []
+        types = []
+        try:
+            for rr, kind in zip((dedup_rects or []), (dedup_types or [])):
+                rects.append(rr if isinstance(rr, fitz.Rect) else fitz.Rect(rr))
+                types.append(str(kind or ''))
+        except Exception:
+            return False
+        if len(rects) < 2:
+            return False
+        if any(t not in {'field', 'line'} for t in types):
+            return False
+
+        source_area = float(max(source_rect.width * source_rect.height, 1e-6))
+        best_idx = -1
+        best_area = 0.0
+        for idx, (rr, kind) in enumerate(zip(rects, types)):
+            if kind != 'field':
+                continue
+            area = float(max(rr.width, 0.0) * max(rr.height, 0.0))
+            if area > best_area:
+                best_idx = idx
+                best_area = area
+        if best_idx < 0:
+            return False
+
+        dominant = rects[best_idx]
+        dominant_area = float(max(dominant.width, 0.0) * max(dominant.height, 0.0))
+        dominant_cover = dominant_area / float(max(source_area * (ZOOM ** 2), 1e-6))
+        if dominant_cover < 0.18:
+            return False
+        if float(max(dominant.width, 0.0)) / float(max(dominant.height, 1e-6)) < 1.35:
+            return False
+
+        enclosed_hits = 0
+        inner_line_hits = 0
+        other_hits = 0
+        for idx, rr in enumerate(rects):
+            if idx == best_idx:
+                continue
+            other_hits += 1
+            inter = _rect_intersection_area(dominant, rr)
+            rr_area = float(max(rr.width, 0.0) * max(rr.height, 0.0))
+            if rr_area <= 0:
+                continue
+            enclosed_ratio = inter / rr_area
+            if enclosed_ratio >= 0.88:
+                enclosed_hits += 1
+                if types[idx] == 'line':
+                    inner_line_hits += 1
+                continue
+            # Accept tiny border fragments very close to the dominant box top edge.
+            x_overlap = _x_intersection(dominant, rr) / float(max(rr.width, 1e-6))
+            near_top = rr.y0 <= (dominant.y0 + max(3.0, dominant.height * 0.24))
+            if x_overlap >= 0.75 and near_top and rr.height <= max(10.0, dominant.height * 0.22):
+                enclosed_hits += 1
+                if types[idx] == 'line':
+                    inner_line_hits += 1
+
+        if other_hits <= 0:
+            return False
+        if enclosed_hits < other_hits:
+            return False
+        if inner_line_hits >= 1:
+            return True
+        return dominant_cover >= 0.26
+
+    def _manual_capture_prefers_single_field(self, crop, source_rect, dedup_rects, dedup_types, base_bin=None, bin_fields=None):
+        try:
+            source_rect = source_rect if isinstance(source_rect, fitz.Rect) else fitz.Rect(source_rect)
+        except Exception:
+            return False
+        if crop is None or getattr(crop, 'size', 0) == 0:
+            return False
+        if source_rect.width <= 2 or source_rect.height <= 2:
+            return False
+        h_crop, w_crop = crop.shape[:2]
+        if w_crop < 24 or h_crop < 16:
+            return False
+        type_set = {str(t or '') for t in (dedup_types or [])}
+        if not type_set:
+            return False
+        if any(t not in {'line', 'field'} for t in type_set):
+            return False
+        try:
+            source_aspect = float(source_rect.width) / float(max(source_rect.height, 1e-6))
+        except Exception:
+            source_aspect = 1.0
+        if source_aspect < 1.4:
+            return False
+        if len(dedup_rects or []) > 4:
+            return False
+
+        px_rects = []
+        try:
+            for rr in (dedup_rects or []):
+                r = rr if isinstance(rr, fitz.Rect) else fitz.Rect(rr)
+                px_rects.append(fitz.Rect(r.x0 - (source_rect.x0 * ZOOM), r.y0 - (source_rect.y0 * ZOOM), r.x1 - (source_rect.x0 * ZOOM), r.y1 - (source_rect.y0 * ZOOM)))
+        except Exception:
+            px_rects = []
+        if not px_rects:
+            return False
+
+        union = fitz.Rect(min(r.x0 for r in px_rects), min(r.y0 for r in px_rects), max(r.x1 for r in px_rects), max(r.y1 for r in px_rects))
+        union_w_ratio = float(union.width) / float(max(w_crop, 1))
+        union_h_ratio = float(union.height) / float(max(h_crop, 1))
+        if union_w_ratio < 0.45:
+            return False
+
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if len(crop.shape) == 3 else crop
+        work = base_bin if base_bin is not None else cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
+        contours, _ = cv2.findContours(work, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        best_cover = 0.0
+        best_border_strength = 0.0
+        best_extent = 0.0
+        for c in contours:
+            x, y, w, h = cv2.boundingRect(c)
+            if w < max(18, int(w_crop * 0.35)) or h < max(12, int(h_crop * 0.18)):
+                continue
+            if w > int(w_crop * 0.985) and h > int(h_crop * 0.985):
+                continue
+            cand = fitz.Rect(x, y, x + w, y + h)
+            inter = _rect_intersection_area(cand, union)
+            cover = inter / float(max(union.width * union.height, 1e-6))
+            if cover <= 0.0:
+                continue
+            roi = work[y:y+h, x:x+w]
+            if roi.size == 0:
+                continue
+            band = max(1, min(int(min(w, h) * 0.10), 8))
+            top = float(cv2.countNonZero(roi[:band, :])) / float(max(roi[:band, :].size, 1))
+            bottom = float(cv2.countNonZero(roi[-band:, :])) / float(max(roi[-band:, :].size, 1))
+            left = float(cv2.countNonZero(roi[:, :band])) / float(max(roi[:, :band].size, 1))
+            right = float(cv2.countNonZero(roi[:, -band:])) / float(max(roi[:, -band:].size, 1))
+            border_strength = min(top, bottom, left, right)
+            extent = float(cv2.contourArea(c)) / float(max(w * h, 1))
+            if cover > best_cover:
+                best_cover = cover
+                best_border_strength = border_strength
+                best_extent = extent
+
+        only_lines = type_set == {'line'}
+        mixed_line_field = type_set.issubset({'line', 'field'})
+        strong_outer_box = (best_cover >= 0.82 and best_border_strength >= 0.028)
+        probable_box = (best_cover >= 0.72 and best_border_strength >= 0.020 and 0.02 <= best_extent <= 0.90)
+        nested_line_pattern = (mixed_line_field and union_w_ratio >= 0.55 and union_h_ratio <= 0.60)
+
+        dominant_rect = None
+        dominant_kind = ''
+        dominant_area = 0.0
+        src_area = float(max(w_crop * h_crop, 1))
+        for rr, kind in zip(px_rects, (dedup_types or [])):
+            try:
+                area = float(max(rr.width, 0.0) * max(rr.height, 0.0))
+            except Exception:
+                area = 0.0
+            if area > dominant_area:
+                dominant_area = area
+                dominant_rect = rr
+                dominant_kind = str(kind or '')
+        dominant_cover = (dominant_area / src_area) if src_area > 0 else 0.0
+        dominant_encloses_others = False
+        if dominant_rect is not None and dominant_cover >= 0.34:
+            enclosed_hits = 0
+            other_hits = 0
+            for rr in px_rects:
+                if rr is dominant_rect:
+                    continue
+                other_hits += 1
+                inter = _rect_intersection_area(dominant_rect, rr)
+                rr_area = float(max(rr.width, 0.0) * max(rr.height, 0.0))
+                if rr_area > 0 and (inter / rr_area) >= 0.84:
+                    enclosed_hits += 1
+            dominant_encloses_others = (other_hits > 0 and enclosed_hits >= other_hits)
+
+        dominant_field_box = (
+            dominant_rect is not None and
+            dominant_kind == 'field' and
+            dominant_cover >= 0.30 and
+            float(max(dominant_rect.width, 0.0)) / float(max(dominant_rect.height, 1e-6)) >= 1.4
+        )
+        stacked_inner_pattern = False
+        if dominant_rect is not None and len(px_rects) >= 2:
+            inner_top_hits = 0
+            for rr in px_rects:
+                if rr is dominant_rect:
+                    continue
+                if rr.y0 <= (dominant_rect.y0 + max(8.0, dominant_rect.height * 0.34)):
+                    inner_top_hits += 1
+            stacked_inner_pattern = inner_top_hits >= 1
+
+        if strong_outer_box and nested_line_pattern:
+            return True
+        if only_lines and probable_box and union_h_ratio <= 0.42:
+            return True
+        if mixed_line_field and probable_box and len(px_rects) <= 3 and source_aspect >= 2.0:
+            return True
+        if mixed_line_field and dominant_field_box and dominant_encloses_others:
+            return True
+        if mixed_line_field and dominant_field_box and stacked_inner_pattern and dominant_cover >= 0.38:
+            return True
+        return False
+
+    def _manual_capture_reject_text_artifact(self, local_rect, kind, text_mask, crop_shape):
+        try:
+            rr = fitz.Rect(local_rect)
+        except Exception:
+            return True
+        try:
+            crop_h = int(crop_shape[0])
+            crop_w = int(crop_shape[1])
+        except Exception:
+            crop_h, crop_w = 0, 0
+        if rr.width <= 2 or rr.height <= 2:
+            return True
+        text_overlap = 0.0
+        halo_overlap = 0.0
+        try:
+            text_overlap = float(self.rect_text_overlap_ratio(rr, text_mask, preview_zoom=1.0) or 0.0)
+        except Exception:
+            text_overlap = 0.0
+        try:
+            halo_overlap = float(self._manual_capture_text_overlap_expanded(rr, text_mask, pad_px=max(4, int(min(rr.width, rr.height) * 0.35))) or 0.0)
+        except Exception:
+            halo_overlap = text_overlap
+        width = float(rr.width)
+        height = float(rr.height)
+        aspect = width / float(max(height, 1e-6))
+        area = width * height
+        near_top_band = bool(crop_h > 0 and rr.y0 <= max(10.0, crop_h * 0.10))
+        # Strong text rejection for tiny boxes embedded in words or labels.
+        if kind == 'check':
+            if text_overlap >= 0.07 or halo_overlap >= 0.16:
+                return True
+            if area <= 520 and halo_overlap >= 0.10:
+                return True
+            if near_top_band and halo_overlap >= 0.06:
+                return True
+        elif kind == 'field':
+            if text_overlap >= 0.10 or halo_overlap >= 0.22:
+                return True
+            if width <= 26 and height <= 26 and halo_overlap >= 0.08:
+                return True
+            if width <= 42 and height <= 22 and halo_overlap >= 0.09:
+                return True
+            if near_top_band and halo_overlap >= 0.07:
+                return True
+            if aspect <= 2.4 and area <= 900 and halo_overlap >= 0.08:
+                return True
+        elif kind == 'line':
+            if text_overlap >= 0.12 or halo_overlap >= 0.24:
+                return True
+            if near_top_band and halo_overlap >= 0.10:
+                return True
+        if self.should_suppress_text_like_rect(rr, text_mask, preview_zoom=1.0, header_cut=int(max(crop_h, 1) * 0.08), overlap_thresh=(0.12 if kind != 'line' else 0.16)):
+            return True
+        return False
 
     def _build_manual_area_structural_signature(self, page_idx, rect, out_size=(40, 40), page_img=None):
         try:
@@ -2543,6 +3310,79 @@ class FormAlchemistEngine:
                 break
         return kept
 
+
+    def _area_template_match_family_key(self, match):
+        if not isinstance(match, dict):
+            return None
+        try:
+            rect = match.get('rect')
+            rect = rect if isinstance(rect, fitz.Rect) else fitz.Rect(rect)
+        except Exception:
+            return None
+        resolved_types = [str(v) for v in (match.get('resolved_types', []) or [])]
+        type_counts = {}
+        for kind in resolved_types:
+            type_counts[kind] = int(type_counts.get(kind, 0) or 0) + 1
+        dominant_kind = ''
+        if type_counts:
+            dominant_kind = sorted(type_counts.items(), key=lambda kv: (-int(kv[1]), str(kv[0])))[0][0]
+        elif resolved_types:
+            dominant_kind = str(resolved_types[0])
+        else:
+            dominant_kind = 'field'
+        split_count = int(match.get('split_count', len(resolved_types) or 1) or 1)
+        if split_count <= 0:
+            split_count = max(1, len(resolved_types) or 1)
+        try:
+            w = float(rect.width)
+            h = float(rect.height)
+        except Exception:
+            w, h = 0.0, 0.0
+        aspect = w / float(max(h, 1e-6))
+        area = max(1.0, w * h)
+        if area < 40.0:
+            area_bucket = 'xs'
+        elif area < 140.0:
+            area_bucket = 's'
+        elif area < 320.0:
+            area_bucket = 'm'
+        elif area < 760.0:
+            area_bucket = 'l'
+        else:
+            area_bucket = 'xl'
+        if aspect < 0.85:
+            aspect_bucket = 'tall'
+        elif aspect <= 1.18:
+            aspect_bucket = 'square'
+        elif aspect <= 2.35:
+            aspect_bucket = 'wide'
+        else:
+            aspect_bucket = 'long'
+        return (str(dominant_kind), int(split_count), str(area_bucket), str(aspect_bucket))
+
+    def _throttle_area_template_matches_by_family(self, matches, max_matches=18, family_soft_cap=2):
+        family_soft_cap = max(1, int(family_soft_cap or 2))
+        max_matches = max(1, int(max_matches or 18))
+        family_counts = {}
+        kept = []
+        overflow = []
+        for item in list(matches or []):
+            fam = self._area_template_match_family_key(item)
+            key = fam if fam is not None else ('unknown',)
+            used = int(family_counts.get(key, 0) or 0)
+            if used < family_soft_cap:
+                kept.append(item)
+                family_counts[key] = used + 1
+            else:
+                overflow.append(item)
+        if len(kept) < max_matches and overflow:
+            overflow.sort(key=lambda item: float((item or {}).get('score', 0.0) or 0.0), reverse=True)
+            for item in overflow:
+                kept.append(item)
+                if len(kept) >= max_matches:
+                    break
+        return kept[:max_matches]
+
     def find_similar_area_templates_on_page(self, page_idx, template, max_matches=18):
         page_idx = int(page_idx or 0)
         if not isinstance(template, dict):
@@ -2553,18 +3393,22 @@ class FormAlchemistEngine:
             source_rect = None
         if source_rect is None or source_rect.width <= 1 or source_rect.height <= 1:
             return []
-        page_img = self._render_pdf_page_bgr(self.pdf_path, page_idx=page_idx, preview_zoom=ZOOM)
+        page_cache = self._get_manual_area_search_cache_entry(page_idx)
+        if not isinstance(page_cache, dict):
+            return []
+        page_img = page_cache.get('page_img')
         if page_img is None or getattr(page_img, 'size', 0) == 0:
             return []
-        tpl_sig = self._build_manual_area_structural_signature(page_idx, source_rect, page_img=page_img)
+        tpl_sig = self._get_cached_manual_area_signature(page_idx, source_rect, page_img=page_img)
         if not tpl_sig:
             return []
+        template_shape = dict((template or {}).get('shape_template', {}) or {})
         tw = max(24.0, float(source_rect.width * ZOOM))
         th = max(24.0, float(source_rect.height * ZOOM))
-        gray = cv2.cvtColor(page_img, cv2.COLOR_BGR2GRAY)
-        base_bin = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
-        n, _, stats, _ = cv2.connectedComponentsWithStats(base_bin)
-        candidate_rects = []
+        stats = page_cache.get('stats')
+        n = int(page_cache.get('component_count', 0) or 0)
+        candidate_rects = list(page_cache.get('candidate_rects') or [])
+        shape_direct_candidates = []
         def _add_candidate(rr):
             rr = fitz.Rect(rr)
             if rr.width < max(source_rect.width * 0.55, 6.0) or rr.height < max(source_rect.height * 0.55, 6.0):
@@ -2575,33 +3419,85 @@ class FormAlchemistEngine:
                 if self._rect_iou(rr, ex) >= 0.65:
                     return
             candidate_rects.append(rr)
-        for i in range(1, n):
-            xx, yy, ww, hh, area = stats[i]
-            if area < 18 or ww < 4 or hh < 4:
-                continue
-            cx = xx + (ww * 0.5)
-            cy = yy + (hh * 0.5)
-            rx0 = max(0.0, (cx - (tw * 0.5)) / ZOOM)
-            ry0 = max(0.0, (cy - (th * 0.5)) / ZOOM)
-            rx1 = min(float(page_img.shape[1]) / ZOOM, (cx + (tw * 0.5)) / ZOOM)
-            ry1 = min(float(page_img.shape[0]) / ZOOM, (cy + (th * 0.5)) / ZOOM)
-            _add_candidate(fitz.Rect(rx0, ry0, rx1, ry1))
+        if template_shape:
+            try:
+                shape_direct_candidates = list(self.extract_shape_candidates_from_page(page_idx, template_shape=template_shape, max_candidates=max(120, int(max_matches or 18) * 12)) or [])
+            except Exception:
+                shape_direct_candidates = []
+        if not candidate_rects:
+            for i in range(1, n):
+                xx, yy, ww, hh, area = stats[i]
+                if area < 18 or ww < 4 or hh < 4:
+                    continue
+                cx = xx + (ww * 0.5)
+                cy = yy + (hh * 0.5)
+                rx0 = max(0.0, (cx - (tw * 0.5)) / ZOOM)
+                ry0 = max(0.0, (cy - (th * 0.5)) / ZOOM)
+                rx1 = min(float(page_img.shape[1]) / ZOOM, (cx + (tw * 0.5)) / ZOOM)
+                ry1 = min(float(page_img.shape[0]) / ZOOM, (cy + (th * 0.5)) / ZOOM)
+                _add_candidate(fitz.Rect(rx0, ry0, rx1, ry1))
+            page_cache['candidate_rects'] = list(candidate_rects)
         matches = []
         existing_boxes = [fitz.Rect(r) for r in (self.all_boxes or [])] if int(getattr(self, 'detected_page_idx', -1) or -1) == page_idx else []
         existing_types = [str(t) for t in (self.box_types or [])] if existing_boxes else []
         template_type_counts = dict((template.get('features', {}) or {}).get('type_counts', {}) or {})
-        for cand_rect in candidate_rects[:240]:
-            cand_sig = self._build_manual_area_structural_signature(page_idx, cand_rect, page_img=page_img)
+        ranked_candidates = []
+        mask_a = tpl_sig.get('mask')
+        # contour-first candidates when a shape template exists
+        for shape_candidate in (shape_direct_candidates or []):
+            try:
+                cand_rect = fitz.Rect(shape_candidate.get('bbox_rect')) if shape_candidate.get('bbox_rect') is not None else None
+            except Exception:
+                cand_rect = None
+            if cand_rect is None:
+                continue
+            cand_sig = self._get_cached_manual_area_signature(page_idx, cand_rect, page_img=page_img)
             if not cand_sig:
                 continue
-            mask_a = tpl_sig.get('mask')
             mask_b = cand_sig.get('mask')
             inter = float(np.logical_and(mask_a > 0, mask_b > 0).sum())
             union = float(np.logical_or(mask_a > 0, mask_b > 0).sum())
             mask_iou = (inter / union) if union > 0 else 0.0
             aspect_sim = max(0.0, 1.0 - min(abs(float(tpl_sig.get('aspect', 1.0)) - float(cand_sig.get('aspect', 1.0))) / 1.1, 1.0))
             density_sim = max(0.0, 1.0 - min(abs(float(tpl_sig.get('density', 0.0)) - float(cand_sig.get('density', 0.0))) / 0.45, 1.0))
-            analysis = self.analyze_manual_area_template(page_idx, cand_rect)
+            quick_score = (float(shape_candidate.get('score', 0.0) or 0.0) * 0.42) + (mask_iou * 0.40) + (aspect_sim * 0.10) + (density_sim * 0.08)
+            if quick_score < 0.34:
+                continue
+            ranked_candidates.append((quick_score, cand_rect, cand_sig, mask_iou, aspect_sim, density_sim, dict(shape_candidate or {})))
+        for cand_rect in candidate_rects:
+            cand_sig = self._get_cached_manual_area_signature(page_idx, cand_rect, page_img=page_img)
+            if not cand_sig:
+                continue
+            mask_b = cand_sig.get('mask')
+            inter = float(np.logical_and(mask_a > 0, mask_b > 0).sum())
+            union = float(np.logical_or(mask_a > 0, mask_b > 0).sum())
+            mask_iou = (inter / union) if union > 0 else 0.0
+            aspect_sim = max(0.0, 1.0 - min(abs(float(tpl_sig.get('aspect', 1.0)) - float(cand_sig.get('aspect', 1.0))) / 1.1, 1.0))
+            density_sim = max(0.0, 1.0 - min(abs(float(tpl_sig.get('density', 0.0)) - float(cand_sig.get('density', 0.0))) / 0.45, 1.0))
+            quick_score = (mask_iou * 0.72) + (aspect_sim * 0.16) + (density_sim * 0.12)
+            if quick_score < 0.40:
+                continue
+            ranked_candidates.append((quick_score, cand_rect, cand_sig, mask_iou, aspect_sim, density_sim, None))
+        ranked_candidates.sort(key=lambda row: float(row[0]), reverse=True)
+        for quick_score, cand_rect, cand_sig, mask_iou, aspect_sim, density_sim, direct_shape in ranked_candidates[:240]:
+            analysis = None
+            shape_match = 0.0
+            if template_shape:
+                candidate_shapes = [direct_shape] if isinstance(direct_shape, dict) and direct_shape else []
+                if not candidate_shapes:
+                    candidate_shapes = self.extract_shape_candidates_from_roi(page_idx, cand_rect, max_candidates=6)
+                best_shape = None
+                best_shape_score = 0.0
+                for shape_candidate in (candidate_shapes or []):
+                    sim = self._shape_similarity_score(template_shape, shape_candidate)
+                    if sim > best_shape_score:
+                        best_shape_score = sim
+                        best_shape = shape_candidate
+                if best_shape is not None and best_shape_score >= 0.42:
+                    analysis = self.build_shape_template_analysis(page_idx, cand_rect, best_shape)
+                    shape_match = float(best_shape_score)
+            if analysis is None:
+                analysis = self.analyze_manual_area_template(page_idx, cand_rect)
             if not analysis:
                 continue
             cand_type_counts = dict((analysis.get('features', {}) or {}).get('type_counts', {}) or {})
@@ -2619,25 +3515,30 @@ class FormAlchemistEngine:
                     if self._rect_iou(cand_rect, ex_rect) >= 0.52:
                         cover_hits += 1
                 existing_cover = min(1.0, cover_hits / float(max(len(analysis.get('resolved_rects', []) or []), 1)))
-            score = (mask_iou * 0.52) + (aspect_sim * 0.14) + (density_sim * 0.12) + (type_overlap * 0.16) - (existing_cover * 0.10)
+            if template_shape:
+                score = (shape_match * 0.56) + (aspect_sim * 0.10) + (density_sim * 0.06) + (type_overlap * 0.12) + (mask_iou * 0.24) - (existing_cover * 0.08)
+            else:
+                score = (mask_iou * 0.52) + (aspect_sim * 0.14) + (density_sim * 0.12) + (type_overlap * 0.16) - (existing_cover * 0.10)
             score = max(0.0, min(0.98, score))
             if existing_cover >= 0.95:
                 continue
-            if score < 0.46:
+            if score < (0.42 if template_shape else 0.46):
                 continue
+            reason = f'shape {shape_match:.2f} • structure {mask_iou:.2f} • type {type_overlap:.2f} • density {density_sim:.2f} • existing {existing_cover:.2f}' if template_shape else f'structure {mask_iou:.2f} • type {type_overlap:.2f} • density {density_sim:.2f} • existing {existing_cover:.2f}'
             matches.append({
                 'match_id': str(uuid.uuid4().hex[:12]),
                 'template_id': str(template.get('template_id', '') or ''),
                 'page': page_idx,
                 'rect': fitz.Rect(cand_rect),
                 'score': float(round(score, 6)),
-                'reason': f'structure {mask_iou:.2f} • type {type_overlap:.2f} • density {density_sim:.2f} • existing {existing_cover:.2f}',
+                'reason': reason,
                 'resolved_rects': [fitz.Rect(r) for r in (analysis.get('resolved_rects', []) or [])],
                 'resolved_types': [str(v) for v in (analysis.get('resolved_types', []) or [])],
                 'split_count': int(analysis.get('split_count', 0) or 0),
             })
         matches.sort(key=lambda item: float(item.get('score', 0.0) or 0.0), reverse=True)
-        kept = self._prune_area_template_match_redundancy(matches, max_matches=max_matches)
+        kept = self._prune_area_template_match_redundancy(matches, max_matches=max_matches * 3)
+        kept = self._throttle_area_template_matches_by_family(kept, max_matches=max_matches, family_soft_cap=2)
         return kept
 
     def find_similar_area_templates_in_form(self, template, max_total=36, per_page_max=10):
@@ -2661,6 +3562,7 @@ class FormAlchemistEngine:
                 payload['reason'] = f"page {page_idx} • {reason}" if reason else f"page {page_idx}"
                 all_matches.append(payload)
         all_matches.sort(key=lambda item: float(item.get('score', 0.0) or 0.0), reverse=True)
+        all_matches = self._throttle_area_template_matches_by_family(all_matches, max_matches=max_total * 2, family_soft_cap=3)
         kept = []
         per_page_seen = {}
         for item in all_matches:
@@ -2746,6 +3648,226 @@ class FormAlchemistEngine:
             'selected_ids': sorted(set(int(x) for x in selected_ids if isinstance(x, int) or str(x).isdigit())),
         }
 
+
+    def _serialize_repair_patches(self):
+        payload = {}
+        for page_key, items in (getattr(self, 'repair_patches_by_page', {}) or {}).items():
+            serial = []
+            for item in (items or []):
+                if not isinstance(item, dict):
+                    continue
+                serial.append({
+                    'patch_id': str(item.get('patch_id', '') or ''),
+                    'page': int(item.get('page', page_key) or page_key),
+                    'anchor_rects': self._serialize_rects(item.get('anchor_rects', []) or []),
+                    'zone_rect': self._serialize_rect(item.get('zone_rect')) if item.get('zone_rect') is not None else None,
+                    'add_rects': self._serialize_rects(item.get('add_rects', []) or []),
+                    'add_types': [str(v) for v in (item.get('add_types', []) or [])],
+                    'remove_rects': self._serialize_rects(item.get('remove_rects', []) or []),
+                    'remove_types': [str(v) for v in (item.get('remove_types', []) or [])],
+                    'created_at': str(item.get('created_at', '') or ''),
+                })
+            if serial:
+                payload[str(int(page_key))] = serial
+        return payload
+
+    def _deserialize_repair_patches(self, payload):
+        self.repair_patches_by_page = {}
+        self.repair_patch_index = {}
+        if not isinstance(payload, dict):
+            return
+        for page_key, items in payload.items():
+            try:
+                page_idx = int(page_key)
+            except Exception:
+                continue
+            page_items = []
+            for item in (items or []):
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    zone_rect = fitz.Rect(item.get('zone_rect')) if item.get('zone_rect') is not None else None
+                except Exception:
+                    zone_rect = None
+                anchor_rects, add_rects, remove_rects = [], [], []
+                for rect in (item.get('anchor_rects', []) or []):
+                    try: anchor_rects.append(fitz.Rect(rect))
+                    except Exception: pass
+                for rect in (item.get('add_rects', []) or []):
+                    try: add_rects.append(fitz.Rect(rect))
+                    except Exception: pass
+                for rect in (item.get('remove_rects', []) or []):
+                    try: remove_rects.append(fitz.Rect(rect))
+                    except Exception: pass
+                patch = {
+                    'patch_id': str(item.get('patch_id', '') or uuid.uuid4().hex[:12]),
+                    'page': page_idx,
+                    'anchor_rects': anchor_rects,
+                    'zone_rect': zone_rect,
+                    'add_rects': add_rects,
+                    'add_types': [str(v) for v in (item.get('add_types', []) or [])],
+                    'remove_rects': remove_rects,
+                    'remove_types': [str(v) for v in (item.get('remove_types', []) or [])],
+                    'created_at': str(item.get('created_at', '') or _utc_now_iso()),
+                }
+                page_items.append(patch)
+                self.repair_patch_index[patch['patch_id']] = patch
+            if page_items:
+                self.repair_patches_by_page[page_idx] = page_items
+
+    def save_repair_patch(self, page_idx, anchor_rects=None, zone_rect=None, add_rects=None, add_types=None, remove_rects=None, remove_types=None):
+        page_idx = int(page_idx or 0)
+        patch = {
+            'patch_id': str(uuid.uuid4().hex[:12]),
+            'page': page_idx,
+            'anchor_rects': [fitz.Rect(r) for r in (anchor_rects or [])],
+            'zone_rect': (fitz.Rect(zone_rect) if zone_rect is not None else None),
+            'add_rects': [fitz.Rect(r) for r in (add_rects or [])],
+            'add_types': [str(v) for v in (add_types or [])],
+            'remove_rects': [fitz.Rect(r) for r in (remove_rects or [])],
+            'remove_types': [str(v) for v in (remove_types or [])],
+            'created_at': _utc_now_iso(),
+        }
+        self.repair_patches_by_page.setdefault(page_idx, []).append(patch)
+        self.repair_patch_index[patch['patch_id']] = patch
+        return patch
+
+    def auto_apply_saved_repair_patches_after_detection(self, page_idx, min_anchor_overlap=0.40):
+        page_idx = int(page_idx or 0)
+        patches = list((getattr(self, 'repair_patches_by_page', {}) or {}).get(page_idx, []) or [])
+        if not patches:
+            return {'patch_count': 0, 'applied_count': 0, 'added_count': 0, 'removed_count': 0}
+        added_count = 0
+        removed_count = 0
+        applied_count = 0
+        if not (bool(getattr(self, 'all_boxes', []) or []) and int(getattr(self, 'detected_page_idx', -1) or -1) == page_idx):
+            restored = bool(self._restore_detection_for_page(page_idx, required_signature=self._settings_signature()))
+            if not restored:
+                return {'patch_count': len(patches), 'applied_count': 0, 'added_count': 0, 'removed_count': 0}
+        for patch in patches:
+            if not isinstance(patch, dict):
+                continue
+            anchor_rects = [fitz.Rect(r) for r in (patch.get('anchor_rects', []) or [])]
+            if anchor_rects:
+                hit_count = 0
+                for ar in anchor_rects:
+                    best = 0.0
+                    for existing in (self.all_boxes or []):
+                        try:
+                            best = max(best, float(self._mobile_repair_overlap_score(ar, existing)))
+                        except Exception:
+                            best = max(best, float(self._rect_iou(ar, existing)))
+                    if best >= float(min_anchor_overlap):
+                        hit_count += 1
+                if hit_count < max(1, int(math.ceil(len(anchor_rects) * 0.5))):
+                    continue
+            local_added = 0
+            local_removed = 0
+            add_rects = [fitz.Rect(r) for r in (patch.get('add_rects', []) or [])]
+            add_types = [str(v) for v in (patch.get('add_types', []) or [])]
+            merge_result = self._merge_manual_rect_type_pairs(page_idx, list(zip(add_rects, add_types or ['field'] * len(add_rects)))) if add_rects else {'added_refs': []}
+            local_added += len(list((merge_result or {}).get('added_refs', []) or []))
+            rem_rects = [fitz.Rect(r) for r in (patch.get('remove_rects', []) or [])]
+            rem_types = [str(v) for v in (patch.get('remove_types', []) or [])]
+            if rem_rects:
+                keep_boxes = []
+                keep_types = []
+                for idx_existing, existing in enumerate(list(self.all_boxes or [])):
+                    ex_kind = str(self.box_types[idx_existing] if idx_existing < len(self.box_types) else '')
+                    drop = False
+                    for rr, rk in zip(rem_rects, rem_types or ['field'] * len(rem_rects)):
+                        if rk and ex_kind != str(rk):
+                            continue
+                        score = 0.0
+                        try:
+                            score = float(self._mobile_repair_overlap_score(rr, existing))
+                        except Exception:
+                            score = float(self._rect_iou(rr, existing))
+                        if score >= 0.58:
+                            drop = True
+                            break
+                    if drop:
+                        local_removed += 1
+                    else:
+                        keep_boxes.append(existing)
+                        keep_types.append(ex_kind)
+                if local_removed > 0:
+                    self.all_boxes = keep_boxes
+                    self.box_types = keep_types
+            if local_added > 0 or local_removed > 0:
+                applied_count += 1
+                added_count += int(local_added)
+                removed_count += int(local_removed)
+                self.detected_page_idx = int(page_idx)
+                self.detected_settings_signature = self._settings_signature()
+                self._cache_detection_for_page(page_idx)
+        return {'patch_count': len(patches), 'applied_count': int(applied_count), 'added_count': int(added_count), 'removed_count': int(removed_count)}
+
+
+    def remember_sticky_detections(self, page_idx, rect_type_pairs):
+        page_idx = int(page_idx or 0)
+        bucket = list((getattr(self, 'sticky_detections_by_page', {}) or {}).get(page_idx, []) or [])
+        for rect, kind in list(rect_type_pairs or []):
+            try:
+                rr = rect if isinstance(rect, fitz.Rect) else fitz.Rect(rect)
+            except Exception:
+                continue
+            kk = str(kind or 'field') or 'field'
+            duplicate = False
+            for ex_rect, ex_kind in bucket:
+                try:
+                    ex_rr = ex_rect if isinstance(ex_rect, fitz.Rect) else fitz.Rect(ex_rect)
+                except Exception:
+                    continue
+                if str(ex_kind or '') != kk:
+                    continue
+                try:
+                    if self._rect_iou(rr, ex_rr) >= 0.78 or self._rects_refer_to_same_target(rr, ex_rr, tol=0.35):
+                        duplicate = True
+                        break
+                except Exception:
+                    pass
+            if not duplicate:
+                bucket.append((fitz.Rect(rr), kk))
+        self.sticky_detections_by_page[page_idx] = bucket
+        return list(bucket)
+
+    def auto_apply_sticky_detections_after_detection(self, page_idx, min_score=0.45):
+        page_idx = int(page_idx or 0)
+        sticky_pairs = list((getattr(self, 'sticky_detections_by_page', {}) or {}).get(page_idx, []) or [])
+        if not sticky_pairs:
+            return {'sticky_count': 0, 'added_count': 0, 'selected_ids': []}
+        has_live = bool(getattr(self, 'all_boxes', []) or []) and int(getattr(self, 'detected_page_idx', -1) or -1) == page_idx
+        if (not has_live) and (not bool(self._restore_detection_for_page(page_idx, required_signature=self._settings_signature()))):
+            return {'sticky_count': len(sticky_pairs), 'added_count': 0, 'selected_ids': []}
+        merge_result = self._merge_manual_rect_type_pairs(page_idx, sticky_pairs) or {}
+        selected_ids = list(merge_result.get('selected_ids', []) or [])
+        if not selected_ids:
+            used = set()
+            for rect_ref, kind in list(merge_result.get('added_refs', []) or []):
+                best_idx = -1
+                best_score = 0.0
+                for idx_existing, existing in enumerate(list(self.all_boxes or [])):
+                    if idx_existing in used:
+                        continue
+                    existing_kind = str(self.box_types[idx_existing] if idx_existing < len(self.box_types) else '')
+                    if kind and existing_kind != str(kind):
+                        continue
+                    try:
+                        score = float(self._mobile_repair_overlap_score(rect_ref, existing))
+                    except Exception:
+                        score = float(self._rect_iou(rect_ref, existing))
+                    if score > best_score:
+                        best_idx = idx_existing
+                        best_score = score
+                if best_idx >= 0 and best_score >= float(min_score):
+                    used.add(best_idx)
+                    selected_ids.append(best_idx)
+        return {
+            'sticky_count': len(sticky_pairs),
+            'added_count': len(list(merge_result.get('added_refs', []) or [])),
+            'selected_ids': sorted(set(int(x) for x in selected_ids if isinstance(x, int) or str(x).isdigit())),
+        }
 
     def get_candidate_learning_priors(self, page_idx=0, max_events=600):
         try:
@@ -3223,6 +4345,10 @@ class FormAlchemistEngine:
         self.area_template_index = {}
         self.area_template_match_cache = {}
         self.area_template_match_review_state = {}
+        self.manual_area_search_cache = {}
+        self.repair_patches_by_page = {}
+        self.repair_patch_index = {}
+        self.sticky_detections_by_page = {}
         self.semantic_target_overrides = {}
         return total
 
@@ -3854,7 +4980,7 @@ class FormAlchemistEngine:
     # Checkbox logic
     # --------------------------------------------------------
     def build_text_like_mask(self, img_bgr, header_band_pct=0.16):
-        """Build a conservative mask of small text-like components, mainly for header/title suppression."""
+        """Build a conservative mask of text-like components, with stronger support for headers/labels."""
         if img_bgr is None or getattr(img_bgr, "size", 0) == 0:
             return None, {"header_cut": 0, "component_count": 0}
         if len(img_bgr.shape) == 2:
@@ -3868,11 +4994,11 @@ class FormAlchemistEngine:
         n, _, stats, _ = cv2.connectedComponentsWithStats(binv)
         mask = np.zeros_like(binv)
         comp_count = 0
-        max_text_w = max(26, min(int(w_img * 0.18), 180))
-        max_text_h = max(18, min(int(h_img * 0.10), 92))
+        max_text_w = max(30, min(int(w_img * 0.20), 210))
+        max_text_h = max(20, min(int(h_img * 0.11), 96))
         for i in range(1, n):
             x, y, w, h, area = [int(v) for v in stats[i]]
-            if area < 6 or area > 2400 or w <= 0 or h <= 0:
+            if area < 5 or area > 2600 or w <= 0 or h <= 0:
                 continue
             if w > max_text_w or h > max_text_h:
                 continue
@@ -3880,18 +5006,28 @@ class FormAlchemistEngine:
             if roi.size == 0:
                 continue
             fill_ratio = float(area) / float(max(w * h, 1))
-            if fill_ratio < 0.05 or fill_ratio > 0.88:
+            if fill_ratio < 0.04 or fill_ratio > 0.90:
                 continue
             aspect = float(w) / float(max(h, 1))
-            if aspect < 0.10 or aspect > 18.0:
+            if aspect < 0.08 or aspect > 20.0:
                 continue
             row_cov = float(np.mean((roi > 0).sum(axis=1) / float(max(w, 1))))
             col_cov = float(np.mean((roi > 0).sum(axis=0) / float(max(h, 1))))
-            if row_cov > 0.82 and col_cov > 0.82:
+            if row_cov > 0.84 and col_cov > 0.84:
                 continue
-            if w >= 48 and h >= 20 and fill_ratio < 0.10:
-                continue
-            if y >= header_cut and not (w <= 72 and h <= 42 and fill_ratio >= 0.11):
+            # Compact glyphs and label fragments.
+            compact_text_like = (
+                (w <= 86 and h <= 44 and fill_ratio >= 0.08) or
+                (w <= 56 and h <= 30 and fill_ratio >= 0.06)
+            )
+            # Header/title fragments can be slightly larger and wider.
+            header_text_like = (
+                y <= header_cut and
+                w <= max(96, int(w_img * 0.14)) and
+                h <= max(44, int(h_img * 0.06)) and
+                fill_ratio >= 0.05
+            )
+            if not (compact_text_like or header_text_like):
                 continue
             x0 = max(0, x - 1)
             y0 = max(0, y - 1)
@@ -3900,7 +5036,9 @@ class FormAlchemistEngine:
             mask[y0:y1, x0:x1] = 255
             comp_count += 1
         if comp_count > 0:
+            # Light horizontal support helps catch adjacent word fragments without spilling too far.
             mask = cv2.dilate(mask, np.ones((3, 3), np.uint8), iterations=1)
+            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((5, 3), np.uint8), iterations=1)
         return mask, {"header_cut": int(header_cut), "component_count": int(comp_count)}
 
     def rect_text_overlap_ratio(self, rect, text_mask, preview_zoom=1.0):
@@ -3922,6 +5060,25 @@ class FormAlchemistEngine:
             return 0.0
         return float(cv2.countNonZero(roi)) / float(max(roi.size, 1))
 
+    def _expanded_text_overlap_ratio(self, rect, text_mask, preview_zoom=1.0, pad_px=4):
+        if text_mask is None:
+            return 0.0
+        try:
+            rect = rect if isinstance(rect, fitz.Rect) else fitz.Rect(*rect)
+        except Exception:
+            return 0.0
+        h_img, w_img = text_mask.shape[:2]
+        x0 = max(0, min(w_img, int(math.floor(rect.x0 * float(preview_zoom))) - int(max(0, pad_px))))
+        y0 = max(0, min(h_img, int(math.floor(rect.y0 * float(preview_zoom))) - int(max(0, pad_px))))
+        x1 = max(0, min(w_img, int(math.ceil(rect.x1 * float(preview_zoom))) + int(max(0, pad_px))))
+        y1 = max(0, min(h_img, int(math.ceil(rect.y1 * float(preview_zoom))) + int(max(0, pad_px))))
+        if x1 <= x0 or y1 <= y0:
+            return 0.0
+        roi = text_mask[y0:y1, x0:x1]
+        if roi.size <= 0:
+            return 0.0
+        return float(cv2.countNonZero(roi)) / float(max(roi.size, 1))
+
     def should_suppress_text_like_rect(self, rect, text_mask=None, preview_zoom=1.0, header_cut=0, overlap_thresh=0.18):
         if text_mask is None:
             return False
@@ -3930,17 +5087,323 @@ class FormAlchemistEngine:
         except Exception:
             return False
         overlap = self.rect_text_overlap_ratio(rect, text_mask, preview_zoom=preview_zoom)
-        if overlap < float(overlap_thresh):
+        halo_overlap = self._expanded_text_overlap_ratio(
+            rect,
+            text_mask,
+            preview_zoom=preview_zoom,
+            pad_px=max(4, int(min(max(rect.width * float(preview_zoom), 1.0), max(rect.height * float(preview_zoom), 1.0)) * 0.25))
+        )
+        if overlap < float(overlap_thresh) and halo_overlap < max(0.20, float(overlap_thresh) + 0.06):
             return False
         w_px = float(max(rect.width, 0.0)) * float(preview_zoom)
         h_px = float(max(rect.height, 0.0)) * float(preview_zoom)
         y0_px = float(rect.y0) * float(preview_zoom)
+        area_px = w_px * h_px
         smallish = (w_px <= 180.0 and h_px <= 88.0)
         tiny = (w_px <= 96.0 and h_px <= 62.0)
-        header_like = (y0_px <= float(max(header_cut, 0)) + 8.0)
-        if header_like and tiny and overlap >= max(0.12, float(overlap_thresh) * 0.85):
+        glyphish = (w_px <= 56.0 and h_px <= 44.0)
+        header_like = (y0_px <= float(max(header_cut, 0)) + 10.0)
+        if header_like and tiny and (overlap >= max(0.10, float(overlap_thresh) * 0.80) or halo_overlap >= 0.22):
             return True
-        if smallish and overlap >= max(0.34, float(overlap_thresh) + 0.14):
+        if glyphish and (overlap >= max(0.14, float(overlap_thresh) * 0.88) or halo_overlap >= 0.28):
+            return True
+        if smallish and area_px <= 6400.0 and (overlap >= max(0.32, float(overlap_thresh) + 0.12) or halo_overlap >= 0.36):
+            return True
+        return False
+
+    def _expanded_text_overlap_ratio(self, rect, text_mask=None, preview_zoom=1.0, pad_px=6):
+        if text_mask is None:
+            return 0.0
+        try:
+            rect = rect if isinstance(rect, fitz.Rect) else fitz.Rect(*rect)
+        except Exception:
+            return 0.0
+        try:
+            h_img, w_img = text_mask.shape[:2]
+        except Exception:
+            return 0.0
+        x0 = max(0, min(w_img, int(math.floor(rect.x0 * float(preview_zoom))) - int(max(0, pad_px))))
+        y0 = max(0, min(h_img, int(math.floor(rect.y0 * float(preview_zoom))) - int(max(0, pad_px))))
+        x1 = max(0, min(w_img, int(math.ceil(rect.x1 * float(preview_zoom))) + int(max(0, pad_px))))
+        y1 = max(0, min(h_img, int(math.ceil(rect.y1 * float(preview_zoom))) + int(max(0, pad_px))))
+        if x1 <= x0 or y1 <= y0:
+            return 0.0
+        roi = text_mask[y0:y1, x0:x1]
+        if roi.size <= 0:
+            return 0.0
+        return float(cv2.countNonZero(roi)) / float(max(roi.size, 1))
+
+    def _strict_title_cut_px(self, header_cut=0):
+        try:
+            header_cut = float(header_cut or 0.0)
+        except Exception:
+            header_cut = 0.0
+        # The previous logic used the full header_cut from the text-mask pass,
+        # which is ~16% of the page and can reach real controls on tall forms.
+        # Keep this much shallower so only the actual title/title-subtitle band is affected.
+        return float(max(26.0, min(58.0, (header_cut * 0.36) + 6.0)))
+
+    def should_reject_header_word_field_artifact(self, rect, text_mask=None, preview_zoom=1.0, header_cut=0):
+        if text_mask is None:
+            return False
+        try:
+            rect = rect if isinstance(rect, fitz.Rect) else fitz.Rect(*rect)
+        except Exception:
+            return False
+        w_px = float(max(rect.width, 0.0)) * float(preview_zoom)
+        h_px = float(max(rect.height, 0.0)) * float(preview_zoom)
+        y0_px = float(rect.y0) * float(preview_zoom)
+        title_cut_px = self._strict_title_cut_px(header_cut)
+        # Ultra-narrow scope: only tiny field-like boxes in the actual title band.
+        if y0_px > title_cut_px:
+            return False
+        if w_px > 54.0 or h_px > 54.0:
+            return False
+        overlap = self.rect_text_overlap_ratio(rect, text_mask, preview_zoom=preview_zoom)
+        halo = self._expanded_text_overlap_ratio(rect, text_mask, preview_zoom=preview_zoom, pad_px=8)
+        if overlap >= 0.22:
+            return True
+        if halo >= 0.34:
+            return True
+        if (w_px <= 38.0 and h_px <= 42.0) and (overlap >= 0.14 or halo >= 0.26):
+            return True
+        return False
+
+
+    def _pdf_character_regions_for_page(self, page_idx, pad_x=0.35, pad_y=0.40):
+        regions = []
+        if not self.pdf_path or not os.path.exists(self.pdf_path):
+            return regions
+        if not FITZ_AVAILABLE:
+            return regions
+        try:
+            with fitz.open(self.pdf_path) as doc:
+                total = len(doc)
+                if total <= 0:
+                    return regions
+                page_idx = max(0, min(int(page_idx or 0), total - 1))
+                page = doc.load_page(page_idx)
+                page_h = float(getattr(page.rect, "height", 0.0) or 0.0)
+
+                # Preferred path: real character boxes from the PDF text layer.
+                try:
+                    raw = page.get_text("rawdict") or {}
+                    char_regions = []
+                    for block in list(raw.get("blocks", []) or []):
+                        if int(block.get("type", 0) or 0) != 0:
+                            continue
+                        for line in list(block.get("lines", []) or []):
+                            for span in list(line.get("spans", []) or []):
+                                for ch in list(span.get("chars", []) or []):
+                                    c = str(ch.get("c", "") or "")
+                                    if not c or not c.strip():
+                                        continue
+                                    bbox = ch.get("bbox")
+                                    if not bbox or len(bbox) < 4:
+                                        continue
+                                    x0, y0, x1, y1 = [float(v) for v in bbox[:4]]
+                                    w = max(0.0, x1 - x0)
+                                    h = max(0.0, y1 - y0)
+                                    if w <= 0.08 or h <= 0.08:
+                                        continue
+                                    if w > 24.0 or h > 28.0:
+                                        continue
+
+                                    # Safer tweak: only enlarge header/title characters a bit more.
+                                    is_header_char = bool(page_h > 0.0 and ((y0 + y1) * 0.5) <= (page_h * 0.18))
+                                    use_pad_x = float(pad_x)
+                                    use_pad_y = float(pad_y)
+                                    if is_header_char:
+                                        use_pad_x = max(use_pad_x, 0.70)
+                                        use_pad_y = max(use_pad_y, 0.55)
+
+                                    char_regions.append(
+                                        fitz.Rect(
+                                            max(0.0, x0 - use_pad_x),
+                                            max(0.0, y0 - use_pad_y),
+                                            x1 + use_pad_x,
+                                            y1 + use_pad_y,
+                                        )
+                                    )
+                    if char_regions:
+                        return char_regions
+                except Exception:
+                    pass
+
+                # Fallback: estimate per-character slots from word boxes.
+                words = page.get_text("words") or []
+        except Exception:
+            return regions
+
+        for word in words:
+            try:
+                x0, y0, x1, y1 = float(word[0]), float(word[1]), float(word[2]), float(word[3])
+                txt = str(word[4] if len(word) > 4 else "")
+            except Exception:
+                continue
+            txt = txt or ""
+            stripped = txt.strip()
+            if not stripped:
+                continue
+
+            chars = [ch for ch in stripped]
+            n = len(chars)
+            if n <= 0:
+                continue
+
+            w = max(0.0, x1 - x0)
+            h = max(0.0, y1 - y0)
+            if w <= 0.2 or h <= 0.2:
+                continue
+            if w > 220.0 or h > 40.0:
+                continue
+
+            char_w = w / float(max(n, 1))
+            if char_w <= 0.10:
+                continue
+
+            # Slight extra padding only for fallback header words.
+            is_header_word = bool(((y0 + y1) * 0.5) <= 32.0)
+            use_pad_x = max(float(pad_x), 0.55 if is_header_word else float(pad_x))
+            use_pad_y = max(float(pad_y), 0.50 if is_header_word else float(pad_y))
+
+            for i, ch in enumerate(chars):
+                if not str(ch).strip():
+                    continue
+                cx0 = x0 + (i * char_w)
+                cx1 = x0 + ((i + 1) * char_w)
+                regions.append(
+                    fitz.Rect(
+                        max(0.0, cx0 - use_pad_x),
+                        max(0.0, y0 - use_pad_y),
+                        cx1 + use_pad_x,
+                        y1 + use_pad_y,
+                    )
+                )
+        return regions
+
+    def _remove_detections_inside_pdf_character_regions(self, page_idx, char_regions=None, text_mask=None, preview_zoom=1.0, header_cut=0):
+        char_regions = [fitz.Rect(r) for r in (char_regions or [])]
+        if not char_regions or not getattr(self, "all_boxes", None):
+            return 0
+
+        remove_ids = set()
+        for idx, (rect, kind) in enumerate(zip(list(self.all_boxes or []), list(self.box_types or []))):
+            try:
+                rr = rect if isinstance(rect, fitz.Rect) else fitz.Rect(*rect)
+            except Exception:
+                continue
+            kind = str(kind or "")
+            w = float(max(rr.width, 0.0))
+            h = float(max(rr.height, 0.0))
+            area = w * h
+
+            # Still safely below real form controls, but a bit wider now that actual char boxes are preferred.
+            if kind == "check":
+                if w > 18.0 or h > 18.0 or area > 190.0:
+                    continue
+            elif kind == "field":
+                if w > 20.0 or h > 15.0 or area > 220.0:
+                    continue
+            elif kind == "line":
+                if w > 40.0 or h > 7.5:
+                    continue
+            else:
+                continue
+
+            cy_px = float((rr.y0 + rr.y1) * 0.5) * float(preview_zoom)
+            title_cut_px = self._strict_title_cut_px(header_cut)
+            # Safety: only suppress actual title/header artifacts, never body detections like real form checkboxes.
+            if cy_px > title_cut_px:
+                continue
+
+            overlap = 0.0
+            halo = 0.0
+            if text_mask is not None:
+                try:
+                    overlap = float(self.rect_text_overlap_ratio(rr, text_mask, preview_zoom=preview_zoom) or 0.0)
+                except Exception:
+                    overlap = 0.0
+                try:
+                    halo = float(self._expanded_text_overlap_ratio(rr, text_mask, preview_zoom=preview_zoom, pad_px=5) or 0.0)
+                except Exception:
+                    halo = overlap
+
+            # Require some actual rendered-text evidence.
+            if overlap < 0.06 and halo < 0.16:
+                continue
+
+            rcx = (rr.x0 + rr.x1) * 0.5
+            rcy = (rr.y0 + rr.y1) * 0.5
+            r_area = max(area, 1e-6)
+
+            best_ioa = 0.0
+            center_in_char = False
+            for cr in char_regions:
+                inter = _rect_intersection_area(rr, cr)
+                ioa = inter / r_area if r_area > 0 else 0.0
+                if ioa > best_ioa:
+                    best_ioa = ioa
+                if cr.x0 <= rcx <= cr.x1 and cr.y0 <= rcy <= cr.y1:
+                    center_in_char = True
+
+            # Character-slot method: center inside a char slot is the main signal.
+            micro_tiny = (
+                (kind == "check" and w <= 10.5 and h <= 10.5 and area <= 82.0) or
+                (kind == "field" and w <= 12.0 and h <= 9.0 and area <= 96.0) or
+                (kind == "line" and w <= 20.0 and h <= 4.0)
+            )
+
+            if center_in_char:
+                if kind == "line":
+                    if best_ioa >= (0.10 if micro_tiny else 0.14):
+                        remove_ids.add(int(idx))
+                else:
+                    if best_ioa >= (0.05 if micro_tiny else 0.09):
+                        remove_ids.add(int(idx))
+            elif best_ioa >= (0.68 if micro_tiny else 0.80):
+                remove_ids.add(int(idx))
+
+        if not remove_ids:
+            return 0
+
+        keep_boxes, keep_types = [], []
+        removed = 0
+        for idx, (rect, kind) in enumerate(zip(self.all_boxes, self.box_types)):
+            if idx in remove_ids:
+                removed += 1
+                continue
+            keep_boxes.append(rect)
+            keep_types.append(kind)
+        self.all_boxes = keep_boxes
+        self.box_types = keep_types
+        return int(removed)
+    def should_reject_header_word_check_artifact(self, rect, text_mask=None, preview_zoom=1.0, header_cut=0):
+        if text_mask is None:
+            return False
+        try:
+            rect = rect if isinstance(rect, fitz.Rect) else fitz.Rect(*rect)
+        except Exception:
+            return False
+        w_px = float(max(rect.width, 0.0)) * float(preview_zoom)
+        h_px = float(max(rect.height, 0.0)) * float(preview_zoom)
+        y0_px = float(rect.y0) * float(preview_zoom)
+        title_cut_px = self._strict_title_cut_px(header_cut)
+        # Very narrow scope: only tiny checkbox-like detections in the actual title band.
+        if y0_px > title_cut_px:
+            return False
+        if w_px > 30.0 or h_px > 30.0:
+            return False
+        overlap = self.rect_text_overlap_ratio(rect, text_mask, preview_zoom=preview_zoom)
+        halo = self._expanded_text_overlap_ratio(rect, text_mask, preview_zoom=preview_zoom, pad_px=7)
+        aspect = w_px / max(h_px, 1e-6)
+        if not (0.60 <= aspect <= 1.55):
+            return False
+        if overlap >= 0.18:
+            return True
+        if halo >= 0.32:
+            return True
+        if (w_px <= 24.0 and h_px <= 24.0) and (overlap >= 0.10 or halo >= 0.22):
             return True
         return False
 
@@ -4571,6 +6034,8 @@ class FormAlchemistEngine:
             img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
 
         h_img, w_img = img.shape[:2]
+        text_like_mask, text_like_meta = self.build_text_like_mask(img)
+        header_cut = int((text_like_meta or {}).get("header_cut", max(8, h_img * 0.16)) or 0)
 
         field_area_thresh = int(self.settings["F_Area"])
         field_min_w_val = int(self.settings["F_MinW"])
@@ -4602,8 +6067,6 @@ class FormAlchemistEngine:
         # --- General detection
         full_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         base_bin = cv2.threshold(full_gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
-        text_like_mask, text_like_meta = self.build_text_like_mask(img)
-        header_cut = int((text_like_meta or {}).get('header_cut', 0) or 0)
 
         bin_checks = base_bin.copy()
         if red_close_k > 0:
@@ -4642,8 +6105,6 @@ class FormAlchemistEngine:
             max_line_w=line_max_w_val
         )
         for lr in line_rects:
-            if self.should_suppress_text_like_rect(lr, text_like_mask, preview_zoom=ZOOM, header_cut=header_cut, overlap_thresh=0.16):
-                continue
             self.all_boxes.append(lr)
             self.box_types.append("line")
 
@@ -4661,7 +6122,7 @@ class FormAlchemistEngine:
             eps=max(0.04, float(red_eps_val))
         )
         for rr in red_color_boxes:
-            if self.should_suppress_text_like_rect(rr, text_like_mask, preview_zoom=ZOOM, header_cut=header_cut, overlap_thresh=0.22):
+            if self.should_reject_header_word_check_artifact(rr, text_like_mask, preview_zoom=ZOOM, header_cut=header_cut):
                 continue
             self._append_box_unique(rr, "check", iou_thresh=0.45)
 
@@ -4682,11 +6143,11 @@ class FormAlchemistEngine:
                 0.68 <= aspect <= 1.45
             ):
                 if self.looks_like_checkbox(bin_checks, x, y, w, h, area):
-                    rect = fitz.Rect(x / ZOOM, y / ZOOM, (x + w) / ZOOM, (y + h) / ZOOM)
-                    if self.should_suppress_text_like_rect(rect, text_like_mask, preview_zoom=ZOOM, header_cut=header_cut, overlap_thresh=0.22):
+                    candidate_rect = fitz.Rect(x / ZOOM, y / ZOOM, (x + w) / ZOOM, (y + h) / ZOOM)
+                    if self.should_reject_header_word_check_artifact(candidate_rect, text_like_mask, preview_zoom=ZOOM, header_cut=header_cut):
                         continue
                     self._append_box_unique(
-                        rect,
+                        candidate_rect,
                         "check",
                         iou_thresh=0.45
                     )
@@ -4697,11 +6158,11 @@ class FormAlchemistEngine:
                 0.55 <= aspect <= 1.75
             ):
                 for fx, fy, fw, fh in self.find_checkbox_rects_in_roi(bin_checks, x, y, w, h):
-                        rect = fitz.Rect(fx / ZOOM, fy / ZOOM, (fx + fw) / ZOOM, (fy + fh) / ZOOM)
-                        if self.should_suppress_text_like_rect(rect, text_like_mask, preview_zoom=ZOOM, header_cut=header_cut, overlap_thresh=0.22):
-                            continue
-                        self._append_box_unique(
-                            rect,
+                    candidate_rect = fitz.Rect(fx / ZOOM, fy / ZOOM, (fx + fw) / ZOOM, (fy + fh) / ZOOM)
+                    if self.should_reject_header_word_check_artifact(candidate_rect, text_like_mask, preview_zoom=ZOOM, header_cut=header_cut):
+                        continue
+                    self._append_box_unique(
+                        candidate_rect,
                             "check",
                             iou_thresh=0.45
                         )
@@ -4712,22 +6173,22 @@ class FormAlchemistEngine:
                 0.60 <= aspect <= 1.60
             ):
                 for fx, fy, fw, fh in self.find_checkbox_rects_in_roi(bin_checks, x, y, w, h):
-                        rect = fitz.Rect(fx / ZOOM, fy / ZOOM, (fx + fw) / ZOOM, (fy + fh) / ZOOM)
-                        if self.should_suppress_text_like_rect(rect, text_like_mask, preview_zoom=ZOOM, header_cut=header_cut, overlap_thresh=0.22):
-                            continue
-                        self._append_box_unique(
-                            rect,
+                    candidate_rect = fitz.Rect(fx / ZOOM, fy / ZOOM, (fx + fw) / ZOOM, (fy + fh) / ZOOM)
+                    if self.should_reject_header_word_check_artifact(candidate_rect, text_like_mask, preview_zoom=ZOOM, header_cut=header_cut):
+                        continue
+                    self._append_box_unique(
+                        candidate_rect,
                             "check",
                             iou_thresh=0.45
                         )
 
             elif max(w, h) <= int(red_roi_max_val) and min(w, h) >= checkbox_min_sz:
                 for fx, fy, fw, fh in self.find_checkbox_rects_in_roi(bin_checks, x, y, w, h):
-                        rect = fitz.Rect(fx / ZOOM, fy / ZOOM, (fx + fw) / ZOOM, (fy + fh) / ZOOM)
-                        if self.should_suppress_text_like_rect(rect, text_like_mask, preview_zoom=ZOOM, header_cut=header_cut, overlap_thresh=0.22):
-                            continue
-                        self._append_box_unique(
-                            rect,
+                    candidate_rect = fitz.Rect(fx / ZOOM, fy / ZOOM, (fx + fw) / ZOOM, (fy + fh) / ZOOM)
+                    if self.should_reject_header_word_check_artifact(candidate_rect, text_like_mask, preview_zoom=ZOOM, header_cut=header_cut):
+                        continue
+                    self._append_box_unique(
+                        candidate_rect,
                             "check",
                             iou_thresh=0.45
                         )
@@ -4756,13 +6217,20 @@ class FormAlchemistEngine:
                 pad_px=2
             )
 
-            if self.should_suppress_text_like_rect(refined_rect, text_like_mask, preview_zoom=ZOOM, header_cut=header_cut, overlap_thresh=0.16):
+            if self.should_reject_header_word_field_artifact(refined_rect, text_like_mask, preview_zoom=ZOOM, header_cut=header_cut):
                 continue
             self.all_boxes.append(refined_rect)
             self.box_types.append("field")
 
         self._cleanup_field_fragments()
         self._cleanup_line_field_conflicts()
+        self._remove_detections_inside_pdf_character_regions(
+            page_idx,
+            char_regions=self._pdf_character_regions_for_page(page_idx),
+            text_mask=text_like_mask,
+            preview_zoom=ZOOM,
+            header_cut=header_cut,
+        )
         self.detected_page_idx = int(page_idx)
         self.detected_settings_signature = self._settings_signature()
         self._cache_detection_for_page(page_idx)
@@ -6255,6 +7723,7 @@ class FormAlchemistEngine:
 
             "custom_mappings": mappings_serial,
             "area_templates": self._serialize_area_templates(),
+            "repair_patches": self._serialize_repair_patches(),
         }
 
     def apply_config(self, cfg):
@@ -6343,6 +7812,7 @@ class FormAlchemistEngine:
         self.geom_by_page = {}
         self.semantic_targets_by_page = {}
         self._deserialize_area_templates(cfg.get("area_templates", {}))
+        self._deserialize_repair_patches(cfg.get("repair_patches", {}))
 
     def merge_config_into_current(self, incoming_cfg, keep_current_detection=True, prefer="incoming"):
         current_cfg = self.collect_config()
@@ -6931,6 +8401,7 @@ class InteractivePreview(Image):
         self.display_scale = 1.0
         self.capture_rect_payload = None
         self.capture_split_rects_payload = []
+        self.capture_path_payload = []
         self.capture_points_payload = []
         self._active_touches = {}
         self._touch_refs = {}
@@ -6980,15 +8451,17 @@ class InteractivePreview(Image):
         self.selected_ids = set(selected_ids or [])
         self._redraw_overlay()
 
-    def set_capture_guides(self, capture_rect=None, guide_rects=None, guide_points=None):
+    def set_capture_guides(self, capture_rect=None, guide_rects=None, guide_paths=None, guide_points=None):
         self.capture_rect_payload = dict(capture_rect or {}) if isinstance(capture_rect, dict) else capture_rect
         self.capture_split_rects_payload = [dict(r) if isinstance(r, dict) else r for r in (guide_rects or [])]
+        self.capture_path_payload = [list(p) for p in (guide_paths or []) if isinstance(p, (list, tuple))]
         self.capture_points_payload = list(guide_points or [])
         self._redraw_overlay()
 
     def clear_capture_guides(self):
         self.capture_rect_payload = None
         self.capture_split_rects_payload = []
+        self.capture_path_payload = []
         self.capture_points_payload = []
         self._redraw_overlay()
 
@@ -7230,6 +8703,21 @@ class InteractivePreview(Image):
                 _draw_pdf_rect(capture_rect, (0.20, 0.90, 1.00, 0.95), width=2.6)
             for rect_payload in (getattr(self, 'capture_split_rects_payload', []) or []):
                 _draw_pdf_rect(rect_payload, (0.15, 1.00, 0.38, 0.92), width=2.2)
+            for path_payload in (getattr(self, 'capture_path_payload', []) or []):
+                pts = []
+                for pt in (path_payload or []):
+                    if not isinstance(pt, (list, tuple)) or len(pt) < 2:
+                        continue
+                    try:
+                        img_x = float(pt[0]); img_y = float(pt[1])
+                    except Exception:
+                        continue
+                    px = dx + img_x * sx
+                    py = dy + (tex.height - img_y) * sy
+                    pts.extend([px, py])
+                if len(pts) >= 4:
+                    Color(1.00, 0.58, 0.12, 0.98)
+                    Line(points=pts, width=2.4, close=True)
             for point in (getattr(self, 'capture_points_payload', []) or []):
                 if not isinstance(point, (list, tuple)) or len(point) < 2:
                     continue
@@ -7296,6 +8784,19 @@ class InteractivePreview(Image):
         fresh.append((now, float(x), float(y)))
         self._recent_taps = fresh[-3:]
         return len(self._recent_taps)
+
+    def _should_block_box_double_tap(self):
+        try:
+            app = App.get_running_app()
+        except Exception:
+            app = None
+        if app is None:
+            return False
+        try:
+            return bool(getattr(app, "ui_mobile", False)) and bool(getattr(app, "mobile_select_mode", False))
+        except Exception:
+            return False
+
 
     def _begin_android_pinch(self):
         if len(self._active_touches) < 2:
@@ -7370,6 +8871,11 @@ class InteractivePreview(Image):
             tap_count = self._register_tap(touch.x, touch.y)
 
             if hit is not None and tap_count >= 2:
+                if self._should_block_box_double_tap():
+                    if callable(self.box_tap_callback):
+                        self.box_tap_callback(hit)
+                    self._recent_taps = []
+                    return True
                 if callable(self.box_double_tap_callback):
                     self.box_double_tap_callback(hit)
                     self._recent_taps = []
@@ -7519,6 +9025,12 @@ class InteractivePreview(Image):
                         self._set_pointed_box(hit, notify=True)
                         return True
                 if hit is not None and tap_count >= 2:
+                    if self._should_block_box_double_tap():
+                        if callable(self.box_tap_callback):
+                            self.box_tap_callback(hit)
+                        self._recent_taps = []
+                        self._set_pointed_box(hit, notify=True)
+                        return True
                     if callable(self.box_double_tap_callback):
                         self.box_double_tap_callback(hit)
                         self._recent_taps = []
@@ -7582,6 +9094,12 @@ class InteractivePreview(Image):
                         self._set_pointed_box(hit, notify=True)
                         return True
                 if hit is not None and tap_count >= 2:
+                    if self._should_block_box_double_tap():
+                        if callable(self.box_tap_callback):
+                            self.box_tap_callback(hit)
+                        self._recent_taps = []
+                        self._set_pointed_box(hit, notify=True)
+                        return True
                     if callable(self.box_double_tap_callback):
                         self.box_double_tap_callback(hit)
                         self._recent_taps = []
@@ -7909,6 +9427,9 @@ class FormAlchemistApp(MDApp):
         self._capture_points = []
         self._capture_preview_rect = None
         self._capture_split_preview = []
+        self._capture_outline_preview = []
+        self._capture_shape_candidates = []
+        self._capture_shape_candidate_index = 0
         self._capture_active_template = None
         self.text_tuning_ui = self.engine._normalized_text_tuning(getattr(self.engine, "text_tuning", None))
 
@@ -12737,6 +14258,32 @@ class FormAlchemistApp(MDApp):
         except Exception:
             pass
         try:
+            remove_rects = []
+            remove_types = []
+            for rem_idx in selected_remove_indices:
+                if 0 <= rem_idx < len(removal_candidates):
+                    item = removal_candidates[rem_idx]
+                    rect = item.get('rect') if isinstance(item, dict) else None
+                    kind = str(item.get('kind', 'field') if isinstance(item, dict) else 'field')
+                    if rect is None:
+                        continue
+                    try:
+                        remove_rects.append(rect if isinstance(rect, fitz.Rect) else fitz.Rect(*rect))
+                        remove_types.append(kind)
+                    except Exception:
+                        continue
+            engine.save_repair_patch(
+                page_idx=page_idx,
+                anchor_rects=[r for r, _ in anchor_refs],
+                zone_rect=proposal.get('zone_rect'),
+                add_rects=[r for r, _ in added_rects],
+                add_types=[k for _, k in added_rects],
+                remove_rects=remove_rects,
+                remove_types=remove_types,
+            )
+        except Exception:
+            pass
+        try:
             engine.record_candidate_review_batch(page_idx=page_idx, anchor_ids=anchor_ids, zone_rect=proposal.get('zone_rect'), reviewed_items=reviewed_decisions, source='repair_apply')
         except Exception:
             pass
@@ -12746,7 +14293,7 @@ class FormAlchemistApp(MDApp):
             except Exception:
                 pass
         self._render_session_page(page_idx=page_idx, reason=f"Repair applied ({added_count} adds / {len(removed_ids)} removals)")
-        self.set_status(f"Repair applied: {added_count} addition{'s' if added_count != 1 else ''}, {len(removed_ids)} removal{'s' if len(removed_ids) != 1 else ''}. Candidate decisions were logged for learning.", kind='action', hold_seconds=3.0, force=True)
+        self.set_status(f"Repair applied: {added_count} addition{'s' if added_count != 1 else ''}, {len(removed_ids)} removal{'s' if len(removed_ids) != 1 else ''}. Candidate decisions were logged for learning and saved to carry into the next Find.", kind='action', hold_seconds=3.0, force=True)
 
     def _open_mobile_repair_analysis_popup(self, proposal):
         if not isinstance(proposal, dict):
@@ -13056,6 +14603,9 @@ class FormAlchemistApp(MDApp):
         self._capture_points = []
         self._capture_preview_rect = None
         self._capture_split_preview = []
+        self._capture_outline_preview = []
+        self._capture_shape_candidates = []
+        self._capture_shape_candidate_index = 0
         self._capture_active_template = None
         if not preserve_mode:
             self._capture_mode_active = False
@@ -13089,7 +14639,7 @@ class FormAlchemistApp(MDApp):
             except Exception:
                 continue
             guide_rects.append({'pdf_x': float(rect.x0), 'pdf_y': float(rect.y0), 'pdf_w': float(rect.width), 'pdf_h': float(rect.height)})
-        preview.set_capture_guides(capture_rect=capture_rect, guide_rects=guide_rects, guide_points=list(getattr(self, '_capture_points', []) or []))
+        preview.set_capture_guides(capture_rect=capture_rect, guide_rects=guide_rects, guide_paths=list(getattr(self, '_capture_outline_preview', []) or []), guide_points=list(getattr(self, '_capture_points', []) or []))
 
     def _toggle_manual_area_capture_mode(self, *_):
         if bool(getattr(self, '_capture_mode_active', False)):
@@ -13107,6 +14657,9 @@ class FormAlchemistApp(MDApp):
         self._capture_points = []
         self._capture_preview_rect = None
         self._capture_split_preview = []
+        self._capture_outline_preview = []
+        self._capture_shape_candidates = []
+        self._capture_shape_candidate_index = 0
         self._capture_active_template = None
         self._refresh_manual_capture_overlay()
         self._update_capture_button_state()
@@ -13136,6 +14689,31 @@ class FormAlchemistApp(MDApp):
             return False
         if img_pt is None:
             return True
+        if len(getattr(self, '_capture_points', []) or []) >= 2 and bool(getattr(self, '_capture_shape_candidates', []) or []):
+            try:
+                if self._pick_capture_shape_candidate_at_point(img_pt):
+                    try:
+                        self.set_status('Trace selected. Opening actions...')
+                    except Exception:
+                        pass
+                    Clock.schedule_once(lambda dt: self._open_manual_area_capture_confirm_popup(), 0)
+                    return True
+            except Exception:
+                pass
+            try:
+                preview_rect = getattr(self, '_capture_preview_rect', None)
+                if preview_rect is not None:
+                    rr = preview_rect if isinstance(preview_rect, fitz.Rect) else fitz.Rect(preview_rect)
+                    px = float(img_pt[0]); py = float(img_pt[1])
+                    if rr.x0 <= px <= rr.x1 and rr.y0 <= py <= rr.y1:
+                        try:
+                            self.set_status('Using current trace selection. Opening actions...')
+                        except Exception:
+                            pass
+                        Clock.schedule_once(lambda dt: self._open_manual_area_capture_confirm_popup(), 0)
+                        return True
+            except Exception:
+                pass
         page_idx = self.current_page_idx()
         if int(getattr(self, '_capture_page_idx', page_idx)) != int(page_idx):
             self._clear_manual_capture_preview(preserve_mode=False)
@@ -13162,20 +14740,138 @@ class FormAlchemistApp(MDApp):
         self._capture_points = [p1, p2]
         self._capture_preview_rect = rect
         analysis = None
+        shape_candidates = []
         try:
-            analysis = self.engine.analyze_manual_area_template(page_idx, rect)
+            shape_candidates = list(self.engine.extract_shape_candidates_from_roi(page_idx, rect, max_candidates=8) or [])
         except Exception:
-            analysis = None
+            shape_candidates = []
+        self._capture_shape_candidates = list(shape_candidates or [])
+        self._capture_shape_candidate_index = 0
+        if shape_candidates:
+            try:
+                analysis = self.engine.build_shape_template_analysis(page_idx, rect, shape_candidates[0])
+            except Exception:
+                analysis = None
+        if analysis is None:
+            try:
+                analysis = self.engine.analyze_manual_area_template(page_idx, rect)
+            except Exception:
+                analysis = None
         if analysis is not None:
             self._capture_split_preview = [fitz.Rect(r) for r in (analysis.get('resolved_rects', []) or [])]
             self._capture_active_template = analysis
+            shape_template = dict(analysis.get('shape_template', {}) or {})
+            if shape_template:
+                self._capture_outline_preview = [self.engine._shape_template_preview_path(shape_template, preview_zoom=getattr(self, '_last_preview_render_zoom', PREVIEW_SCALE))]
+            else:
+                self._capture_outline_preview = []
         else:
             self._capture_split_preview = []
+            self._capture_outline_preview = []
             self._capture_active_template = None
         self._refresh_manual_capture_overlay()
-        self.set_status('Captured area ready. Review the preview rectangle.')
-        Clock.schedule_once(lambda dt: self._open_manual_area_capture_confirm_popup(), 0)
+        if shape_candidates:
+            self.set_status('Captured area ready. Tap an orange outline to choose it, or tap inside the ROI to continue with the current trace.')
+        else:
+            self.set_status('Captured area ready. Review the template actions.')
+            Clock.schedule_once(lambda dt: self._open_manual_area_capture_confirm_popup(), 0)
         return True
+
+    def _capture_shape_candidate_hit_index(self, img_pt):
+        candidates = list(getattr(self, '_capture_shape_candidates', []) or [])
+        if not candidates or img_pt is None:
+            return -1
+        try:
+            px = float(img_pt[0]); py = float(img_pt[1])
+        except Exception:
+            return -1
+        best_idx = -1
+        best_dist = 1e18
+        for idx, cand in enumerate(candidates):
+            pts = list((cand or {}).get('pdf_points', []) or [])
+            if pts:
+                poly = []
+                for pt in pts:
+                    if not isinstance(pt, (list, tuple)) or len(pt) < 2:
+                        continue
+                    try:
+                        poly.append([float(pt[0]) * float(getattr(self, '_last_preview_render_zoom', PREVIEW_SCALE) or PREVIEW_SCALE), float(pt[1]) * float(getattr(self, '_last_preview_render_zoom', PREVIEW_SCALE) or PREVIEW_SCALE)])
+                    except Exception:
+                        continue
+                if len(poly) >= 3:
+                    try:
+                        arr = np.array(poly, dtype=np.float32)
+                        inside = cv2.pointPolygonTest(arr, (px, py), False)
+                        if inside >= 0:
+                            return int(idx)
+                        dist = abs(float(cv2.pointPolygonTest(arr, (px, py), True)))
+                    except Exception:
+                        dist = 1e18
+                else:
+                    dist = 1e18
+            else:
+                try:
+                    rr = fitz.Rect((cand or {}).get('bbox_rect'))
+                    z = float(getattr(self, '_last_preview_render_zoom', PREVIEW_SCALE) or PREVIEW_SCALE)
+                    x0 = rr.x0 * z; y0 = rr.y0 * z; x1 = rr.x1 * z; y1 = rr.y1 * z
+                    if x0 <= px <= x1 and y0 <= py <= y1:
+                        return int(idx)
+                    cx = (x0 + x1) * 0.5; cy = (y0 + y1) * 0.5
+                    dist = math.hypot(px - cx, py - cy)
+                except Exception:
+                    dist = 1e18
+            if dist < best_dist:
+                best_dist = dist
+                best_idx = int(idx)
+        if best_dist <= float(dp(28)):
+            return best_idx
+        return -1
+
+    def _pick_capture_shape_candidate_at_point(self, img_pt):
+        hit_idx = self._capture_shape_candidate_hit_index(img_pt)
+        if hit_idx < 0:
+            return False
+        self._capture_shape_candidate_index = int(hit_idx)
+        candidates = list(getattr(self, '_capture_shape_candidates', []) or [])
+        rect = getattr(self, '_capture_preview_rect', None)
+        page_idx = int(getattr(self, '_capture_page_idx', self.current_page_idx()) or self.current_page_idx())
+        if hit_idx >= len(candidates):
+            return False
+        analysis = self.engine.build_shape_template_analysis(page_idx, rect, dict(candidates[hit_idx] or {})) or {}
+        self._capture_active_template = dict(analysis or {})
+        self._capture_split_preview = [fitz.Rect(r) for r in (analysis.get('resolved_rects', []) or [])]
+        shape_template = dict(analysis.get('shape_template', {}) or {})
+        self._capture_outline_preview = [self.engine._shape_template_preview_path(shape_template, preview_zoom=getattr(self, '_last_preview_render_zoom', PREVIEW_SCALE))] if shape_template else []
+        self._refresh_manual_capture_overlay()
+        cb = getattr(self, '_capture_popup_summary_updater', None)
+        if callable(cb):
+            try:
+                cb()
+            except Exception:
+                pass
+        try:
+            self.set_status(f'Trace {hit_idx + 1} selected by tap. Now tap Use Area or Find Similar.')
+        except Exception:
+            pass
+        return True
+
+    def _select_capture_shape_candidate(self, offset=0):
+        candidates = list(getattr(self, '_capture_shape_candidates', []) or [])
+        if not candidates:
+            return dict(getattr(self, '_capture_active_template', {}) or {})
+        idx = int(getattr(self, '_capture_shape_candidate_index', 0) or 0)
+        idx = (idx + int(offset or 0)) % max(len(candidates), 1)
+        self._capture_shape_candidate_index = idx
+        rect = getattr(self, '_capture_preview_rect', None)
+        page_idx = int(getattr(self, '_capture_page_idx', self.current_page_idx()) or self.current_page_idx())
+        candidate = dict(candidates[idx] or {})
+        analysis = self.engine.build_shape_template_analysis(page_idx, rect, candidate) or {}
+        self._capture_active_template = dict(analysis or {})
+        self._capture_split_preview = [fitz.Rect(r) for r in (analysis.get('resolved_rects', []) or [])]
+        shape_template = dict(analysis.get('shape_template', {}) or {})
+        self._capture_outline_preview = [self.engine._shape_template_preview_path(shape_template, preview_zoom=getattr(self, '_last_preview_render_zoom', PREVIEW_SCALE))] if shape_template else []
+        self._refresh_manual_capture_overlay()
+        return analysis
 
     def _open_manual_area_capture_confirm_popup(self):
         analysis = dict(getattr(self, '_capture_active_template', {}) or {})
@@ -13183,57 +14879,254 @@ class FormAlchemistApp(MDApp):
         if rect is None:
             return
         page_idx = int(analysis.get('page', self.current_page_idx()) or self.current_page_idx())
-        split_count = int(analysis.get('split_count', 1) or 1)
-        template_kind = str(analysis.get('template_kind', 'field') or 'field')
-        overlap = float(analysis.get('source_text_overlap', 0.0) or 0.0)
         popup_box = BoxLayout(orientation='vertical', spacing=dp(10), padding=dp(12))
         self._style_popup_card(popup_box, color=(self.ui_palette or {}).get('surface_alt', (0.11, 0.135, 0.185, 1)), radius=dp(18))
-        title_lbl = Label(text='Captured Area', color=(self.ui_palette or {}).get('text', (0.93, 0.96, 1.0, 1)), size_hint_y=None, height=dp(26), halign='left', valign='middle', font_size=dp(18), bold=True)
+        title_lbl = Label(text='Captured Shape Template', color=(self.ui_palette or {}).get('text', (0.93, 0.96, 1.0, 1)), size_hint_y=None, height=dp(26), halign='left', valign='middle', font_size=dp(18), bold=True)
         title_lbl.bind(size=self._sync_label_text_size)
         popup_box.add_widget(title_lbl)
-        summary = Label(text=(f'Page {page_idx} • {template_kind}\n'
-                              f'Area: {rect.width:.1f} × {rect.height:.1f} pdf units\n'
-                              f"Smart split detected: {split_count} target{'s' if split_count != 1 else ''}\n"
-                              f'Text overlap ignored: {overlap:.2f}'),
-                        color=(self.ui_palette or {}).get('muted', (0.70, 0.78, 0.90, 1)),
-                        size_hint_y=None, height=dp(92), halign='left', valign='top', font_size=dp(12))
+        helper_lbl = Label(text='Step 1: choose a contour candidate if needed. Step 2: Use Area to add it, Delete In Area to remove overlapping detections and links, or Find Similar to search from it. The current candidate is already selected.', color=(self.ui_palette or {}).get('muted', (0.70, 0.78, 0.90, 1)), size_hint_y=None, height=dp(44), halign='left', valign='top', font_size=dp(11))
+        helper_lbl.bind(size=self._sync_label_text_size)
+        popup_box.add_widget(helper_lbl)
+        summary = Label(text='', color=(self.ui_palette or {}).get('muted', (0.70, 0.78, 0.90, 1)), size_hint_y=None, height=dp(96), halign='left', valign='top', font_size=dp(12))
         summary.bind(size=self._sync_label_text_size)
         popup_box.add_widget(summary)
-        actions = GridLayout(cols=3, spacing=dp(8), size_hint_y=None, height=dp(88))
+        candidate_row = GridLayout(cols=4, spacing=dp(8), size_hint_y=None, height=dp(40))
+        btn_prev = self._make_compact_action_button('Prev', tone='plain')
+        btn_next = self._make_compact_action_button('Next', tone='plain')
+        btn_pick = self._make_compact_action_button('Select This Trace', tone='accent')
+        btn_fallback = self._make_compact_action_button('Use ROI Logic', tone='ghost')
+        for btn in (btn_prev, btn_next, btn_pick, btn_fallback):
+            candidate_row.add_widget(btn)
+        popup_box.add_widget(candidate_row)
+        actions = GridLayout(cols=3, spacing=dp(8), size_hint_y=None, height=dp(132))
         btn_use = self._make_compact_action_button('Use Area', tone='accent')
+        btn_delete = self._make_compact_action_button('Delete In Area', tone='danger')
         btn_similar = self._make_compact_action_button('Find Similar (Page)', tone='plain')
         btn_similar_form = self._make_compact_action_button('Find Similar (Form)', tone='plain')
         btn_retake = self._make_compact_action_button('Retake', tone='plain')
         btn_cancel = self._make_compact_action_button('Cancel', tone='ghost')
-        actions.add_widget(btn_use)
-        actions.add_widget(btn_similar)
-        actions.add_widget(btn_similar_form)
-        actions.add_widget(btn_retake)
-        actions.add_widget(btn_cancel)
-        actions.add_widget(Widget())
+        actions.add_widget(btn_use); actions.add_widget(btn_delete); actions.add_widget(btn_similar); actions.add_widget(btn_similar_form); actions.add_widget(btn_retake); actions.add_widget(btn_cancel)
         popup_box.add_widget(actions)
-        popup = Popup(title='', separator_height=0, background='', background_color=(0,0,0,0.82), content=popup_box, size_hint=(0.90 if self.ui_mobile else 0.56, 0.42 if self.ui_mobile else 0.34), auto_dismiss=False)
+        popup = Popup(title='', separator_height=0, background='', background_color=(0,0,0,0.82), content=popup_box, size_hint=(0.92 if self.ui_mobile else 0.60, 0.52 if self.ui_mobile else 0.40), auto_dismiss=False)
+        state = {'mode': 'shape' if bool(getattr(self, '_capture_shape_candidates', []) or []) else 'roi'}
+
+        def _update_summary(*_):
+            current = dict(getattr(self, '_capture_active_template', {}) or {})
+            shape_template = dict(current.get('shape_template', {}) or {})
+            split_count = int(current.get('split_count', 1) or 1)
+            template_kind = str(current.get('template_kind', 'field') or 'field')
+            overlap = float(current.get('source_text_overlap', 0.0) or 0.0)
+            candidates = list(getattr(self, '_capture_shape_candidates', []) or [])
+            idx = int(getattr(self, '_capture_shape_candidate_index', 0) or 0)
+            if shape_template:
+                summary.text = (
+                    f'Page {page_idx} • shape template\n'
+                    f'Area: {rect.width:.1f} × {rect.height:.1f} pdf units\n'
+                    f'Candidate {idx + 1} of {max(len(candidates), 1)} selected • score {float(shape_template.get("score", 0.0) or 0.0):.2f}\n'
+                    f'Vertices: {int(shape_template.get("vertices", 0) or 0)} • aspect {float(shape_template.get("bbox_aspect", 0.0) or 0.0):.2f} • next: Use Area or Find Similar'
+                )
+            else:
+                summary.text = (
+                    f'Page {page_idx} • {template_kind}\n'
+                    f'Area: {rect.width:.1f} × {rect.height:.1f} pdf units\n'
+                    f'Smart split detected: {split_count} target{"s" if split_count != 1 else ""}\n'
+                    f'Text overlap ignored: {overlap:.2f}'
+                )
+
+
+        def _pick_shape(*_):
+            state['mode'] = 'shape'
+            self._select_capture_shape_candidate(0)
+            _update_summary()
+            try:
+                self.set_status('Trace selected. Step 2: choose Use Area or Find Similar.')
+            except Exception:
+                pass
+
+        def _fallback_roi(*_):
+            state['mode'] = 'roi'
+            try:
+                analysis_roi = self.engine.analyze_manual_area_template(page_idx, rect) or {}
+            except Exception:
+                analysis_roi = {}
+            self._capture_active_template = dict(analysis_roi or {})
+            self._capture_split_preview = [fitz.Rect(r) for r in (analysis_roi.get('resolved_rects', []) or [])]
+            self._capture_outline_preview = []
+            self._refresh_manual_capture_overlay()
+            _update_summary()
+            try:
+                self.set_status('ROI logic selected. Step 2: choose Use Area or Find Similar.')
+            except Exception:
+                pass
+
+        btn_prev.bind(on_release=lambda *_: (self._select_capture_shape_candidate(-1), _update_summary()))
+        btn_next.bind(on_release=lambda *_: (self._select_capture_shape_candidate(1), _update_summary()))
+        btn_pick.bind(on_release=_pick_shape)
+        btn_fallback.bind(on_release=_fallback_roi)
+
         def _apply(*_):
+            self._capture_popup_summary_updater = None
             popup.dismiss()
             self._apply_confirmed_manual_area_capture()
         def _retake(*_):
+            self._capture_popup_summary_updater = None
             popup.dismiss()
             self._capture_points = []
             self._capture_preview_rect = None
             self._capture_split_preview = []
+            self._capture_outline_preview = []
+            self._capture_shape_candidates = []
+            self._capture_shape_candidate_index = 0
             self._capture_active_template = None
             self._refresh_manual_capture_overlay()
             self.set_status('Retake capture: tap the top-left corner again.')
         def _cancel(*_):
+            self._capture_popup_summary_updater = None
             popup.dismiss()
             self._clear_manual_capture_preview(preserve_mode=False)
             self.set_status('Capture cancelled.')
+        def _delete(*_):
+            self._capture_popup_summary_updater = None
+            popup.dismiss()
+            self._freeze_active_manual_capture_template()
+            self._delete_detected_items_for_active_capture(persist_as_repair_patch=True, include_mappings=True)
         btn_use.bind(on_release=_apply)
-        btn_similar.bind(on_release=lambda *_: (popup.dismiss(), self._freeze_active_manual_capture_template(), self._find_similar_for_active_capture_template()))
-        btn_similar_form.bind(on_release=lambda *_: (popup.dismiss(), self._freeze_active_manual_capture_template(), self._find_similar_in_form_for_active_capture_template()))
+        btn_delete.bind(on_release=_delete)
+        btn_similar.bind(on_release=lambda *_: (setattr(self, '_capture_popup_summary_updater', None), popup.dismiss(), self._freeze_active_manual_capture_template(), self._find_similar_for_active_capture_template()))
+        btn_similar_form.bind(on_release=lambda *_: (setattr(self, '_capture_popup_summary_updater', None), popup.dismiss(), self._freeze_active_manual_capture_template(), self._find_similar_in_form_for_active_capture_template()))
         btn_retake.bind(on_release=_retake)
         btn_cancel.bind(on_release=_cancel)
+        self._capture_popup_summary_updater = _update_summary
+        _update_summary()
+        try:
+            candidate_count = len(list(getattr(self, '_capture_shape_candidates', []) or []))
+        except Exception:
+            candidate_count = 0
+        if candidate_count <= 1:
+            try:
+                btn_prev.disabled = True
+                btn_next.disabled = True
+            except Exception:
+                pass
         popup.open()
+
+    def _delete_detected_items_for_active_capture(self, persist_as_repair_patch=True, include_mappings=True):
+        analysis = dict(getattr(self, '_capture_active_template', {}) or {})
+        page_idx = int(analysis.get('page', self.current_page_idx()) or self.current_page_idx())
+        source_rect = analysis.get('source_rect') or getattr(self, '_capture_preview_rect', None)
+        if source_rect is None:
+            self.set_status('No captured area available for deletion.')
+            return
+        try:
+            source_rect = source_rect if isinstance(source_rect, fitz.Rect) else fitz.Rect(source_rect)
+        except Exception:
+            self.set_status('Captured area is invalid for deletion.')
+            return
+
+        self._prepare_page_context(page_idx, clear_selection_if_missing=False)
+        has_live = bool(getattr(self.engine, 'all_boxes', []) or []) and int(getattr(self.engine, 'detected_page_idx', -1) or -1) == int(page_idx)
+        if (not has_live) and (not bool(self.engine._restore_detection_for_page(page_idx, required_signature=self.engine._settings_signature()))):
+            self.set_status('Run Detect again before deleting detections in the captured area.')
+            return
+
+        target_rects = []
+        for rr in list(analysis.get('resolved_rects', []) or []):
+            try:
+                target_rects.append(rr if isinstance(rr, fitz.Rect) else fitz.Rect(rr))
+            except Exception:
+                pass
+        if not target_rects:
+            target_rects = [fitz.Rect(source_rect)]
+
+        remove_ids = []
+        removed_refs = []
+        all_boxes = list(getattr(self.engine, 'all_boxes', []) or [])
+        all_types = list(getattr(self.engine, 'box_types', []) or [])
+
+        for idx_existing, existing in enumerate(all_boxes):
+            try:
+                ex_rect = existing if isinstance(existing, fitz.Rect) else fitz.Rect(existing)
+            except Exception:
+                continue
+            ex_kind = str(all_types[idx_existing] if idx_existing < len(all_types) else 'field') or 'field'
+            remove_hit = False
+
+            # Remove anything strongly matching any resolved target rect.
+            for rr in target_rects:
+                try:
+                    score = float(self.engine._mobile_repair_overlap_score(ex_rect, rr))
+                except Exception:
+                    score = float(self.engine._rect_iou(ex_rect, rr))
+                if score >= 0.45:
+                    remove_hit = True
+                    break
+
+            # Also remove detections whose center falls inside the full captured ROI,
+            # so initial/base detections inside the user-selected area can be deleted too.
+            if not remove_hit:
+                try:
+                    cx = (float(ex_rect.x0) + float(ex_rect.x1)) * 0.5
+                    cy = (float(ex_rect.y0) + float(ex_rect.y1)) * 0.5
+                    if (float(source_rect.x0) <= cx <= float(source_rect.x1)) and (float(source_rect.y0) <= cy <= float(source_rect.y1)):
+                        remove_hit = True
+                except Exception:
+                    pass
+
+            if remove_hit:
+                remove_ids.append(int(idx_existing))
+                removed_refs.append((fitz.Rect(ex_rect), ex_kind))
+
+        remove_ids = self._sanitize_box_id_list(remove_ids)
+        if not remove_ids:
+            self.set_status('No detections overlapped the captured area.')
+            return
+
+        if include_mappings:
+            try:
+                self.clear_mapping_for_box_ids(remove_ids, page_idx)
+            except Exception:
+                pass
+
+        keep_boxes = []
+        keep_types = []
+        for idx_existing, existing in enumerate(all_boxes):
+            if idx_existing in set(remove_ids):
+                continue
+            keep_boxes.append(existing)
+            keep_types.append(str(all_types[idx_existing] if idx_existing < len(all_types) else 'field'))
+
+        self.engine.all_boxes = list(keep_boxes)
+        self.engine.box_types = list(keep_types)
+        self.engine.selected_box_ids = []
+
+        try:
+            self.engine._cache_detection_for_page(page_idx)
+        except Exception:
+            pass
+
+        if persist_as_repair_patch and removed_refs:
+            try:
+                self.engine.save_repair_patch(
+                    page_idx,
+                    anchor_rects=[fitz.Rect(source_rect)],
+                    zone_rect=fitz.Rect(source_rect),
+                    add_rects=[],
+                    add_types=[],
+                    remove_rects=[fitz.Rect(r) for r, _k in removed_refs],
+                    remove_types=[str(_k or 'field') for _r, _k in removed_refs],
+                )
+            except Exception:
+                pass
+
+        self._stash_page_selection(page_idx)
+        self._clear_manual_capture_preview(preserve_mode=False)
+        self._render_session_page(page_idx=page_idx, reason=f'Capture deletion applied ({len(remove_ids)} removed)')
+        msg = f'Removed {len(remove_ids)} detection(s) from the captured area'
+        if include_mappings:
+            msg += ' and cleared linked mappings'
+        if persist_as_repair_patch:
+            msg += '. This removal will persist on later Detect runs.'
+        self.set_status(msg)
 
     def _apply_confirmed_manual_area_capture(self):
         analysis = dict(getattr(self, '_capture_active_template', {}) or {})
@@ -13253,6 +15146,10 @@ class FormAlchemistApp(MDApp):
             self._clear_manual_capture_preview(preserve_mode=False)
             return
         merge_result = self.engine.merge_area_template_into_detections(page_idx, template) or {}
+        try:
+            self.engine.remember_sticky_detections(page_idx, list(merge_result.get('added_refs', []) or []))
+        except Exception:
+            pass
         added_ids = list(merge_result.get('selected_ids', []) or [])
         if not added_ids:
             added_ids = self._resolve_live_box_ids_for_rect_refs(merge_result.get('added_refs', []) or [], min_score=0.45)
@@ -13285,85 +15182,6 @@ class FormAlchemistApp(MDApp):
             self._capture_active_template = analysis
         return analysis
 
-    def _ensure_page_detection_ready_for_similar(self, page_idx, auto_detect=True, status_label='similar-area search'):
-        page_idx = int(page_idx or 0)
-        try:
-            self.apply_ui_settings_to_engine()
-        except Exception:
-            pass
-        self._prepare_page_context(page_idx, clear_selection_if_missing=False)
-        required_signature = str(self.engine._settings_signature() or '')
-        has_live = (
-            bool(getattr(self.engine, 'all_boxes', [])) and
-            int(getattr(self.engine, 'detected_page_idx', -1) or -1) == page_idx and
-            str(getattr(self.engine, 'detected_settings_signature', '') or '') == required_signature
-        )
-        if has_live:
-            return True, 'live'
-        if bool(self.engine._restore_detection_for_page(page_idx, required_signature=required_signature)):
-            self._restore_page_selection(page_idx, clear_if_missing=False)
-            return True, 'cache'
-        if not auto_detect:
-            return False, 'missing'
-        try:
-            self._clear_mobile_repair_state(page_idx=page_idx)
-        except Exception:
-            pass
-        try:
-            self.engine.prepare_learning_for_detection(page_idx=page_idx, allow_profile_apply=False)
-        except Exception:
-            pass
-        try:
-            self.engine.invalidate_detection_cache(page_idx=page_idx, clear_current=True)
-            self.engine.run_detection(page_idx=page_idx)
-            auto_template_result = self.engine.auto_apply_saved_area_templates_after_detection(page_idx=page_idx, max_matches_per_template=18, min_score=0.58) or {}
-            try:
-                self.engine.finalize_learning_after_detection(page_idx=page_idx)
-            except Exception:
-                pass
-            restored_sel = list(self._restore_page_selection(page_idx, clear_if_missing=True) or [])
-            auto_selected = [int(x) for x in (auto_template_result.get('selected_ids', []) or []) if isinstance(x, int) or str(x).isdigit()]
-            merged_sel = self._sanitize_box_id_list(restored_sel + auto_selected)
-            self.engine.selected_box_ids = list(merged_sel)
-            self._stash_page_selection(page_idx)
-            return True, 'fresh'
-        except Exception as e:
-            traceback.print_exc()
-            self.set_status(f'Could not refresh detection on page {page_idx} for {status_label}: {e}', kind='error', force=True)
-            return False, 'error'
-
-    def _collect_page_area_template_matches(self, template, page_idx, max_matches=18, prefer_fresh=True):
-        page_idx = int(page_idx or 0)
-        ok, _ = self._ensure_page_detection_ready_for_similar(page_idx, auto_detect=True, status_label='page similar-area search')
-        if not ok:
-            return []
-        template_id = str((template or {}).get('template_id', '') or '')
-        matches = []
-        if not prefer_fresh and template_id:
-            matches = self.engine.get_cached_area_template_matches(page_idx, template_id) or []
-        if not matches:
-            matches = self.engine.find_similar_area_templates_on_page(page_idx, template, max_matches=max_matches) or []
-            if template_id:
-                if matches:
-                    self.engine.cache_area_template_matches(page_idx, template_id, matches)
-                else:
-                    self.engine.invalidate_area_template_match_cache(page_idx=page_idx, template_id=template_id)
-        return list(matches or [])
-
-    def _collect_form_area_template_matches(self, template, max_total=36, per_page_max=10, prefer_fresh=True):
-        template_id = str((template or {}).get('template_id', '') or '')
-        matches = []
-        if not prefer_fresh and template_id:
-            matches = self.engine.get_cached_form_area_template_matches(template_id) or []
-        if not matches:
-            matches = self.engine.find_similar_area_templates_in_form(template, max_total=max_total, per_page_max=per_page_max) or []
-            if template_id:
-                if matches:
-                    self.engine.cache_form_area_template_matches(template_id, matches)
-                else:
-                    self.engine.invalidate_area_template_match_cache(template_id=template_id)
-        return list(matches or [])
-
     def _find_similar_for_active_capture_template(self, *_):
         if bool(getattr(self, '_capture_mode_active', False)):
             self._freeze_active_manual_capture_template()
@@ -13378,20 +15196,28 @@ class FormAlchemistApp(MDApp):
             self._capture_active_template = dict(analysis or {})
         template = self._ensure_saved_active_area_template(analysis)
         if not template:
-            self.set_status('Failed to save captured template.')
+            self.set_status('Failed to save captured template. Find Similar only runs for templates saved into Saved Area Templates.')
             return
-        matches = self._collect_page_area_template_matches(template, page_idx, max_matches=18, prefer_fresh=True)
+        self._prepare_page_context(page_idx, clear_selection_if_missing=False)
+        has_live = bool(getattr(self.engine, 'all_boxes', [])) and int(getattr(self.engine, 'detected_page_idx', -1) or -1) == int(page_idx)
+        if (not has_live) and (not bool(self.engine._restore_detection_for_page(page_idx, required_signature=self.engine._settings_signature()))):
+            self.set_status('Run Detect again before finding similar areas.')
+            return
+        template_id = str(template.get('template_id', '') or '')
+        matches = self.engine.get_cached_area_template_matches(page_idx, template_id) if template_id else []
         if not matches:
-            self.set_status(f'Similar-area search finished, but no matching captured areas were found on page {page_idx}.')
+            matches = self.engine.find_similar_area_templates_on_page(page_idx, template, max_matches=18)
+            if template_id and matches:
+                self.engine.cache_area_template_matches(page_idx, template_id, matches)
+        if not matches:
+            self.set_status(f'No similar captured areas found on page {page_idx}.')
             return
         self._open_area_template_match_review_popup(template, matches)
 
     def _find_similar_in_form_for_active_capture_template(self):
-        if bool(getattr(self, '_capture_mode_active', False)):
-            self._freeze_active_manual_capture_template()
         analysis = dict(getattr(self, '_capture_active_template', {}) or {})
         page_idx = int(analysis.get('page', self.current_page_idx()) or self.current_page_idx())
-        rect = (analysis.get('source_rect') if analysis else None) or getattr(self, '_capture_preview_rect', None)
+        rect = analysis.get('source_rect') if analysis else None
         if rect is None:
             self.set_status('No captured area available for form-wide search.')
             return
@@ -13400,11 +15226,16 @@ class FormAlchemistApp(MDApp):
             self._capture_active_template = dict(analysis or {})
         template = self._ensure_saved_active_area_template(analysis)
         if not template:
-            self.set_status('Failed to save captured template.')
+            self.set_status('Failed to save captured template. Find Similar only runs for templates saved into Saved Area Templates.')
             return
-        matches = self._collect_form_area_template_matches(template, max_total=36, per_page_max=10, prefer_fresh=True)
+        template_id = str(template.get('template_id', '') or '')
+        matches = self.engine.get_cached_form_area_template_matches(template_id) if template_id else []
         if not matches:
-            self.set_status('Form-wide similar-area search finished, but no matching captured areas were found in this form.')
+            matches = self.engine.find_similar_area_templates_in_form(template, max_total=36, per_page_max=10)
+            if template_id and matches:
+                self.engine.cache_form_area_template_matches(template_id, matches)
+        if not matches:
+            self.set_status('No similar captured areas found in this form.')
             return
         self._open_area_template_form_match_review_popup(template, matches)
 
@@ -13484,10 +15315,16 @@ class FormAlchemistApp(MDApp):
         if not matches:
             self.set_status('No similar area matches selected.')
             return
-        ok, _ = self._ensure_page_detection_ready_for_similar(page_idx, auto_detect=True, status_label='page similar-area apply')
-        if not ok:
+        self._prepare_page_context(page_idx, clear_selection_if_missing=False)
+        has_live = bool(getattr(self.engine, 'all_boxes', [])) and int(getattr(self.engine, 'detected_page_idx', -1) or -1) == int(page_idx)
+        if (not has_live) and (not bool(self.engine._restore_detection_for_page(page_idx, required_signature=self.engine._settings_signature()))):
+            self.set_status('Run Detect again before applying similar area matches.')
             return
         merge_result = self.engine.merge_area_template_matches_into_detections(page_idx, matches) or {}
+        try:
+            self.engine.remember_sticky_detections(page_idx, list(merge_result.get('added_refs', []) or []))
+        except Exception:
+            pass
         self.engine.invalidate_area_template_match_cache(page_idx=page_idx, template_id=str(template.get('template_id', '') or ''))
         added_ids = list(merge_result.get('selected_ids', []) or [])
         if not added_ids:
@@ -13498,10 +15335,7 @@ class FormAlchemistApp(MDApp):
         self._stash_page_selection(page_idx)
         self._render_session_page(page_idx=page_idx, reason=f'Similar areas applied ({len(added_ids)} added)')
         self._capture_active_template = None
-        if added_ids:
-            self.set_status(f'Applied {len(added_ids)} detections from similar captured areas on page {page_idx}.')
-        else:
-            self.set_status(f'Similar-area matches were processed on page {page_idx}, but no new detections were added.')
+        self.set_status(f'Applied {len(added_ids)} detections from similar captured areas on page {page_idx}.')
 
 
     def _open_area_template_form_match_review_popup(self, template, matches):
@@ -13543,7 +15377,6 @@ class FormAlchemistApp(MDApp):
             cb.bind(active=_sync_state)
             row.add_widget(cb)
             row.add_widget(lbl)
-            row._match_index = idx
             rows.add_widget(row)
         actions = GridLayout(cols=6, spacing=dp(8), size_hint_y=None, height=dp(40))
         btn_all = self._make_compact_action_button('Select All', tone='plain')
@@ -13616,13 +15449,15 @@ class FormAlchemistApp(MDApp):
         current_page = int(self.current_page_idx())
         template_id = str((template or {}).get('template_id', '') or '')
         touched_pages = []
-        skipped_pages = []
         for page_idx in sorted(by_page):
-            ok, _ = self._ensure_page_detection_ready_for_similar(page_idx, auto_detect=True, status_label='form-wide similar-area apply')
-            if not ok:
-                skipped_pages.append(int(page_idx))
+            has_live = bool(getattr(self.engine, 'all_boxes', [])) and int(getattr(self.engine, 'detected_page_idx', -1) or -1) == int(page_idx)
+            if (not has_live) and (not bool(self.engine._restore_detection_for_page(page_idx, required_signature=self.engine._settings_signature()))):
                 continue
             merge_result = self.engine.merge_area_template_matches_into_detections(page_idx, by_page[page_idx]) or {}
+            try:
+                self.engine.remember_sticky_detections(page_idx, list(merge_result.get('added_refs', []) or []))
+            except Exception:
+                pass
             touched_pages.append(int(page_idx))
             try:
                 if template_id:
@@ -13645,16 +15480,10 @@ class FormAlchemistApp(MDApp):
         self._capture_active_template = None
         if touched_pages:
             pages_txt = ', '.join(str(p) for p in sorted(set(touched_pages)))
-            if added_total > 0:
-                msg = f'Applied {added_total} detections from similar captured areas across this form (pages {pages_txt}).'
-            else:
-                msg = f'Form-wide similar-area matches were processed on pages {pages_txt}, but no new detections were added.'
-            if skipped_pages:
-                skipped_txt = ', '.join(str(p) for p in sorted(set(skipped_pages)))
-                msg += f' Skipped pages: {skipped_txt}.'
-            self.set_status(msg)
+            self.set_status(f'Applied {added_total} detections from similar captured areas across this form (pages {pages_txt}).')
         else:
             self.set_status('No form-wide similar areas could be applied to the current detection state.')
+
 
     def _templates_for_page(self, page_idx=None):
         try:
@@ -13665,10 +15494,76 @@ class FormAlchemistApp(MDApp):
         items.sort(key=lambda item: str(item.get('created_at', '') or ''), reverse=True)
         return items
 
+    def _all_saved_area_templates(self, scope='page', page_idx=None, query='', sort_mode='recent'):
+        try:
+            page_idx = int(self.current_page_idx() if page_idx is None else page_idx)
+        except Exception:
+            page_idx = int(self.current_page_idx())
+        area_map = dict(getattr(self.engine, 'area_templates_by_page', {}) or {})
+        items = []
+        if str(scope or 'page') == 'form':
+            page_keys = sorted(int(k) for k in area_map.keys())
+            if page_idx in page_keys:
+                page_keys.remove(page_idx)
+                page_keys = [page_idx] + page_keys
+        else:
+            page_keys = [page_idx]
+        for p in page_keys:
+            for item in list(area_map.get(p, []) or []):
+                try:
+                    entry = dict(item or {})
+                except Exception:
+                    continue
+                entry['_page_idx'] = int(p)
+                items.append(entry)
+        q = str(query or '').strip().lower()
+        if q:
+            filtered = []
+            for item in items:
+                page_label = f"page {int(item.get('_page_idx', page_idx) or page_idx)}"
+                bits = [
+                    page_label,
+                    str(item.get('template_kind', '') or ''),
+                    str(item.get('created_at', '') or ''),
+                    self._template_type_mix_text(item),
+                    f"text {float(item.get('source_text_overlap', 0.0) or 0.0):.2f}",
+                    f"targets {int(item.get('split_count', 0) or 0)}",
+                ]
+                hay = ' '.join(bits).lower()
+                if q in hay:
+                    filtered.append(item)
+            items = filtered
+        mode = str(sort_mode or 'recent').strip().lower()
+        if mode == 'page':
+            items.sort(key=lambda item: (int(item.get('_page_idx', 0) or 0), str(item.get('created_at', '') or '')), reverse=False)
+        elif mode == 'kind':
+            items.sort(key=lambda item: (str(item.get('template_kind', '') or ''), -int(item.get('_page_idx', 0) or 0), str(item.get('created_at', '') or '')))
+        else:
+            items.sort(key=lambda item: str(item.get('created_at', '') or ''), reverse=True)
+        return items
+
+    def _find_saved_area_template_page(self, template_id):
+        template_id = str(template_id or '').strip()
+        if not template_id:
+            return None
+        area_map = dict(getattr(self.engine, 'area_templates_by_page', {}) or {})
+        for page_key, page_items in area_map.items():
+            try:
+                page_idx = int(page_key)
+            except Exception:
+                continue
+            for item in list(page_items or []):
+                if str(item.get('template_id', '') or '') == template_id:
+                    return page_idx
+        return None
+
     def _delete_saved_area_template(self, template_id, page_idx=None):
         template_id = str(template_id or '').strip()
         if not template_id:
             return False
+        located_page = self._find_saved_area_template_page(template_id)
+        if located_page is not None:
+            page_idx = located_page
         try:
             page_idx = int(self.current_page_idx() if page_idx is None else page_idx)
         except Exception:
@@ -13695,14 +15590,104 @@ class FormAlchemistApp(MDApp):
             pass
         return bool(changed)
 
+    def _compact_datetime_label(self, value):
+        txt = str(value or '').strip()
+        if not txt:
+            return 'unknown time'
+        txt = txt.replace('T', ' ').replace('Z', ' UTC')
+        return txt[:19] if len(txt) >= 19 else txt
+
+    def _template_type_mix_text(self, template):
+        types = [str(v or '') for v in (dict(template or {}).get('resolved_types', []) or []) if str(v or '').strip()]
+        if not types:
+            return 'Types: n/a'
+        counts = {}
+        for kind in types:
+            counts[kind] = int(counts.get(kind, 0) or 0) + 1
+        bits = []
+        for kind in ('field', 'check', 'line'):
+            count = int(counts.get(kind, 0) or 0)
+            if count > 0:
+                bits.append(f"{kind}s {count}")
+        return 'Types: ' + (', '.join(bits) if bits else ', '.join(f"{k} {v}" for k, v in counts.items()))
+
+    def _build_rect_thumbnail_widget(self, page_idx, rect, width=100, height=72, fallback_text='Template'):
+        palette = getattr(self, 'ui_palette', {}) or {}
+        holder = BoxLayout(orientation='vertical', size_hint=(None, None), size=(dp(width), dp(height)))
+        self._style_popup_card(holder, color=palette.get('surface', (0.09, 0.12, 0.18, 1)), radius=dp(10), border_color=palette.get('border', (0.18, 0.24, 0.34, 1)))
+        label = Label(text=str(fallback_text or 'Template'), color=palette.get('text', (0.93, 0.96, 1.0, 1)), halign='center', valign='middle', font_size=dp(10.5))
+        label.bind(size=self._sync_label_text_size)
+        holder.add_widget(label)
+        try:
+            rect_obj = rect if isinstance(rect, fitz.Rect) else fitz.Rect(rect)
+        except Exception:
+            rect_obj = None
+        if rect_obj is None:
+            return holder
+        try:
+            img = self.engine._render_pdf_page_bgr(self.engine.pdf_path, page_idx=int(page_idx or 0), preview_zoom=1.6)
+            if img is None or getattr(img, 'size', 0) == 0:
+                return holder
+            h_img, w_img = img.shape[:2]
+            x0 = max(0, min(int(rect_obj.x0 * 1.6), max(w_img - 1, 0)))
+            y0 = max(0, min(int(rect_obj.y0 * 1.6), max(h_img - 1, 0)))
+            x1 = max(x0 + 1, min(int(rect_obj.x1 * 1.6), w_img))
+            y1 = max(y0 + 1, min(int(rect_obj.y1 * 1.6), h_img))
+            crop = img[y0:y1, x0:x1].copy()
+            if crop.size == 0:
+                return holder
+            crop = cv2.cvtColor(crop, cv2.COLOR_BGR2RGBA)
+            crop = cv2.resize(crop, (int(width), int(height)), interpolation=cv2.INTER_AREA)
+            tex = Texture.create(size=(crop.shape[1], crop.shape[0]), colorfmt='rgba')
+            tex.blit_buffer(crop.tobytes(), colorfmt='rgba', bufferfmt='ubyte')
+            tex.flip_vertical()
+            holder.clear_widgets()
+            holder.add_widget(Image(texture=tex, allow_stretch=True, keep_ratio=False))
+        except Exception:
+            return holder
+        return holder
+
+    def _apply_saved_area_template_direct(self, template):
+        if not isinstance(template, dict):
+            self.set_status('Saved template is unavailable.')
+            return
+        page_idx = int(self.current_page_idx())
+        self._prepare_page_context(page_idx, clear_selection_if_missing=False)
+        has_live = bool(getattr(self.engine, 'all_boxes', [])) and int(getattr(self.engine, 'detected_page_idx', -1) or -1) == int(page_idx)
+        if (not has_live) and (not bool(self.engine._restore_detection_for_page(page_idx, required_signature=self.engine._settings_signature()))):
+            self.set_status('Run Detect again before using a saved template.')
+            return
+        merge_result = self.engine.merge_area_template_into_detections(page_idx, template) or {}
+        added_ids = list(merge_result.get('selected_ids', []) or [])
+        if not added_ids:
+            added_ids = self._resolve_live_box_ids_for_rect_refs(merge_result.get('added_refs', []) or [], min_score=0.45)
+        self._stash_page_selection(page_idx)
+        merged_sel = list(self._sanitize_box_id_list(list(getattr(self.engine, 'selected_box_ids', []) or []) + list(added_ids or [])))
+        self.engine.selected_box_ids = merged_sel
+        self._stash_page_selection(page_idx)
+        self._render_session_page(page_idx=page_idx, reason=f'Saved template used ({len(added_ids)} added)')
+        added_count = int(len(merge_result.get('added_refs', []) or []) or len(added_ids))
+        if added_count > 0:
+            self.set_status(f'Applied saved template on page {page_idx}. Added {added_count} detection(s).')
+        else:
+            self.set_status('Saved template matched existing detections, so nothing new was added.')
+
     def _run_saved_area_template_on_current_page(self, template):
         if not isinstance(template, dict):
             self.set_status('Saved template is unavailable.')
             return
         page_idx = int(self.current_page_idx())
-        matches = self._collect_page_area_template_matches(template, page_idx, max_matches=18, prefer_fresh=True)
+        self._prepare_page_context(page_idx, clear_selection_if_missing=False)
+        has_live = bool(getattr(self.engine, 'all_boxes', [])) and int(getattr(self.engine, 'detected_page_idx', -1) or -1) == int(page_idx)
+        if (not has_live) and (not bool(self.engine._restore_detection_for_page(page_idx, required_signature=self.engine._settings_signature()))):
+            self.set_status('Run Detect again before using a saved template.')
+            return
+        template_id = str(template.get('template_id', '') or '')
+        matches = self.engine.find_similar_area_templates_on_page(page_idx, template, max_matches=18)
+        if template_id:
+            self.engine.cache_area_template_matches(page_idx, template_id, matches or [])
         if not matches:
-            self.set_status(f'Similar-area search finished, but no matching regions were found for this template on page {page_idx}.')
+            self.set_status(f'No similar regions found for template on page {page_idx}.')
             return
         self._capture_active_template = None
         self._open_area_template_match_review_popup(template, matches)
@@ -13711,9 +15696,12 @@ class FormAlchemistApp(MDApp):
         if not isinstance(template, dict):
             self.set_status('Saved template is unavailable.')
             return
-        matches = self._collect_form_area_template_matches(template, max_total=36, per_page_max=10, prefer_fresh=True)
+        template_id = str(template.get('template_id', '') or '')
+        matches = self.engine.find_similar_area_templates_in_form(template, max_total=36, per_page_max=10)
+        if template_id:
+            self.engine.cache_form_area_template_matches(template_id, matches or [])
         if not matches:
-            self.set_status('Form-wide similar-area search finished, but no matching regions were found for this template in the current form.')
+            self.set_status('No similar regions found for this template in the current form.')
             return
         self._capture_active_template = None
         self._open_area_template_form_match_review_popup(template, matches)
@@ -13722,62 +15710,155 @@ class FormAlchemistApp(MDApp):
         if bool(getattr(self, '_capture_mode_active', False)):
             self._freeze_active_manual_capture_template()
         page_idx = int(self.current_page_idx())
+        palette = getattr(self, 'ui_palette', {}) or {}
         popup_box = BoxLayout(orientation='vertical', spacing=dp(10), padding=dp(12))
-        self._style_popup_card(popup_box, color=(self.ui_palette or {}).get('surface_alt', (0.11, 0.135, 0.185, 1)), radius=dp(18))
-        title_lbl = Label(text='Saved Area Templates', color=(self.ui_palette or {}).get('text', (0.93, 0.96, 1.0, 1)), size_hint_y=None, height=dp(26), halign='left', valign='middle', font_size=dp(18), bold=True)
+        self._style_popup_card(popup_box, color=palette.get('surface_alt', (0.11, 0.135, 0.185, 1)), radius=dp(18))
+        title_lbl = Label(text='Saved Area Templates', color=palette.get('text', (0.93, 0.96, 1.0, 1)), size_hint_y=None, height=dp(26), halign='left', valign='middle', font_size=dp(18), bold=True)
         title_lbl.bind(size=self._sync_label_text_size)
         popup_box.add_widget(title_lbl)
-        summary = Label(text='', color=(self.ui_palette or {}).get('muted', (0.70, 0.78, 0.90, 1)), size_hint_y=None, height=dp(30), halign='left', valign='middle', font_size=dp(12))
+        state = {'scope': 'page', 'sort': 'recent', 'query': '', 'mode': 'compact'}
+
+        control_row = BoxLayout(orientation='horizontal', spacing=dp(8), size_hint_y=None, height=dp(38))
+        btn_page = self._make_compact_action_button('Current Page', tone='accent')
+        btn_form = self._make_compact_action_button('Whole Form', tone='plain')
+        sort_spinner = Spinner(text='Recent', values=('Recent', 'By Page', 'By Kind'), size_hint=(None, 1), width=dp(118), background_normal='', background_color=palette.get('surface', (0.09, 0.12, 0.18, 1)), color=palette.get('text', (0.93, 0.96, 1.0, 1)))
+        btn_mode = self._make_compact_action_button('Compact', tone='plain')
+        control_row.add_widget(btn_page)
+        control_row.add_widget(btn_form)
+        control_row.add_widget(sort_spinner)
+        control_row.add_widget(btn_mode)
+        popup_box.add_widget(control_row)
+
+        search_input = TextInput(text='', hint_text='Search kind, page, type, date, overlap', multiline=False, size_hint_y=None, height=dp(42), background_normal='', background_active='', background_color=palette.get('surface', (0.09, 0.12, 0.18, 1)), foreground_color=palette.get('text', (0.93, 0.96, 1.0, 1)), hint_text_color=palette.get('muted', (0.70, 0.78, 0.90, 1)), padding=[dp(12), dp(10), dp(12), dp(10)])
+        popup_box.add_widget(search_input)
+
+        summary = Label(text='', color=palette.get('muted', (0.70, 0.78, 0.90, 1)), size_hint_y=None, height=dp(44), halign='left', valign='middle', font_size=dp(12))
         summary.bind(size=self._sync_label_text_size)
         popup_box.add_widget(summary)
+
         scroll = ScrollView(size_hint=(1, 1), do_scroll_x=False, bar_width=dp(5))
         rows = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
         rows.bind(minimum_height=rows.setter('height'))
         scroll.add_widget(rows)
         popup_box.add_widget(scroll)
+
         footer = GridLayout(cols=1, spacing=dp(8), size_hint_y=None, height=dp(40))
         btn_close = self._make_compact_action_button('Close', tone='ghost')
         footer.add_widget(btn_close)
         popup_box.add_widget(footer)
-        popup = Popup(title='', separator_height=0, background='', background_color=(0,0,0,0.82), content=popup_box, size_hint=(0.92 if self.ui_mobile else 0.64, 0.78 if self.ui_mobile else 0.72), auto_dismiss=False)
+        popup = Popup(title='', separator_height=0, background='', background_color=(0, 0, 0, 0.82), content=popup_box, size_hint=(0.94 if self.ui_mobile else 0.78, 0.86 if self.ui_mobile else 0.82), auto_dismiss=False)
 
-        def _refresh_rows():
+        def _scope_items():
+            return self._all_saved_area_templates(scope=state['scope'], page_idx=page_idx, query=state['query'], sort_mode=state['sort'])
+
+        def _set_scope(scope_name):
+            state['scope'] = str(scope_name or 'page')
+            btn_page.tone = 'accent' if state['scope'] == 'page' else 'plain'
+            btn_form.tone = 'accent' if state['scope'] == 'form' else 'plain'
+            try:
+                btn_page._update_graphics(); btn_form._update_graphics()
+            except Exception:
+                pass
+            _refresh_rows()
+
+        def _render_template_row(template, display_index=None, target_rows=None):
+            actual_page = int(template.get('_page_idx', page_idx) or page_idx)
+            expanded = (state['mode'] == 'expanded')
+            row = BoxLayout(orientation='horizontal' if expanded else 'vertical', spacing=dp(8), size_hint_y=None, padding=[dp(8), dp(8), dp(8), dp(8)])
+            row.height = dp(134 if expanded else 92)
+            self._style_popup_card(row, color=palette.get('surface_soft', (0.135, 0.16, 0.215, 1)), radius=dp(14))
+            if expanded:
+                thumb = self._build_rect_thumbnail_widget(actual_page, template.get('source_rect'), width=96 if self.ui_mobile else 108, height=74 if self.ui_mobile else 82, fallback_text=f'P{actual_page}')
+                row.add_widget(thumb)
+            body = BoxLayout(orientation='vertical', spacing=dp(6))
+            split_count = int(template.get('split_count', 0) or 0)
+            template_kind = str(template.get('template_kind', 'field') or 'field')
+            prefix = f"[{display_index}] " if display_index is not None else ''
+            top_text = f"{prefix}P{actual_page} • {template_kind} • {split_count} target{'s' if split_count != 1 else ''}"
+            if state['scope'] == 'form':
+                top_text = f"{prefix}Page {actual_page} • {template_kind} • {split_count} target{'s' if split_count != 1 else ''}"
+            info_text = top_text + "\nSaved: " + self._compact_datetime_label(template.get('created_at', ''))
+            info = Label(text=info_text, color=palette.get('text', (0.93, 0.96, 1.0, 1)), halign='left', valign='middle', font_size=dp(11.2))
+            info.bind(size=self._sync_label_text_size)
+            body.add_widget(info)
+            meta_row = BoxLayout(orientation='horizontal', spacing=dp(6), size_hint_y=None, height=dp(28))
+            meta_row.add_widget(self._make_popup_chip(self._template_type_mix_text(template), tone='muted'))
+            try:
+                overlap_val = float(template.get('source_text_overlap', 0.0) or 0.0)
+            except Exception:
+                overlap_val = 0.0
+            meta_row.add_widget(self._make_popup_chip(f"Text {overlap_val:.2f}", tone=('danger' if overlap_val >= 0.24 else 'accent')))
+            body.add_widget(meta_row)
+            action_cols = 4 if expanded else 4
+            actions = GridLayout(cols=action_cols, spacing=dp(6), size_hint_y=None, height=dp(32))
+            btn_use = self._make_compact_action_button('Use Area', tone='accent')
+            btn_run = self._make_compact_action_button('Find Page', tone='plain')
+            btn_form2 = self._make_compact_action_button('Find Form', tone='plain')
+            btn_delete = self._make_compact_action_button('Delete', tone='danger')
+            btn_use.bind(on_release=lambda *_ , tpl=template: (popup.dismiss(), self._apply_saved_area_template_direct(tpl)))
+            btn_run.bind(on_release=lambda *_ , tpl=template: (popup.dismiss(), self._run_saved_area_template_on_current_page(tpl)))
+            btn_form2.bind(on_release=lambda *_ , tpl=template: (popup.dismiss(), self._find_similar_in_form_for_saved_template(tpl)))
+            btn_delete.bind(on_release=lambda *_ , tpl=template, pg=actual_page: (self._delete_saved_area_template(str(tpl.get('template_id', '') or ''), page_idx=pg), _refresh_rows(), self.set_status('Saved template deleted.')))
+            for btn in (btn_use, btn_run, btn_form2, btn_delete):
+                actions.add_widget(btn)
+            body.add_widget(actions)
+            row.add_widget(body)
+            (target_rows or rows).add_widget(row)
+
+        def _refresh_rows(*_):
             rows.clear_widgets()
-            current_templates = self._templates_for_page(page_idx)
-            current_count = len(current_templates)
-            summary.text = f"Page {page_idx} • {current_count} saved template{'s' if current_count != 1 else ''}"
-            if not current_templates:
-                empty_lbl = Label(text='No saved templates for this page yet.', color=(self.ui_palette or {}).get('muted', (0.70, 0.78, 0.90, 1)), size_hint_y=None, height=dp(42), halign='left', valign='middle', font_size=dp(12))
+            items = _scope_items()
+            total_templates = sum(len(v or []) for v in ((getattr(self.engine, 'area_templates_by_page', {}) or {}).values()))
+            if state['scope'] == 'page':
+                summary.text = f"Page {page_idx} • {len(items)} visible template{'s' if len(items) != 1 else ''} • whole form {total_templates}"
+            else:
+                page_set = sorted(set(int(item.get('_page_idx', page_idx) or page_idx) for item in items))
+                summary.text = f"Whole form • {len(items)} visible template{'s' if len(items) != 1 else ''} across {len(page_set)} page{'s' if len(page_set) != 1 else ''}"
+            if not items:
+                empty_text = 'No saved templates matched the current view.' if state['query'] else ('No saved templates for this page yet. Switch to Whole Form to browse other pages.' if state['scope'] == 'page' else 'No saved templates in this form yet.')
+                empty_lbl = Label(text=empty_text, color=palette.get('muted', (0.70, 0.78, 0.90, 1)), size_hint_y=None, height=dp(52), halign='left', valign='middle', font_size=dp(12))
                 empty_lbl.bind(size=self._sync_label_text_size)
                 rows.add_widget(empty_lbl)
                 return
-            for idx, template in enumerate(current_templates, start=1):
-                row = BoxLayout(orientation='vertical', spacing=dp(6), size_hint_y=None, padding=[dp(8), dp(8), dp(8), dp(8)])
-                row.height = dp(82)
-                self._style_popup_card(row, color=(self.ui_palette or {}).get('surface_soft', (0.135, 0.16, 0.215, 1)), radius=dp(14))
-                split_count = int(template.get('split_count', 0) or 0)
-                template_kind = str(template.get('template_kind', 'field') or 'field')
-                created_at = str(template.get('created_at', '') or '')
-                info = Label(text=(f"[{idx}] {template_kind} • {split_count} target{'s' if split_count != 1 else ''}\n"
-                                   f"Created: {created_at}"),
-                             color=(self.ui_palette or {}).get('text', (0.93, 0.96, 1.0, 1)),
-                             halign='left', valign='middle', font_size=dp(11))
-                info.bind(size=self._sync_label_text_size)
-                row.add_widget(info)
-                actions = GridLayout(cols=3, spacing=dp(8), size_hint_y=None, height=dp(32))
-                btn_run = self._make_compact_action_button('Find Similar (Page)', tone='plain')
-                btn_form = self._make_compact_action_button('Find Similar (Form)', tone='plain')
-                btn_delete = self._make_compact_action_button('Delete', tone='danger')
-                btn_run.bind(on_release=lambda *_ , tpl=template: (popup.dismiss(), self._run_saved_area_template_on_current_page(tpl)))
-                btn_form.bind(on_release=lambda *_ , tpl=template: (popup.dismiss(), self._find_similar_in_form_for_saved_template(tpl)))
-                btn_delete.bind(on_release=lambda *_ , tpl=template: (self._delete_saved_area_template(str(tpl.get('template_id', '') or ''), page_idx=page_idx), _refresh_rows(), self.set_status('Saved template deleted.')))
-                actions.add_widget(btn_run)
-                actions.add_widget(btn_form)
-                actions.add_widget(btn_delete)
-                row.add_widget(actions)
-                rows.add_widget(row)
+            if state['scope'] == 'form':
+                grouped = {}
+                for item in items:
+                    grouped.setdefault(int(item.get('_page_idx', page_idx) or page_idx), []).append(item)
+                order = list(grouped.keys())
+                if page_idx in order:
+                    order.remove(page_idx)
+                    order = [page_idx] + sorted(order)
+                else:
+                    order = sorted(order)
+                display_index = 1
+                for grp_page in order:
+                    section = BoxLayout(orientation='vertical', spacing=dp(8), size_hint_y=None, padding=[dp(8), dp(8), dp(8), dp(8)])
+                    self._style_popup_card(section, color=palette.get('surface', (0.09, 0.12, 0.18, 1)), radius=dp(12))
+                    header = Label(text=f"Page {grp_page}{' • current page' if grp_page == page_idx else ''} • {len(grouped.get(grp_page, []))} template{'s' if len(grouped.get(grp_page, [])) != 1 else ''}", color=palette.get('text', (0.93, 0.96, 1.0, 1)), size_hint_y=None, height=dp(24), halign='left', valign='middle', font_size=dp(12), bold=True)
+                    header.bind(size=self._sync_label_text_size)
+                    section.add_widget(header)
+                    inner = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
+                    inner.bind(minimum_height=inner.setter('height'))
+                    section.add_widget(inner)
+                    rows.add_widget(section)
+                    for item in grouped.get(grp_page, []):
+                        _render_template_row(item, display_index, target_rows=inner)
+                        display_index += 1
+                    section.height = header.height + inner.height + dp(24)
+            else:
+                for idx, item in enumerate(items, start=1):
+                    _render_template_row(item, idx)
 
-        _refresh_rows()
+        btn_page.bind(on_release=lambda *_: _set_scope('page'))
+        btn_form.bind(on_release=lambda *_: _set_scope('form'))
+        sort_spinner.bind(text=lambda inst, value: (state.__setitem__('sort', {'Recent': 'recent', 'By Page': 'page', 'By Kind': 'kind'}.get(str(value), 'recent')), _refresh_rows()))
+        search_input.bind(text=lambda inst, value: (state.__setitem__('query', str(value or '')), _refresh_rows()))
+        def _toggle_mode(*_):
+            state['mode'] = 'expanded' if state['mode'] == 'compact' else 'compact'
+            btn_mode.text = 'Expanded' if state['mode'] == 'expanded' else 'Compact'
+            _refresh_rows()
+        btn_mode.bind(on_release=_toggle_mode)
+        _set_scope('page')
         btn_close.bind(on_release=lambda *_: popup.dismiss())
         popup.open()
 
@@ -13853,6 +15934,25 @@ class FormAlchemistApp(MDApp):
             box_id = int(hit["id"])
         except Exception:
             return
+
+        # Guard mobile Select ON mode so accidental double-tap dispatches from a single tap
+        # do not open the link popup. In Select ON, single taps should only manage selection.
+        if getattr(self, "ui_mobile", False) and bool(getattr(self, "mobile_select_mode", False)):
+            existing = []
+            for x in getattr(self.engine, "selected_box_ids", []) or []:
+                if isinstance(x, int) or str(x).isdigit():
+                    v = int(x)
+                    if v not in existing:
+                        existing.append(v)
+            if box_id not in existing:
+                existing.append(box_id)
+            self.engine.selected_box_ids = existing
+            self._load_mapping_into_editor(box_id)
+            self._sync_box_selection_ui()
+            self._focus_preview_box(box_id)
+            self._update_preview_hud()
+            return
+
         existing = []
         for x in getattr(self.engine, "selected_box_ids", []) or []:
             if isinstance(x, int) or str(x).isdigit():
@@ -15735,10 +17835,26 @@ class FormAlchemistApp(MDApp):
             profile_matched = bool((ctx or {}).get("matched_profile"))
             self.engine.invalidate_detection_cache(page_idx=page_idx, clear_current=True)
             self.engine.run_detection(page_idx=page_idx)
-            auto_template_result = self.engine.auto_apply_saved_area_templates_after_detection(page_idx=page_idx, max_matches_per_template=18, min_score=0.58) or {}
+
+            # Detect should re-apply explicit saved Area Templates and saved repair
+            # patches, but should NOT silently carry over transient sticky/manual
+            # detections. This keeps template behavior durable while avoiding hidden
+            # one-off carry-over state.
+            auto_template_result = self.engine.auto_apply_saved_area_templates_after_detection(
+                page_idx=page_idx,
+                max_matches_per_template=18,
+                min_score=0.58,
+            ) or {}
+            auto_repair_result = self.engine.auto_apply_saved_repair_patches_after_detection(
+                page_idx=page_idx,
+                min_anchor_overlap=0.40,
+            ) or {}
+            sticky_result = {'sticky_count': 0, 'added_count': 0, 'selected_ids': []}
+
             self.engine.finalize_learning_after_detection(page_idx=page_idx)
-            template_selected = list(auto_template_result.get('selected_ids', []) or [])
-            self.engine.selected_box_ids = template_selected if template_selected else []
+            # Do not force-select template hits after Detect; just keep them merged into
+            # the live detections so mappings remain stable while startup selection stays calm.
+            self.engine.selected_box_ids = []
             self._stash_page_selection(page_idx)
             counts = self._box_type_counts()
             if profile_applied:
@@ -15747,12 +17863,34 @@ class FormAlchemistApp(MDApp):
                 profile_msg = "\nLearned profile: matched but skipped (manual tuning kept)"
             else:
                 profile_msg = "\nLearned profile: no match"
+
             auto_tpl_count = int(auto_template_result.get('template_count', 0) or 0)
             auto_tpl_added = int(auto_template_result.get('added_count', 0) or 0)
             auto_tpl_matches = int(auto_template_result.get('match_count', 0) or 0)
+            auto_repair_count = int(auto_repair_result.get('patch_count', 0) or 0)
+            auto_repair_applied = int(auto_repair_result.get('applied_count', 0) or 0)
+            auto_repair_added = int(auto_repair_result.get('added_count', 0) or 0)
+            auto_repair_removed = int(auto_repair_result.get('removed_count', 0) or 0)
             auto_tpl_msg = ''
             if auto_tpl_count > 0:
-                auto_tpl_msg = f"\nTemplates: {auto_tpl_count} saved • {auto_tpl_matches} strong match{'es' if auto_tpl_matches != 1 else ''} • {auto_tpl_added} added"
+                auto_tpl_msg = (
+                    f"\nTemplates: {auto_tpl_count} saved • "
+                    f"{auto_tpl_matches} strong match{'es' if auto_tpl_matches != 1 else ''} • "
+                    f"{auto_tpl_added} added"
+                )
+            auto_repair_msg = ''
+            if auto_repair_count > 0:
+                auto_repair_msg = (
+                    f"\nRepairs: {auto_repair_count} saved • "
+                    f"{auto_repair_applied} applied • "
+                    f"+{auto_repair_added} / -{auto_repair_removed}"
+                )
+            sticky_count = int(sticky_result.get('sticky_count', 0) or 0)
+            sticky_added = int(sticky_result.get('added_count', 0) or 0)
+            sticky_msg = ''
+            if sticky_count > 0:
+                sticky_msg = f"\nSticky: {sticky_count} saved • {sticky_added} restored"
+
             summary = (
                 f"Detection done.\n"
                 f"Page: {page_idx}\n"
@@ -15760,7 +17898,7 @@ class FormAlchemistApp(MDApp):
                 f"\nChecks: {counts.get('check', 0)}"
                 f"\nLines: {counts.get('line', 0)}"
                 f"\nFields: {counts.get('field', 0)}"
-                f"\nCache: refreshed{profile_msg}{auto_tpl_msg}"
+                f"\nCache: refreshed{profile_msg}{auto_tpl_msg}{auto_repair_msg}{sticky_msg}"
             )
             self._persist_runtime_session_state(current_page_idx=page_idx)
             Clock.schedule_once(lambda dt: self.on_preview(None), 0)
