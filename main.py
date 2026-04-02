@@ -3671,6 +3671,66 @@ class FormAlchemistEngine:
                 payload[str(int(page_key))] = serial
         return payload
 
+    def _serialize_sticky_detections(self):
+        payload = {}
+        for page_key, items in (getattr(self, 'sticky_detections_by_page', {}) or {}).items():
+            serial = []
+            for item in (items or []):
+                try:
+                    rect, kind = item
+                except Exception:
+                    continue
+                try:
+                    rr = rect if isinstance(rect, fitz.Rect) else fitz.Rect(rect)
+                except Exception:
+                    continue
+                serial.append({
+                    'rect': self._serialize_rect(rr),
+                    'type': str(kind or 'field') or 'field',
+                })
+            if serial:
+                payload[str(int(page_key))] = serial
+        return payload
+
+    def _deserialize_sticky_detections(self, payload):
+        self.sticky_detections_by_page = {}
+        if not isinstance(payload, dict):
+            return
+        for page_key, items in payload.items():
+            try:
+                page_idx = int(page_key)
+            except Exception:
+                continue
+            bucket = []
+            for item in (items or []):
+                rect_data = None
+                kind = 'field'
+                if isinstance(item, dict):
+                    rect_data = item.get('rect')
+                    kind = str(item.get('type', item.get('kind', 'field')) or 'field')
+                elif isinstance(item, (list, tuple)) and len(item) >= 2:
+                    rect_data = item[0]
+                    kind = str(item[1] or 'field')
+                else:
+                    rect_data = item
+                try:
+                    rr = fitz.Rect(rect_data)
+                except Exception:
+                    continue
+                kind = kind if kind in {'field', 'line', 'check'} else 'field'
+                duplicate = False
+                for ex_rect, ex_kind in bucket:
+                    try:
+                        if str(ex_kind or '') == kind and (self._rect_iou(rr, ex_rect) >= 0.78 or self._rects_refer_to_same_target(rr, ex_rect, tol=0.35)):
+                            duplicate = True
+                            break
+                    except Exception:
+                        pass
+                if not duplicate:
+                    bucket.append((fitz.Rect(rr), kind))
+            if bucket:
+                self.sticky_detections_by_page[page_idx] = bucket
+
     def _deserialize_repair_patches(self, payload):
         self.repair_patches_by_page = {}
         self.repair_patch_index = {}
@@ -7676,7 +7736,7 @@ class FormAlchemistEngine:
             ui_state = {}
 
         return {
-            "version": 7,
+            "version": 8,
             "record_label_column": str(self._record_label_column()),
             "record_label_source_column": str(getattr(self, "record_label_source_column", "") or ""),
             "record_key_column": str(self._record_key_column()),
@@ -7724,6 +7784,7 @@ class FormAlchemistEngine:
             "custom_mappings": mappings_serial,
             "area_templates": self._serialize_area_templates(),
             "repair_patches": self._serialize_repair_patches(),
+            "sticky_detections": self._serialize_sticky_detections(),
         }
 
     def apply_config(self, cfg):
@@ -7770,6 +7831,7 @@ class FormAlchemistEngine:
         self.semantic_target_overrides = {}
         self.area_templates_by_page = {}
         self.area_template_index = {}
+        self.sticky_detections_by_page = {}
         loaded_mappings = cfg.get("custom_mappings", {}) or {}
         for k, lst in loaded_mappings.items():
             if isinstance(lst, dict):
@@ -7813,6 +7875,8 @@ class FormAlchemistEngine:
         self.semantic_targets_by_page = {}
         self._deserialize_area_templates(cfg.get("area_templates", {}))
         self._deserialize_repair_patches(cfg.get("repair_patches", {}))
+        sticky_payload = cfg.get("sticky_detections", cfg.get("sticky_boxes", {}))
+        self._deserialize_sticky_detections(sticky_payload)
 
     def merge_config_into_current(self, incoming_cfg, keep_current_detection=True, prefer="incoming"):
         current_cfg = self.collect_config()
@@ -7869,6 +7933,71 @@ class FormAlchemistEngine:
                     "g": bool(item.get("g", False)),
                     "n": int(item.get("n", 1)),
                 })
+
+        def _merge_serialized_page_items(current_payload, incoming_payload, kind="generic"):
+            merged = {}
+            current_payload = current_payload if isinstance(current_payload, dict) else {}
+            incoming_payload = incoming_payload if isinstance(incoming_payload, dict) else {}
+
+            def _normalize_page_items(items):
+                if isinstance(items, dict):
+                    return [items]
+                if isinstance(items, list):
+                    return [it for it in items if isinstance(it, (dict, list, tuple))]
+                return []
+
+            def _item_signature(item):
+                if isinstance(item, dict):
+                    if kind == "sticky":
+                        rect = item.get("rect")
+                        rect_key = json.dumps(rect, sort_keys=True, ensure_ascii=False) if rect is not None else ""
+                        type_key = str(item.get("type", item.get("kind", "field")) or "field")
+                        return f"{type_key}|{rect_key}"
+                    stable_id = str(item.get("template_id") or item.get("patch_id") or "").strip()
+                    if stable_id:
+                        return stable_id
+                try:
+                    return _sha1_json(item)
+                except Exception:
+                    return repr(item)
+
+            all_pages = set(str(k) for k in current_payload.keys()) | set(str(k) for k in incoming_payload.keys())
+            for page_key in sorted(all_pages, key=lambda v: int(v) if str(v).isdigit() else str(v)):
+                current_items = _normalize_page_items(current_payload.get(page_key, []))
+                incoming_items = _normalize_page_items(incoming_payload.get(page_key, []))
+                page_items = []
+                seen = set()
+
+                def _append_unique(items):
+                    for raw in items:
+                        item = json.loads(json.dumps(raw, ensure_ascii=False)) if isinstance(raw, dict) else raw
+                        sig = _item_signature(item)
+                        if sig in seen:
+                            continue
+                        seen.add(sig)
+                        page_items.append(item)
+
+                _append_unique(current_items)
+                _append_unique(incoming_items)
+                if page_items:
+                    merged[str(page_key)] = page_items
+            return merged
+
+        merged_cfg["area_templates"] = _merge_serialized_page_items(
+            current_cfg.get("area_templates", {}),
+            incoming_cfg.get("area_templates", {}) if isinstance(incoming_cfg, dict) else {},
+            kind="area_template",
+        )
+        merged_cfg["repair_patches"] = _merge_serialized_page_items(
+            current_cfg.get("repair_patches", {}),
+            incoming_cfg.get("repair_patches", {}) if isinstance(incoming_cfg, dict) else {},
+            kind="repair_patch",
+        )
+        merged_cfg["sticky_detections"] = _merge_serialized_page_items(
+            current_cfg.get("sticky_detections", {}),
+            (incoming_cfg.get("sticky_detections", incoming_cfg.get("sticky_boxes", {})) if isinstance(incoming_cfg, dict) else {}),
+            kind="sticky",
+        )
 
         self.apply_config(merged_cfg)
         return merged_cfg
@@ -17344,28 +17473,32 @@ class FormAlchemistApp(MDApp):
         if not path.lower().endswith(".json"):
             raise ValueError("Please select a JSON config file.")
 
-        cfg = self.engine.load_config(path)
-        self._reset_config_runtime_state()
-        self.push_engine_settings_to_ui()
+        with open(path, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
 
         saved_pdf_path = str(cfg.get("pdf_path", "") or "").strip()
         loaded_pdf = False
         loaded_total = 0
+        pdf_restore_error = ""
         if saved_pdf_path:
             try:
                 if os.path.exists(saved_pdf_path):
                     loaded_total = int(self.engine.load_pdf(saved_pdf_path) or 0)
                     loaded_pdf = True
                 else:
-                    self.set_status(
+                    pdf_restore_error = (
                         f"Config loaded, but saved PDF was not found:\n{saved_pdf_path}"
                     )
             except Exception as e:
                 traceback.print_exc()
-                self.set_status(
+                pdf_restore_error = (
                     f"Config loaded, but PDF restore failed:\n{os.path.basename(saved_pdf_path)}\n{e}"
                 )
 
+        self.engine.apply_config(cfg)
+        self.engine.persist_learning_session(current_page_idx=self.engine.detected_page_idx or 0)
+        self._reset_config_runtime_state()
+        self.push_engine_settings_to_ui()
         self._apply_runtime_config_state(cfg)
 
         if loaded_pdf:
@@ -17387,7 +17520,7 @@ class FormAlchemistApp(MDApp):
                     f"Config loaded, but preview restore failed:\n{os.path.basename(path)}\n{e}"
                 )
         else:
-            self.set_status(f"Config loaded:\n{os.path.basename(path)}")
+            self.set_status(pdf_restore_error or f"Config loaded:\n{os.path.basename(path)}")
 
         self._persist_runtime_session_state(current_page_idx=self.current_page_idx())
         self.refresh_backend_capabilities_ui()
@@ -17444,7 +17577,25 @@ class FormAlchemistApp(MDApp):
         self.engine.all_boxes = []
         self.engine.box_types = []
         self.push_engine_settings_to_ui()
-        self.set_status(f"Config merged:\n{os.path.basename(path)}")
+
+        page_idx = self.current_page_idx()
+        anchor = None
+        try:
+            anchor = self._capture_preview_anchor()
+        except Exception:
+            anchor = None
+        try:
+            self._refresh_after_config_import(page_idx=page_idx, reason="Config merged", anchor=anchor)
+        except Exception:
+            traceback.print_exc()
+
+        merged_templates = sum(len(v or []) for v in ((getattr(self.engine, 'area_templates_by_page', {}) or {}).values()))
+        merged_patches = sum(len(v or []) for v in ((getattr(self.engine, 'repair_patches_by_page', {}) or {}).values()))
+        merged_sticky = sum(len(v or []) for v in ((getattr(self.engine, 'sticky_detections_by_page', {}) or {}).values()))
+        self.set_status(
+            f"Config merged:\n{os.path.basename(path)}\n"
+            f"Templates: {merged_templates} • Repair patches: {merged_patches} • Sticky detections: {merged_sticky}"
+        )
 
     def on_merge_config(self, instance):
         if platform == "android":
