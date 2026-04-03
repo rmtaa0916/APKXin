@@ -1,4 +1,26 @@
 # =========================
+# main_android_optimized.py  —  MediMapPro v1.5.0
+# Android-optimized build entry point
+#
+# Patches applied over main.py:
+#   P01  Bug fix: csv_col_spinner -> column_spinner
+#   P02  Window.softinput_mode = "below_target" (soft keyboard keeps inputs visible)
+#   P03  cv2 defensive import with CV2_AVAILABLE flag
+#   P04  set_texture_from_bgr: explicit buffer release + cv2 fallback
+#   P05  android_render_pdf_page: PIL fallback when cv2.imread unavailable
+#   P06  PdfPageSource.render_page_bgr: cv2.cvtColor guard
+#   P07  tempfile in android_render_pdf_page uses app-private dir (user_data_dir)
+#   P08  get_app_output_dir always prefers user_data_dir (no storage permissions needed)
+#   P09  set_status: Clock.schedule_once for thread-safe UI label updates
+#   P10  Initial status chip shows plain-language 3-step hint
+#   P11  PDF load errors shown as plain-language messages (not raw exceptions)
+#   P12  Mobile make_button: min dp(44) tap target height (Android HIG)
+#   P13  "?" help button added to appbar
+#   P14  on_start, _request_android_permissions, first-run onboarding popup,
+#        _show_help_popup, _show_user_error_popup injected into FormAlchemistApp
+# =========================
+
+# =========================
 # PART 1 / 4
 # Imports + Compatibility + Helpers + Engine Base
 # =========================
@@ -31,7 +53,12 @@ if not hasattr(base64, "decodestring"):
 if not hasattr(base64, "encodestring"):
     base64.encodestring = base64.encodebytes
 
-import cv2
+try:
+    import cv2
+    CV2_AVAILABLE = True
+except Exception:
+    cv2 = None
+    CV2_AVAILABLE = False
 from PIL import Image as PILImage
 from PIL import ImageDraw, ImageFont
 import importlib
@@ -160,8 +187,8 @@ from kivy.uix.widget import Widget
 from kivy.utils import platform
 
 
-RECORD_SELECT_TEXT = "Select Record"
-COLUMN_SELECT_TEXT = "Choose Data Column"
+RECORD_SELECT_TEXT = "Choose a patient / record"
+COLUMN_SELECT_TEXT = "Choose which column fills this field"
 
 
 class SearchableSelectField(Button):
@@ -941,11 +968,29 @@ def android_render_pdf_page(path, page_idx=0, preview_zoom=1.5):
     tmp_path = None
     try:
         AndroidPdfRenderHelper = autoclass("org.formalchemist.formalchemist.PdfRenderHelper")
-        fd, tmp_path = tempfile.mkstemp(prefix="form_alchemist_preview_", suffix=".png")
+        # Use app-private dir for temp files to avoid storage permission issues
+        _tmp_dir = None
+        try:
+            _running = App.get_running_app()
+            _tmp_dir = str(getattr(_running, "user_data_dir", "") or "").strip() or None
+        except Exception:
+            pass
+        fd, tmp_path = tempfile.mkstemp(
+            prefix="form_alchemist_preview_",
+            suffix=".png",
+            dir=_tmp_dir,
+        )
         os.close(fd)
         out_path = AndroidPdfRenderHelper.renderPageToPng(path, int(page_idx), float(preview_zoom), tmp_path)
         out_path = str(out_path or tmp_path)
-        img = cv2.imread(out_path, cv2.IMREAD_COLOR)
+        if cv2 is not None:
+            img = cv2.imread(out_path, cv2.IMREAD_COLOR)
+        else:
+            from PIL import Image as _PILtmp
+            import numpy as _nptmp
+            _pil = _PILtmp.open(out_path).convert("RGB")
+            img = _nptmp.array(_pil)[:, :, ::-1].copy()
+            _pil.close()
         if img is None:
             raise ValueError("Android PdfRenderHelper produced an unreadable preview image.")
         return img
@@ -960,11 +1005,13 @@ def android_render_pdf_page(path, page_idx=0, preview_zoom=1.5):
 # ============================================================
 # Defaults
 # ============================================================
-APP_TITLE = "Form Alchemist"
+APP_TITLE = "MediMapPro"
 CONFIG_FILENAME = "form_alchemist_config.json"
 if platform == "android":
     ZOOM = 4.0
     PREVIEW_SCALE = 2.2
+    # Keep the main content above the soft keyboard on Android
+    Window.softinput_mode = "below_target"
 else:
     ZOOM = 4.0
     PREVIEW_SCALE = 2.2
@@ -1841,9 +1888,15 @@ class PdfPageSource:
                 mat = fitz.Matrix(float(preview_zoom), float(preview_zoom))
                 pix = page.get_pixmap(matrix=mat, alpha=False)
                 img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
-                if pix.n == 4:
-                    return cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
-                return cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+                if cv2 is not None:
+                    if pix.n == 4:
+                        return cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+                    return cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+                else:
+                    # cv2 unavailable: convert without it
+                    if pix.n == 4:
+                        return img[:, :, :3][:, :, ::-1].copy()
+                    return img[:, :, ::-1].copy()
 
         raise RuntimeError("No PDF rendering backend is available.")
 
@@ -3670,66 +3723,6 @@ class FormAlchemistEngine:
             if serial:
                 payload[str(int(page_key))] = serial
         return payload
-
-    def _serialize_sticky_detections(self):
-        payload = {}
-        for page_key, items in (getattr(self, 'sticky_detections_by_page', {}) or {}).items():
-            serial = []
-            for item in (items or []):
-                try:
-                    rect, kind = item
-                except Exception:
-                    continue
-                try:
-                    rr = rect if isinstance(rect, fitz.Rect) else fitz.Rect(rect)
-                except Exception:
-                    continue
-                serial.append({
-                    'rect': self._serialize_rect(rr),
-                    'type': str(kind or 'field') or 'field',
-                })
-            if serial:
-                payload[str(int(page_key))] = serial
-        return payload
-
-    def _deserialize_sticky_detections(self, payload):
-        self.sticky_detections_by_page = {}
-        if not isinstance(payload, dict):
-            return
-        for page_key, items in payload.items():
-            try:
-                page_idx = int(page_key)
-            except Exception:
-                continue
-            bucket = []
-            for item in (items or []):
-                rect_data = None
-                kind = 'field'
-                if isinstance(item, dict):
-                    rect_data = item.get('rect')
-                    kind = str(item.get('type', item.get('kind', 'field')) or 'field')
-                elif isinstance(item, (list, tuple)) and len(item) >= 2:
-                    rect_data = item[0]
-                    kind = str(item[1] or 'field')
-                else:
-                    rect_data = item
-                try:
-                    rr = fitz.Rect(rect_data)
-                except Exception:
-                    continue
-                kind = kind if kind in {'field', 'line', 'check'} else 'field'
-                duplicate = False
-                for ex_rect, ex_kind in bucket:
-                    try:
-                        if str(ex_kind or '') == kind and (self._rect_iou(rr, ex_rect) >= 0.78 or self._rects_refer_to_same_target(rr, ex_rect, tol=0.35)):
-                            duplicate = True
-                            break
-                    except Exception:
-                        pass
-                if not duplicate:
-                    bucket.append((fitz.Rect(rr), kind))
-            if bucket:
-                self.sticky_detections_by_page[page_idx] = bucket
 
     def _deserialize_repair_patches(self, payload):
         self.repair_patches_by_page = {}
@@ -7736,7 +7729,7 @@ class FormAlchemistEngine:
             ui_state = {}
 
         return {
-            "version": 8,
+            "version": 7,
             "record_label_column": str(self._record_label_column()),
             "record_label_source_column": str(getattr(self, "record_label_source_column", "") or ""),
             "record_key_column": str(self._record_key_column()),
@@ -7784,7 +7777,6 @@ class FormAlchemistEngine:
             "custom_mappings": mappings_serial,
             "area_templates": self._serialize_area_templates(),
             "repair_patches": self._serialize_repair_patches(),
-            "sticky_detections": self._serialize_sticky_detections(),
         }
 
     def apply_config(self, cfg):
@@ -7831,7 +7823,6 @@ class FormAlchemistEngine:
         self.semantic_target_overrides = {}
         self.area_templates_by_page = {}
         self.area_template_index = {}
-        self.sticky_detections_by_page = {}
         loaded_mappings = cfg.get("custom_mappings", {}) or {}
         for k, lst in loaded_mappings.items():
             if isinstance(lst, dict):
@@ -7875,8 +7866,6 @@ class FormAlchemistEngine:
         self.semantic_targets_by_page = {}
         self._deserialize_area_templates(cfg.get("area_templates", {}))
         self._deserialize_repair_patches(cfg.get("repair_patches", {}))
-        sticky_payload = cfg.get("sticky_detections", cfg.get("sticky_boxes", {}))
-        self._deserialize_sticky_detections(sticky_payload)
 
     def merge_config_into_current(self, incoming_cfg, keep_current_detection=True, prefer="incoming"):
         current_cfg = self.collect_config()
@@ -7933,71 +7922,6 @@ class FormAlchemistEngine:
                     "g": bool(item.get("g", False)),
                     "n": int(item.get("n", 1)),
                 })
-
-        def _merge_serialized_page_items(current_payload, incoming_payload, kind="generic"):
-            merged = {}
-            current_payload = current_payload if isinstance(current_payload, dict) else {}
-            incoming_payload = incoming_payload if isinstance(incoming_payload, dict) else {}
-
-            def _normalize_page_items(items):
-                if isinstance(items, dict):
-                    return [items]
-                if isinstance(items, list):
-                    return [it for it in items if isinstance(it, (dict, list, tuple))]
-                return []
-
-            def _item_signature(item):
-                if isinstance(item, dict):
-                    if kind == "sticky":
-                        rect = item.get("rect")
-                        rect_key = json.dumps(rect, sort_keys=True, ensure_ascii=False) if rect is not None else ""
-                        type_key = str(item.get("type", item.get("kind", "field")) or "field")
-                        return f"{type_key}|{rect_key}"
-                    stable_id = str(item.get("template_id") or item.get("patch_id") or "").strip()
-                    if stable_id:
-                        return stable_id
-                try:
-                    return _sha1_json(item)
-                except Exception:
-                    return repr(item)
-
-            all_pages = set(str(k) for k in current_payload.keys()) | set(str(k) for k in incoming_payload.keys())
-            for page_key in sorted(all_pages, key=lambda v: int(v) if str(v).isdigit() else str(v)):
-                current_items = _normalize_page_items(current_payload.get(page_key, []))
-                incoming_items = _normalize_page_items(incoming_payload.get(page_key, []))
-                page_items = []
-                seen = set()
-
-                def _append_unique(items):
-                    for raw in items:
-                        item = json.loads(json.dumps(raw, ensure_ascii=False)) if isinstance(raw, dict) else raw
-                        sig = _item_signature(item)
-                        if sig in seen:
-                            continue
-                        seen.add(sig)
-                        page_items.append(item)
-
-                _append_unique(current_items)
-                _append_unique(incoming_items)
-                if page_items:
-                    merged[str(page_key)] = page_items
-            return merged
-
-        merged_cfg["area_templates"] = _merge_serialized_page_items(
-            current_cfg.get("area_templates", {}),
-            incoming_cfg.get("area_templates", {}) if isinstance(incoming_cfg, dict) else {},
-            kind="area_template",
-        )
-        merged_cfg["repair_patches"] = _merge_serialized_page_items(
-            current_cfg.get("repair_patches", {}),
-            incoming_cfg.get("repair_patches", {}) if isinstance(incoming_cfg, dict) else {},
-            kind="repair_patch",
-        )
-        merged_cfg["sticky_detections"] = _merge_serialized_page_items(
-            current_cfg.get("sticky_detections", {}),
-            (incoming_cfg.get("sticky_detections", incoming_cfg.get("sticky_boxes", {})) if isinstance(incoming_cfg, dict) else {}),
-            kind="sticky",
-        )
 
         self.apply_config(merged_cfg)
         return merged_cfg
@@ -8558,10 +8482,23 @@ class InteractivePreview(Image):
             self.canvas.after.clear()
             self.canvas.ask_update()
             return
-        rgba = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGBA)
+        try:
+            if cv2 is not None:
+                rgba = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGBA)
+            else:
+                import numpy as _np_tex
+                rgba = img_bgr[:, :, ::-1]
+                if rgba.shape[2] == 3:
+                    alpha = 255 * _np_tex.ones((*rgba.shape[:2], 1), dtype=_np_tex.uint8)
+                    rgba = _np_tex.concatenate([rgba, alpha], axis=2)
+        except Exception:
+            import numpy as _np_tex2
+            rgba = img_bgr
         texture = Texture.create(size=(rgba.shape[1], rgba.shape[0]), colorfmt="rgba")
-        texture.blit_buffer(rgba.tobytes(), colorfmt="rgba", bufferfmt="ubyte")
+        buf = bytes(rgba.data)       # explicit copy; releases numpy reference
+        texture.blit_buffer(buf, colorfmt="rgba", bufferfmt="ubyte")
         texture.flip_vertical()
+        del rgba, buf                # free large intermediate buffers immediately
         self.texture = texture
         self._redraw_overlay()
         self.canvas.ask_update()
@@ -9538,6 +9475,12 @@ class FormAlchemistApp(MDApp):
             "danger": (1.000, 0.360, 0.560, 1),
         }
         Window.clearcolor = palette["bg"]
+        # Android: push layout above the soft keyboard so inputs stay visible
+        if platform == "android":
+            try:
+                Window.softinput_mode = "below_target"
+            except Exception:
+                pass
         self.ui_palette = palette
         self._page_selected_box_ids = {}
         self._active_selection_page_idx = 0
@@ -9653,9 +9596,9 @@ class FormAlchemistApp(MDApp):
                     tone=tone,
                     theme=palette,
                     size_hint_y=None,
-                    height=max(dp(36), row_h - dp(8)),
+                    height=max(dp(44), row_h - dp(4)),  # Android HIG: min 44dp tap target
                     font_size=dp(10.6),
-                    padding=[dp(7), dp(4), dp(7), dp(4)],
+                    padding=[dp(7), dp(6), dp(7), dp(6)],
                 )
                 return btn
 
@@ -9888,7 +9831,7 @@ class FormAlchemistApp(MDApp):
             hud_btns = GridLayout(cols=3, spacing=dp(6), size_hint_y=None, height=row_h)
             self.btn_hud_map = make_button("Map", tone="primary")
             self.btn_hud_map.bind(on_release=self._open_mapping_from_hud)
-            self.btn_hud_clear = make_button("Clear Link", tone="secondary")
+            self.btn_hud_clear = make_button("Clear Field Links", tone="secondary")
             self.btn_hud_clear.bind(on_release=self.on_clear_selected_mapping)
             self.btn_hud_tune = make_button("Tune", tone="accent")
             self.btn_hud_tune.bind(on_release=self.open_detection_settings_popup)
@@ -9958,10 +9901,30 @@ class FormAlchemistApp(MDApp):
         brand_wrap.add_widget(hero_sub)
         appbar.add_widget(brand_wrap)
 
+        # "?" help button — opens the quick-reference popup
+        _help_btn_appbar = self._make_compact_action_button("?", tone="ghost")
+        _help_btn_appbar.size_hint = (None, None)
+        _help_btn_appbar.size = (dp(44), dp(44))
+        _help_btn_appbar.bind(on_release=self._show_help_popup)
+        self._help_btn = _help_btn_appbar
+        appbar.add_widget(_help_btn_appbar)
+
         self.mobile_meta_lbl = None
+        self.android_status_file_lbl = None
+        self.android_status_page_lbl = None
+        self.android_status_boxes_lbl = None
+        self.android_status_mode_lbl = None
+        self.android_inspector_selected_lbl = None
+        self.android_inspector_count_lbl = None
+        self.android_inspector_box_lbl = None
+        self.android_inspector_mapping_lbl = None
+        self.android_inspector_resolution_lbl = None
+        self.android_capture_summary_lbl = None
+        self.android_capture_candidate_lbl = None
+        self.android_capture_action_hint_lbl = None
 
         status_chip = Label(
-            text=("Ready • Open a PDF to begin" if is_mobile else "Ready • Import a PDF, then refresh or run detect"),
+            text=("Step 1: Tap Load PDF to open your form" if is_mobile else "Step 1: Open a PDF form  •  Step 2: Load Data  •  Step 3: Map & Export"),
             color=palette["text"],
             size_hint=(1, None) if is_mobile else (None, None),
             height=dp(44) if is_mobile else dp(48),
@@ -10021,7 +9984,7 @@ class FormAlchemistApp(MDApp):
             mobile_flow_card.add_widget(flow_title)
 
             self.mobile_flow_lbl = Label(
-                text="Start in Files. Open a PDF first.",
+                text="Step 1: Tap '1 Open Files' and load your PDF form.",
                 color=palette["text"],
                 bold=True,
                 size_hint_y=None,
@@ -10076,8 +10039,32 @@ class FormAlchemistApp(MDApp):
             self._mobile_section_host.clear_widgets()
             self._mobile_section_host.add_widget(section_card)
             self._mobile_active_section = section_key
+            try:
+                if platform == "android" and android_panel_card is not None and len(android_panel_card.children) >= 2:
+                    _panel_title = android_panel_card.children[-1]
+                    if hasattr(_panel_title, "text"):
+                        _panel_title.text = f"Panel • {section_key}"
+            except Exception:
+                pass
             for key, btn in self._mobile_section_buttons.items():
                 _style_mobile_section_button(btn, active=(key == section_key))
+            try:
+                if getattr(self, "android_status_mode_lbl", None) is not None:
+                    self.android_status_mode_lbl.text = f"Mode: {section_key}"
+            except Exception:
+                pass
+            try:
+                self._refresh_android_capture_stage_ui()
+            except Exception:
+                pass
+            try:
+                self._refresh_android_selection_inspector()
+            except Exception:
+                pass
+            try:
+                self._refresh_android_capture_review_panel()
+            except Exception:
+                pass
 
         self._show_mobile_section = _show_mobile_section
 
@@ -10134,13 +10121,16 @@ class FormAlchemistApp(MDApp):
             row = BoxLayout(orientation="horizontal", spacing=dp(7), size_hint=(None, None), height=dp(38))
             row.bind(minimum_width=row.setter("width"))
             display_map = {
-                "Files": "Files",
-                "Session": "Session",
-                "Detection": "Fields",
+                "Files": "1 Open Files",
+                "Detection": "2 Find Fields",
+                "Capture": "3 Draw Area",
+                "Templates": "4 Templates",
+                "Inspect": "5 Repair",
+                "Mapping": "6 Map Fields",
+                "Session": "7 Settings",
+                "Export": "8 Export PDF",
                 "Text": "Text",
                 "Learning": "Memory",
-                "Mapping": "Map",
-                "Export": "Export",
             }
             for name in section_names:
                 btn = self._make_compact_action_button(display_map.get(name, name), tone="ghost")
@@ -10157,7 +10147,7 @@ class FormAlchemistApp(MDApp):
         controls = GridLayout(cols=1, spacing=gap, size_hint_y=None)
         controls.bind(minimum_height=controls.setter("height"))
 
-        files_card, files_body = make_card("Workspace", "Open files and presets" if is_mobile else "Open data, templates, and saved presets")
+        files_card, files_body = make_card("Workspace", "Open your PDF form and data file" if is_mobile else "Open your PDF form, data file (CSV/XLSX), and saved presets")
         file_grid = GridLayout(cols=1 if is_mobile else 3, spacing=dp(8), size_hint_y=None)
         file_buttons = [
             ("Load PDF", self.on_load_pdf, "primary"),
@@ -10180,7 +10170,7 @@ class FormAlchemistApp(MDApp):
             self._desktop_section_cards["Workspace"] = files_card
 
         nav_card, nav_body = make_card("Session", "Choose a record, page, and next action" if is_mobile else "Choose a record, move through pages, find fillable areas, and refresh the preview")
-        self.patient_spinner = make_spinner(RECORD_SELECT_TEXT, picker_title="Choose a record", search_hint="Type to find a record label")
+        self.patient_spinner = make_spinner(RECORD_SELECT_TEXT, picker_title="Choose a patient / record", search_hint="Type to search for a patient or record")
         self.patient_spinner.bind(text=self.on_patient_change)
         nav_body.add_widget(labeled_field("Record", self.patient_spinner, "Tap the field, type to filter the record list, then press Enter or choose the row to preview or export"))
         nav_grid = GridLayout(cols=3, spacing=dp(8), size_hint_y=None, height=row_h)
@@ -10220,7 +10210,7 @@ class FormAlchemistApp(MDApp):
         else:
             self._desktop_section_cards["Session"] = nav_card
 
-        detect_card, detect_body = make_card("Detection", "Adjust how the app finds boxes, lines, and checkboxes" if is_mobile else "Adjust how the app finds fill areas, answer lines, and checkboxes")
+        detect_card, detect_body = make_card("Detection", "Find fillable areas on the form" if is_mobile else "Tune how the app finds fill areas, answer lines, and checkboxes")
         explain = Label(text="These controls decide how the app finds fill areas, answer lines, and checkboxes.",
                         color=palette["muted"], size_hint_y=None, height=dp(18), halign="left", valign="middle", font_size=dp(10.5 if is_mobile else 11))
         explain.bind(size=self._sync_label_text_size)
@@ -10314,9 +10304,9 @@ class FormAlchemistApp(MDApp):
             self._desktop_section_cards["Text"] = text_card
         self._update_text_tuning_summary()
 
-        map_card, map_body = make_card("Mapping", "Link selected boxes to data columns" if is_mobile else "Link selected boxes to your data directly from the preview")
+        map_card, map_body = make_card("Mapping", "Link detected fields to your data columns" if is_mobile else "Link detected fields to your data columns directly from the preview")
         self.box_ids_input = make_input("", "0,1,2")
-        self.column_spinner = make_spinner(COLUMN_SELECT_TEXT, picker_title="Choose a data column", search_hint="Type to find a column name")
+        self.column_spinner = make_spinner(COLUMN_SELECT_TEXT, picker_title="Choose which column fills this field", search_hint="Type to find a column name")
         self.trigger_input = make_input("", "Trigger")
         self.grid_flag_chk = CheckBox(active=False)
         self.grid_n_input = make_input("1", "1", input_filter="int")
@@ -10328,7 +10318,7 @@ class FormAlchemistApp(MDApp):
         map_opts.add_widget(labeled_checkbox("Split Across Boxes", self.grid_flag_chk, "Spread characters across separate boxes or cells"))
         map_opts.add_widget(labeled_field("Number of Boxes", self.grid_n_input, "How many boxes or cells should receive the split text"))
         map_body.add_widget(map_opts)
-        self.btn_assign = make_button("Save Link", tone="primary")
+        self.btn_assign = make_button("Save Field Link", tone="primary")
         self.btn_assign.height = dp(42) if is_mobile else self.btn_assign.height
         self.btn_assign.bind(on_release=self.on_assign_mapping)
         map_body.add_widget(self.btn_assign)
@@ -10337,11 +10327,11 @@ class FormAlchemistApp(MDApp):
         else:
             self._desktop_section_cards["Mapping"] = map_card
 
-        export_card, export_body = make_card("Export", "Create finished PDF files" if is_mobile else "Create finished PDF files for one record or all records")
+        export_card, export_body = make_card("Export", "Generate filled PDFs from your data" if is_mobile else "Generate filled PDF files for one record or for all records at once")
         out_grid = GridLayout(cols=1 if is_mobile else 2, spacing=dp(8), size_hint_y=None, height=(2*row_h+dp(8)) if is_mobile else row_h)
-        self.btn_generate_one = make_button("Export Current Record PDF", tone="accent")
+        self.btn_generate_one = make_button("Export This Record", tone="accent")
         self.btn_generate_one.bind(on_release=self.on_generate_single)
-        self.btn_generate_batch = make_button("Export All Record PDFs", tone="plain")
+        self.btn_generate_batch = make_button("Export All Records", tone="plain")
         self.btn_generate_batch.bind(on_release=self.on_generate_batch)
         out_grid.add_widget(self.btn_generate_one)
         out_grid.add_widget(self.btn_generate_batch)
@@ -10361,6 +10351,405 @@ class FormAlchemistApp(MDApp):
             self._mobile_section_cards["Export"] = export_card
         else:
             self._desktop_section_cards["Export"] = export_card
+
+        if is_mobile and platform == "android":
+            def _make_android_panel_card(title, subtitle=""):
+                card, body = make_card(title, subtitle)
+                return card, body
+
+            # Android-specific staged panels: these are lighter action-first cards
+            # that sit in the visible Android panel host instead of the older dense
+            # mobile sidebar cards.
+            android_files_card, android_files_body = _make_android_panel_card(
+                "1 Open Files",
+                "Open your PDF form and data file to get started."
+            )
+            files_quick = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=dp(92))
+            btn_android_load_pdf = self._make_compact_action_button("Load PDF", tone="primary")
+            btn_android_load_pdf.bind(on_release=self.on_load_pdf)
+            btn_android_load_data = self._make_compact_action_button("Load Data", tone="plain")
+            btn_android_load_data.bind(on_release=self.on_load_df)
+            btn_android_templates = self._make_compact_action_button("Templates", tone="plain")
+            btn_android_templates.bind(on_release=self._open_area_template_library_popup)
+            btn_android_detect_jump = self._make_compact_action_button("Find Fields", tone="accent")
+            btn_android_detect_jump.bind(on_release=lambda *_: self._show_mobile_section("Detection"))
+            for _w in (btn_android_load_pdf, btn_android_load_data, btn_android_templates, btn_android_detect_jump):
+                _w.size_hint = (1, None)
+                _w.height = dp(42)
+                files_quick.add_widget(_w)
+            android_files_body.add_widget(files_quick)
+
+            android_session_card, android_session_body = _make_android_panel_card(
+                "7 Settings",
+                "Navigate pages and refresh the form preview."
+            )
+            session_grid = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=dp(92))
+            btn_android_prev = self._make_compact_action_button("Prev Page", tone="plain")
+            btn_android_prev.bind(on_release=self.on_prev_page)
+            btn_android_next = self._make_compact_action_button("Next Page", tone="plain")
+            btn_android_next.bind(on_release=self.on_next_page)
+            btn_android_find = self._make_compact_action_button("Find", tone="accent")
+            btn_android_find.bind(on_release=self.on_run_detect)
+            btn_android_preview = self._make_compact_action_button("Refresh Preview", tone="ghost")
+            btn_android_preview.bind(on_release=self.on_preview)
+            for _w in (btn_android_prev, btn_android_next, btn_android_find, btn_android_preview):
+                _w.size_hint = (1, None)
+                _w.height = dp(42)
+                session_grid.add_widget(_w)
+            android_session_body.add_widget(session_grid)
+
+            android_detection_card, android_detection_body = _make_android_panel_card(
+                "2 Find Fields",
+                "Find fillable areas on the form and adjust detection settings."
+            )
+            det_actions = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=dp(92))
+            btn_android_detect = self._make_compact_action_button("Find Fields", tone="accent")
+            btn_android_detect.bind(on_release=self.on_run_detect)
+            btn_android_tuning = self._make_compact_action_button("Open Tuning", tone="plain")
+            btn_android_tuning.bind(on_release=self.open_detection_settings_popup)
+            btn_android_capture_jump = self._make_compact_action_button("Capture", tone="accent")
+            btn_android_capture_jump.bind(on_release=self._toggle_manual_area_capture_mode)
+            btn_android_repair_jump = self._make_compact_action_button("Repair", tone="secondary")
+            btn_android_repair_jump.bind(on_release=self._toggle_mobile_inspect_panel)
+            for _w in (btn_android_detect, btn_android_tuning, btn_android_capture_jump, btn_android_repair_jump):
+                _w.size_hint = (1, None)
+                _w.height = dp(42)
+                det_actions.add_widget(_w)
+            android_detection_body.add_widget(det_actions)
+
+            det_compact = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=dp(132))
+            compact_detection_fields = [
+                (detection_ui_label("f_area", "Field Area"), self.f_area),
+                (detection_ui_label("line_minw", "Line Min Width"), self.line_minw),
+                (detection_ui_label("c_strict", "Checkbox Strict"), self.c_strict),
+                (detection_ui_label("c_size_max", "Checkbox Max"), self.c_size_max),
+            ]
+            for _label_txt, _widget in compact_detection_fields:
+                det_compact.add_widget(labeled_field(_label_txt, _widget))
+            android_detection_body.add_widget(det_compact)
+
+            android_mapping_card, android_mapping_body = _make_android_panel_card(
+                "6 Map Fields",
+                "Link detected fields to your data columns."
+            )
+            map_action_grid = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=dp(92))
+            btn_android_map_save = self._make_compact_action_button("Save Field Link", tone="primary")
+            btn_android_map_save.bind(on_release=self.on_assign_mapping)
+            btn_android_map_clear = self._make_compact_action_button("Clear Field Links", tone="ghost")
+            btn_android_map_clear.bind(on_release=self.on_clear_mapping)
+            btn_android_select_toggle = self._make_compact_action_button("Select Mode", tone="plain")
+            btn_android_select_toggle.bind(on_release=self.toggle_select_mode)
+            btn_android_map_templates = self._make_compact_action_button("Templates", tone="plain")
+            btn_android_map_templates.bind(on_release=self._open_area_template_library_popup)
+            for _w in (btn_android_map_save, btn_android_map_clear, btn_android_select_toggle, btn_android_map_templates):
+                _w.size_hint = (1, None)
+                _w.height = dp(42)
+                map_action_grid.add_widget(_w)
+            android_mapping_body.add_widget(map_action_grid)
+            android_mapping_body.add_widget(labeled_field("Record", self.patient_spinner))
+            android_mapping_body.add_widget(labeled_field("Column", self.column_spinner))
+
+            android_export_card, android_export_body = _make_android_panel_card(
+                "8 Export PDF",
+                "Generate filled PDFs from your data."
+            )
+            export_action_grid = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=dp(92))
+            btn_android_export_one = self._make_compact_action_button("Export This Record", tone="accent")
+            btn_android_export_one.bind(on_release=self.on_generate_single)
+            btn_android_export_batch = self._make_compact_action_button("Export All Records", tone="plain")
+            btn_android_export_batch.bind(on_release=self.on_generate_batch)
+            btn_android_save_cfg = self._make_compact_action_button("Save Config", tone="ghost")
+            btn_android_save_cfg.bind(on_release=self.on_save_config)
+            btn_android_load_cfg = self._make_compact_action_button("Load Config", tone="ghost")
+            btn_android_load_cfg.bind(on_release=self.on_load_config)
+            for _w in (btn_android_export_one, btn_android_export_batch, btn_android_save_cfg, btn_android_load_cfg):
+                _w.size_hint = (1, None)
+                _w.height = dp(42)
+                export_action_grid.add_widget(_w)
+            android_export_body.add_widget(export_action_grid)
+            android_export_body.add_widget(self.export_note_lbl)
+
+            self._mobile_section_cards["Files"] = android_files_card
+            self._mobile_section_cards["Session"] = android_session_card
+            self._mobile_section_cards["Detection"] = android_detection_card
+            self._mobile_section_cards["Mapping"] = android_mapping_card
+            self._mobile_section_cards["Export"] = android_export_card
+
+            android_capture_card, android_capture_body = _make_android_panel_card(
+                "3 Draw Area",
+                "Draw a region on the form to add or remove detected fields."
+            )
+            capture_stage_lbl = Label(
+                text="Stage: Idle",
+                color=palette["muted"],
+                size_hint_y=None,
+                height=dp(18),
+                halign="left",
+                valign="middle",
+                font_size=dp(10.5),
+            )
+            capture_stage_lbl.bind(size=self._sync_label_text_size)
+            self.android_capture_stage_lbl = capture_stage_lbl
+            android_capture_body.add_widget(capture_stage_lbl)
+
+            capture_action_grid = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=dp(92))
+            btn_android_capture_start = self._make_compact_action_button("Start Capture", tone="accent")
+            btn_android_capture_start.bind(on_release=self._toggle_manual_area_capture_mode)
+            btn_android_capture_cancel = self._make_compact_action_button("Cancel Capture", tone="ghost")
+            btn_android_capture_cancel.bind(on_release=lambda *_: self._clear_manual_capture_preview(preserve_mode=False))
+            btn_android_capture_templates = self._make_compact_action_button("Saved Templates", tone="plain")
+            btn_android_capture_templates.bind(on_release=self._open_area_template_library_popup)
+            btn_android_capture_tuning = self._make_compact_action_button("Open Tuning", tone="plain")
+            btn_android_capture_tuning.bind(on_release=self.open_detection_settings_popup)
+            for _w in (btn_android_capture_start, btn_android_capture_cancel, btn_android_capture_templates, btn_android_capture_tuning):
+                _w.size_hint = (1, None)
+                _w.height = dp(42)
+                capture_action_grid.add_widget(_w)
+            android_capture_body.add_widget(capture_action_grid)
+
+            capture_help = Label(
+                text="1. Start Capture\n2. Tap top-left and bottom-right on the preview\n3. Tap an outline or use Prev/Next below\n4. Use Area / Delete / Find Similar from this panel",
+                color=palette["text"],
+                size_hint_y=None,
+                height=dp(72),
+                halign="left",
+                valign="middle",
+                font_size=dp(10.5),
+            )
+            capture_help.bind(size=self._sync_label_text_size)
+            self._bind_auto_height_label(capture_help, min_height=dp(56), extra_pad=dp(6))
+            android_capture_body.add_widget(capture_help)
+
+            self.android_capture_candidate_lbl = Label(
+                text="Candidate: —",
+                color=palette["muted"],
+                size_hint_y=None,
+                height=dp(18),
+                halign="left",
+                valign="middle",
+                font_size=dp(10.5),
+            )
+            self.android_capture_candidate_lbl.bind(size=self._sync_label_text_size)
+            android_capture_body.add_widget(self.android_capture_candidate_lbl)
+
+            self.android_capture_summary_lbl = Label(
+                text="No captured area yet.",
+                color=palette["text"],
+                size_hint_y=None,
+                height=dp(56),
+                halign="left",
+                valign="middle",
+                font_size=dp(10.5),
+            )
+            self.android_capture_summary_lbl.bind(size=self._sync_label_text_size)
+            self._bind_auto_height_label(self.android_capture_summary_lbl, min_height=dp(44), extra_pad=dp(6))
+            android_capture_body.add_widget(self.android_capture_summary_lbl)
+
+            candidate_switch_row = GridLayout(cols=3, spacing=dp(8), size_hint_y=None, height=dp(42))
+            btn_android_capture_prev = self._make_compact_action_button("Prev Trace", tone="plain")
+            btn_android_capture_prev.bind(on_release=lambda *_: self._select_capture_shape_candidate(-1))
+            btn_android_capture_next = self._make_compact_action_button("Next Trace", tone="plain")
+            btn_android_capture_next.bind(on_release=lambda *_: self._select_capture_shape_candidate(1))
+            btn_android_capture_popup = self._make_compact_action_button("Open Popup", tone="ghost")
+            btn_android_capture_popup.bind(on_release=lambda *_: self._open_manual_area_capture_confirm_popup())
+            for _w in (btn_android_capture_prev, btn_android_capture_next, btn_android_capture_popup):
+                _w.size_hint = (1, None)
+                _w.height = dp(38)
+                candidate_switch_row.add_widget(_w)
+            android_capture_body.add_widget(candidate_switch_row)
+
+            self.android_capture_action_hint_lbl = Label(
+                text="Review stays here on Android. Popup is optional.",
+                color=palette["muted"],
+                size_hint_y=None,
+                height=dp(18),
+                halign="left",
+                valign="middle",
+                font_size=dp(10),
+            )
+            self.android_capture_action_hint_lbl.bind(size=self._sync_label_text_size)
+            android_capture_body.add_widget(self.android_capture_action_hint_lbl)
+
+            capture_quick_row = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=dp(92))
+            btn_android_capture_find_page = self._make_compact_action_button("Find Similar Page", tone="plain")
+            btn_android_capture_find_page.bind(on_release=self._find_similar_for_active_capture_template)
+            btn_android_capture_find_form = self._make_compact_action_button("Find Similar Form", tone="plain")
+            btn_android_capture_find_form.bind(on_release=self._find_similar_in_form_for_active_capture_template)
+            btn_android_capture_apply = self._make_compact_action_button("Use Area", tone="primary")
+            btn_android_capture_apply.bind(on_release=self._apply_confirmed_manual_area_capture)
+            btn_android_capture_delete = self._make_compact_action_button("Delete In Area", tone="danger")
+            if hasattr(self, '_delete_detected_items_for_active_capture'):
+                btn_android_capture_delete.bind(on_release=lambda *_: self._delete_detected_items_for_active_capture(persist_as_repair_patch=True, include_mappings=True))
+            for _w in (btn_android_capture_find_page, btn_android_capture_find_form, btn_android_capture_apply, btn_android_capture_delete):
+                _w.size_hint = (1, None)
+                _w.height = dp(42)
+                capture_quick_row.add_widget(_w)
+            android_capture_body.add_widget(capture_quick_row)
+
+            self._mobile_section_cards["Capture"] = android_capture_card
+
+            android_templates_card, android_templates_body = _make_android_panel_card(
+                "4 Templates",
+                "Reuse saved field layouts from previous forms."
+            )
+
+            templates_stage_lbl = Label(
+                text="Saved Area Templates are reusable on Detect and Find Similar.",
+                color=palette["muted"],
+                size_hint_y=None,
+                height=dp(22),
+                halign="left",
+                valign="middle",
+                font_size=dp(10.5),
+            )
+            templates_stage_lbl.bind(size=self._sync_label_text_size)
+            self._bind_auto_height_label(templates_stage_lbl, min_height=dp(20), extra_pad=dp(4))
+            android_templates_body.add_widget(templates_stage_lbl)
+
+            templates_action_grid = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=dp(92))
+            btn_android_templates_open = self._make_compact_action_button("Open Library", tone="accent")
+            btn_android_templates_open.bind(on_release=self._open_area_template_library_popup)
+            btn_android_templates_capture = self._make_compact_action_button("Go to Draw Area", tone="plain")
+            btn_android_templates_capture.bind(on_release=lambda *_: self._show_mobile_section("Capture"))
+            btn_android_templates_find_page = self._make_compact_action_button("Find Saved Page", tone="plain")
+            btn_android_templates_find_page.bind(on_release=self._open_area_template_library_popup)
+            btn_android_templates_find_form = self._make_compact_action_button("Find Saved Form", tone="plain")
+            btn_android_templates_find_form.bind(on_release=self._open_area_template_library_popup)
+            for _w in (
+                btn_android_templates_open,
+                btn_android_templates_capture,
+                btn_android_templates_find_page,
+                btn_android_templates_find_form,
+            ):
+                _w.size_hint = (1, None)
+                _w.height = dp(42)
+                templates_action_grid.add_widget(_w)
+            android_templates_body.add_widget(templates_action_grid)
+
+            templates_help = Label(
+                text="Use Open Library to apply, find, edit, or delete saved templates.\nTemplates are the durable layer reused by Detect and Find Similar.",
+                color=palette["text"],
+                size_hint_y=None,
+                height=dp(52),
+                halign="left",
+                valign="middle",
+                font_size=dp(10.5),
+            )
+            templates_help.bind(size=self._sync_label_text_size)
+            self._bind_auto_height_label(templates_help, min_height=dp(42), extra_pad=dp(6))
+            android_templates_body.add_widget(templates_help)
+
+            templates_manage_grid = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=dp(92))
+            btn_android_templates_detect = self._make_compact_action_button("Find Fields", tone="primary")
+            btn_android_templates_detect.bind(on_release=self.on_run_detect)
+            btn_android_templates_refresh = self._make_compact_action_button("Refresh Preview", tone="ghost")
+            btn_android_templates_refresh.bind(on_release=self.on_preview)
+            btn_android_templates_export = self._make_compact_action_button("Go to Export PDF", tone="plain")
+            btn_android_templates_export.bind(on_release=lambda *_: self._show_mobile_section("Export"))
+            btn_android_templates_mapping = self._make_compact_action_button("Go to Map Fields", tone="plain")
+            btn_android_templates_mapping.bind(on_release=lambda *_: self._show_mobile_section("Mapping"))
+            for _w in (
+                btn_android_templates_detect,
+                btn_android_templates_refresh,
+                btn_android_templates_export,
+                btn_android_templates_mapping,
+            ):
+                _w.size_hint = (1, None)
+                _w.height = dp(42)
+                templates_manage_grid.add_widget(_w)
+            android_templates_body.add_widget(templates_manage_grid)
+
+            self._mobile_section_cards["Templates"] = android_templates_card
+
+            android_inspect_card, android_inspect_body = _make_android_panel_card(
+                "5 Repair",
+                "Inspect selected fields and fix incorrect detections."
+            )
+
+            inspect_summary = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
+            inspect_summary.bind(minimum_height=inspect_summary.setter("height"))
+
+            self.android_inspector_selected_lbl = Label(
+                text="None",
+                color=palette["text"],
+                size_hint_y=None,
+                height=dp(20),
+                halign="left",
+                valign="middle",
+                font_size=dp(11),
+            )
+            self.android_inspector_selected_lbl.bind(size=self._sync_label_text_size)
+            inspect_summary.add_widget(labeled_field("Selected IDs", self.android_inspector_selected_lbl))
+
+            self.android_inspector_count_lbl = Label(
+                text="0",
+                color=palette["text"],
+                size_hint_y=None,
+                height=dp(20),
+                halign="left",
+                valign="middle",
+                font_size=dp(11),
+            )
+            self.android_inspector_count_lbl.bind(size=self._sync_label_text_size)
+            inspect_summary.add_widget(labeled_field("Selected Count", self.android_inspector_count_lbl))
+
+            self.android_inspector_box_lbl = Label(
+                text="No selection",
+                color=palette["text"],
+                size_hint_y=None,
+                height=dp(42),
+                halign="left",
+                valign="middle",
+                font_size=dp(11),
+            )
+            self.android_inspector_box_lbl.bind(size=self._sync_label_text_size)
+            self._bind_auto_height_label(self.android_inspector_box_lbl, min_height=dp(36), extra_pad=dp(6))
+            inspect_summary.add_widget(labeled_field("Primary Box", self.android_inspector_box_lbl))
+
+            self.android_inspector_mapping_lbl = Label(
+                text="Choose a box in the preview to inspect it.",
+                color=palette["muted"],
+                size_hint_y=None,
+                height=dp(42),
+                halign="left",
+                valign="middle",
+                font_size=dp(10.5),
+            )
+            self.android_inspector_mapping_lbl.bind(size=self._sync_label_text_size)
+            self._bind_auto_height_label(self.android_inspector_mapping_lbl, min_height=dp(36), extra_pad=dp(6))
+            inspect_summary.add_widget(labeled_field("Current Link", self.android_inspector_mapping_lbl))
+
+            self.android_inspector_resolution_lbl = Label(
+                text="Resolved preview value: —",
+                color=palette["text"],
+                size_hint_y=None,
+                height=dp(42),
+                halign="left",
+                valign="middle",
+                font_size=dp(10.5),
+            )
+            self.android_inspector_resolution_lbl.bind(size=self._sync_label_text_size)
+            self._bind_auto_height_label(self.android_inspector_resolution_lbl, min_height=dp(36), extra_pad=dp(6))
+            inspect_summary.add_widget(labeled_field("Resolved Value", self.android_inspector_resolution_lbl))
+
+            android_inspect_body.add_widget(inspect_summary)
+
+            inspect_actions = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=dp(92))
+            btn_android_inspect_select = self._make_compact_action_button("Select Mode", tone="plain")
+            btn_android_inspect_select.bind(on_release=self._toggle_mobile_selection_mode)
+            btn_android_inspect_clear = self._make_compact_action_button("Clear Field Links", tone="ghost")
+            btn_android_inspect_clear.bind(on_release=self.on_clear_selected_mapping)
+            btn_android_inspect_map = self._make_compact_action_button("Go to Map Fields", tone="primary")
+            btn_android_inspect_map.bind(on_release=lambda *_: self._show_mobile_section("Mapping"))
+            btn_android_inspect_repair = self._make_compact_action_button("Repair Tools", tone="secondary")
+            btn_android_inspect_repair.bind(on_release=self._toggle_mobile_inspect_panel)
+            for _w in (btn_android_inspect_select, btn_android_inspect_clear, btn_android_inspect_map, btn_android_inspect_repair):
+                _w.size_hint = (1, None)
+                _w.height = dp(42)
+                inspect_actions.add_widget(_w)
+            android_inspect_body.add_widget(inspect_actions)
+
+            self._mobile_section_cards["Inspect"] = android_inspect_card
 
         learning_card, learning_body = make_card("Smart Memory", "Review saved profiles, revisions, and auto-adjustment history")
         learning_note = Label(
@@ -10407,7 +10796,7 @@ class FormAlchemistApp(MDApp):
             ("Refresh State", self.on_learning_refresh, "soft"),
             ("Save Revision", self.on_learning_save_revision, "accent"),
             ("Approve Current", self.on_learning_approve_current, "primary"),
-            ("Apply Best", self.on_learning_apply_best_profile, "plain"),
+            ("Auto-Apply Best Profile", self.on_learning_apply_best_profile, "plain"),
             ("View Current", self.on_learning_view_current_revision, "plain"),
             ("Browse Revisions", self.on_learning_browse_revisions, "plain"),
             ("Reload Memory", self.on_learning_reload_memory, "plain"),
@@ -10423,7 +10812,7 @@ class FormAlchemistApp(MDApp):
                 self.btn_learning_save_revision = btn
             elif txt == "Approve Current":
                 self.btn_learning_approve_current = btn
-            elif txt == "Apply Best":
+            elif txt == "Auto-Apply Best Profile":
                 self.btn_learning_apply_best = btn
             elif txt == "View Current":
                 self.btn_learning_view_current = btn
@@ -10468,7 +10857,7 @@ class FormAlchemistApp(MDApp):
         self._bind_auto_height_label(self.inspector_resolution_lbl, min_height=dp(36), extra_pad=dp(6))
         mapping_section_body.add_widget(labeled_field("Value That Will Be Written", self.inspector_resolution_lbl))
         clear_row = GridLayout(cols=1, spacing=dp(8), size_hint_y=None, height=row_h)
-        self.btn_clear_mapping = make_button("Remove Link from Selected Box", tone="plain")
+        self.btn_clear_mapping = make_button("Clear Field Links", tone="plain")
         self.btn_clear_mapping.bind(on_release=self.on_clear_selected_mapping)
         clear_row.add_widget(self.btn_clear_mapping)
         mapping_section_body.add_widget(clear_row)
@@ -10520,6 +10909,119 @@ class FormAlchemistApp(MDApp):
                 wrap.add_widget(btn)
             return wrap
 
+        android_top_modes_card = None
+        android_quick_actions_card = None
+        android_bottom_status_card = None
+        android_panel_card = None
+        android_panel_scroll = None
+        android_panel_host = None
+
+        if is_mobile and platform == "android":
+            android_top_modes_card = BoxLayout(
+                orientation="vertical",
+                spacing=dp(6),
+                size_hint_y=None,
+                height=dp(98),
+                padding=[dp(8), dp(8), dp(8), dp(8)],
+            )
+            style_card(android_top_modes_card, palette["surface_alt"], radius=dp(16))
+
+            mode_title = Label(
+                text="Workspace",
+                color=palette["muted"],
+                size_hint_y=None,
+                height=dp(14),
+                halign="left",
+                valign="middle",
+                font_size=dp(9.5),
+            )
+            mode_title.bind(size=self._sync_label_text_size)
+            android_top_modes_card.add_widget(mode_title)
+
+            top_mode_tabs = _make_mobile_section_tabs(["Files", "Detection", "Capture", "Templates", "Inspect", "Mapping", "Session", "Export"])  # keys unchanged; display_map applies friendly labels
+            android_top_modes_card.add_widget(top_mode_tabs)
+
+            android_quick_actions_card = BoxLayout(
+                orientation="horizontal",
+                spacing=dp(6),
+                size_hint_y=None,
+                height=dp(42),
+            )
+            btn_top_capture = self._make_compact_action_button("3 Draw Area", tone="accent")
+            btn_top_capture.bind(on_release=lambda *_: self._show_mobile_section("Capture"))
+            btn_top_templates = self._make_compact_action_button("4 Templates", tone="plain")
+            btn_top_templates.bind(on_release=lambda *_: self._show_mobile_section("Templates"))
+            btn_top_repair = self._make_compact_action_button("5 Repair", tone="secondary")
+            btn_top_repair.bind(on_release=lambda *_: self._show_mobile_section("Inspect"))
+            btn_top_help = self._make_compact_action_button("? Help", tone="plain")
+            btn_top_help.bind(on_release=lambda *_: self._show_help_popup())
+            for _w in (btn_top_capture, btn_top_templates, btn_top_repair, btn_top_help):
+                _w.size_hint = (1, None)
+                _w.height = dp(38)
+                android_quick_actions_card.add_widget(_w)
+            android_top_modes_card.add_widget(android_quick_actions_card)
+
+            android_panel_card = BoxLayout(
+                orientation="vertical",
+                spacing=dp(6),
+                size_hint_y=None,
+                height=dp(210),
+                padding=[dp(8), dp(8), dp(8), dp(8)],
+            )
+            style_card(android_panel_card, palette["surface_alt"], radius=dp(16))
+            panel_title = Label(
+                text="Panel",
+                color=palette["muted"],
+                size_hint_y=None,
+                height=dp(14),
+                halign="left",
+                valign="middle",
+                font_size=dp(9.5),
+            )
+            panel_title.bind(size=self._sync_label_text_size)
+            android_panel_card.add_widget(panel_title)
+            android_panel_scroll = ScrollView(
+                do_scroll_x=False,
+                do_scroll_y=True,
+                bar_width=dp(4),
+                scroll_type=["bars", "content"],
+            )
+            android_panel_host = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
+            android_panel_host.bind(minimum_height=android_panel_host.setter("height"))
+            android_panel_scroll.add_widget(android_panel_host)
+            android_panel_card.add_widget(android_panel_scroll)
+
+            android_bottom_status_card = BoxLayout(
+                orientation="vertical",
+                spacing=dp(4),
+                size_hint_y=None,
+                height=dp(74),
+                padding=[dp(10), dp(8), dp(10), dp(8)],
+            )
+            style_card(android_bottom_status_card, palette["surface_alt"], radius=dp(16))
+
+            status_row = GridLayout(cols=2, rows=2, spacing=dp(4), size_hint=(1, None), height=dp(38))
+            self.android_status_file_lbl = Label(text="File: No PDF", color=palette["muted"], halign="left", valign="middle", font_size=dp(10))
+            self.android_status_page_lbl = Label(text="Page: 1/1", color=palette["muted"], halign="left", valign="middle", font_size=dp(10))
+            self.android_status_boxes_lbl = Label(text="Boxes: 0", color=palette["muted"], halign="left", valign="middle", font_size=dp(10))
+            self.android_status_mode_lbl = Label(text="Mode: Files", color=palette["text"], halign="left", valign="middle", font_size=dp(10.5), bold=True)
+            for _lbl in (self.android_status_file_lbl, self.android_status_page_lbl, self.android_status_boxes_lbl, self.android_status_mode_lbl):
+                _lbl.bind(size=self._sync_label_text_size)
+                status_row.add_widget(_lbl)
+            android_bottom_status_card.add_widget(status_row)
+
+            legend_row = BoxLayout(orientation="horizontal", spacing=dp(6), size_hint_y=None, height=dp(16))
+            for _txt, _col in [
+                ("Field", (0.25, 0.90, 0.42, 1)),
+                ("Check", (1.00, 0.88, 0.25, 1)),
+                ("ROI", (0.35, 0.70, 1.00, 1)),
+                ("Trace", (1.00, 0.60, 0.18, 1)),
+            ]:
+                chip = Label(text=f"[color=#{int(_col[0]*255):02x}{int(_col[1]*255):02x}{int(_col[2]*255):02x}]●[/color] {_txt}", markup=True, color=palette["muted"], halign="left", valign="middle", font_size=dp(9.3))
+                chip.bind(size=self._sync_label_text_size)
+                legend_row.add_widget(chip)
+            android_bottom_status_card.add_widget(legend_row)
+
         if is_mobile:
             main.spacing = 0
             workspace = FloatLayout()
@@ -10533,6 +11035,10 @@ class FormAlchemistApp(MDApp):
             self.btn_sidebar_toggle = self._make_compact_action_button("Menu", tone="ghost")
             self.btn_sidebar_toggle.size_hint = (None, None)
             self.btn_sidebar_toggle.size = (dp(84), dp(34))
+            if platform == "android":
+                self.btn_sidebar_toggle.opacity = 0
+                self.btn_sidebar_toggle.disabled = True
+                self.btn_sidebar_toggle.size = (0, 0)
             appbar.add_widget(self.btn_sidebar_toggle)
 
             stage_column = BoxLayout(
@@ -10543,8 +11049,14 @@ class FormAlchemistApp(MDApp):
             )
             workspace.add_widget(stage_column)
 
-            mobile_workspace_bar = Widget(size_hint_y=None, height=0, opacity=0)
-            stage_column.add_widget(mobile_workspace_bar)
+            if platform == "android":
+                if android_top_modes_card is not None:
+                    stage_column.add_widget(android_top_modes_card)
+                if android_panel_card is not None:
+                    stage_column.add_widget(android_panel_card)
+            else:
+                mobile_workspace_bar = Widget(size_hint_y=None, height=0, opacity=0)
+                stage_column.add_widget(mobile_workspace_bar)
 
             self.preview_shell = BoxLayout(
                 orientation="vertical",
@@ -10611,6 +11123,8 @@ class FormAlchemistApp(MDApp):
 
             self.preview_shell.add_widget(preview_stage)
             stage_column.add_widget(self.preview_shell)
+            if platform == "android" and android_bottom_status_card is not None:
+                stage_column.add_widget(android_bottom_status_card)
 
             quick_rail = BoxLayout(
                 orientation="vertical",
@@ -10705,13 +11219,19 @@ class FormAlchemistApp(MDApp):
             self.btn_mobile_select_mode = self._make_compact_action_button("Select Off", tone="plain")
             self.btn_mobile_select_mode.bind(on_release=self._toggle_mobile_selection_mode)
             self.btn_mobile_sidebar = self._make_compact_action_button("Menu", tone="ghost")
-            self.btn_mobile_sidebar.bind(on_release=lambda *_: self._toggle_mobile_sidebar())
+            if platform == "android":
+                self.btn_mobile_sidebar.opacity = 0
+                self.btn_mobile_sidebar.disabled = True
+                self.btn_mobile_sidebar.size_hint = (None, None)
+                self.btn_mobile_sidebar.size = (0, 0)
+            else:
+                self.btn_mobile_sidebar.bind(on_release=lambda *_: self._toggle_mobile_sidebar())
             self.btn_mobile_more = self._make_compact_action_button("Repair", tone="secondary")
-            self.btn_mobile_more.bind(on_release=self._toggle_mobile_inspect_panel)
+            self.btn_mobile_more.bind(on_release=(lambda *_: self._show_mobile_section("Inspect")) if platform == "android" else self._toggle_mobile_inspect_panel)
             self.btn_mobile_capture = self._make_compact_action_button("Capture", tone="accent")
-            self.btn_mobile_capture.bind(on_release=self._toggle_manual_area_capture_mode)
+            self.btn_mobile_capture.bind(on_release=(lambda *_: self._show_mobile_section("Capture")) if platform == "android" else self._toggle_manual_area_capture_mode)
             self.btn_mobile_templates = self._make_compact_action_button("Tpls", tone="plain")
-            self.btn_mobile_templates.bind(on_release=self._open_area_template_library_popup)
+            self.btn_mobile_templates.bind(on_release=(lambda *_: self._show_mobile_section("Templates")) if platform == "android" else self._open_area_template_library_popup)
             self.btn_mobile_tools_fab = self._make_compact_action_button("More", tone="primary")
             self.btn_mobile_tools_fab.size_hint = (None, None)
             self.btn_mobile_tools_fab.size = (dp(88), dp(48))
@@ -10769,6 +11289,31 @@ class FormAlchemistApp(MDApp):
             self.mobile_bottom_panel = bottom_panel
             self.mobile_bottom_bar = primary_row
             self.mobile_tools_tray_open = False
+            if platform == "android":
+                try:
+                    bottom_panel.opacity = 0
+                    bottom_panel.disabled = True
+                    bottom_panel.size_hint = (None, None)
+                    bottom_panel.size = (0, 0)
+                    bottom_panel.pos = (-10000, -10000)
+                except Exception:
+                    pass
+                try:
+                    bottom_dock.opacity = 0
+                    bottom_dock.disabled = True
+                    bottom_dock.size_hint = (None, None)
+                    bottom_dock.size = (0, 0)
+                    bottom_dock.pos = (-10000, -10000)
+                except Exception:
+                    pass
+                try:
+                    self.btn_mobile_tools_fab.opacity = 0
+                    self.btn_mobile_tools_fab.disabled = True
+                    self.btn_mobile_tools_fab.size_hint = (None, None)
+                    self.btn_mobile_tools_fab.size = (0, 0)
+                    self.btn_mobile_tools_fab.pos = (-10000, -10000)
+                except Exception:
+                    pass
             workspace.add_widget(bottom_dock)
 
             self._sync_mobile_tools_layout()
@@ -10829,24 +11374,60 @@ class FormAlchemistApp(MDApp):
                         pass
                 self.mobile_sidebar.add_widget(mobile_flow_card)
 
-            sidebar_tabs = _make_mobile_section_tabs(["Files", "Detection", "Text", "Learning", "Mapping", "Session", "Export"])
-            self.mobile_sidebar.add_widget(sidebar_tabs)
+            if platform != "android":
+                sidebar_tabs = _make_mobile_section_tabs(["Files", "Detection", "Text", "Learning", "Mapping", "Session", "Export"])
+                self.mobile_sidebar.add_widget(sidebar_tabs)
 
-            sidebar_scroll = ScrollView(do_scroll_x=False, do_scroll_y=True, bar_width=dp(4), bar_margin=dp(10), scroll_type=["bars", "content"])
-            self._mobile_section_host = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
-            self._mobile_section_host.bind(minimum_height=self._mobile_section_host.setter("height"))
-            sidebar_scroll.add_widget(self._mobile_section_host)
-            self.mobile_sidebar.add_widget(sidebar_scroll)
-            workspace.add_widget(self.mobile_sidebar)
+                sidebar_scroll = ScrollView(do_scroll_x=False, do_scroll_y=True, bar_width=dp(4), bar_margin=dp(10), scroll_type=["bars", "content"])
+                self._mobile_section_host = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
+                self._mobile_section_host.bind(minimum_height=self._mobile_section_host.setter("height"))
+                sidebar_scroll.add_widget(self._mobile_section_host)
+                self.mobile_sidebar.add_widget(sidebar_scroll)
+                workspace.add_widget(self.mobile_sidebar)
 
-            self.btn_sidebar_toggle.bind(on_release=self._toggle_mobile_sidebar)
-            self.btn_sidebar_close.bind(on_release=self._toggle_mobile_sidebar)
-            self.mobile_sidebar_scrim.bind(on_release=self._toggle_mobile_sidebar)
+                self.btn_sidebar_toggle.bind(on_release=self._toggle_mobile_sidebar)
+                self.btn_sidebar_close.bind(on_release=self._toggle_mobile_sidebar)
+                self.mobile_sidebar_scrim.bind(on_release=self._toggle_mobile_sidebar)
+                Clock.schedule_once(lambda dt: _show_mobile_section("Files"), 0)
+                Clock.schedule_once(lambda dt: self._set_mobile_sidebar_state(False), 0)
+            else:
+                # Android cleanup: keep the new shell as the only navigation source.
+                # Route the section tabs into the visible Android panel host instead
+                # of the legacy slide-out sidebar.
+                self._mobile_section_host = android_panel_host
+                try:
+                    self.mobile_sidebar.opacity = 0
+                    self.mobile_sidebar.disabled = True
+                    self.mobile_sidebar.size_hint = (None, None)
+                    self.mobile_sidebar.size = (0, 0)
+                    self.mobile_sidebar.pos = (-10000, -10000)
+                except Exception:
+                    pass
+                try:
+                    self.mobile_sidebar_scrim.opacity = 0
+                    self.mobile_sidebar_scrim.disabled = True
+                    self.mobile_sidebar_scrim.size = (0, 0)
+                    self.mobile_sidebar_scrim.pos = (-10000, -10000)
+                except Exception:
+                    pass
+                try:
+                    self.btn_sidebar_close.opacity = 0
+                    self.btn_sidebar_close.disabled = True
+                    self.btn_sidebar_close.size_hint = (None, None)
+                    self.btn_sidebar_close.size = (0, 0)
+                except Exception:
+                    pass
+                self._mobile_sidebar_open = False
+                if android_panel_host is not None:
+                    Clock.schedule_once(lambda dt: _show_mobile_section("Detection"), 0)
+                    try:
+                        if getattr(self, "android_status_mode_lbl", None) is not None:
+                            self.android_status_mode_lbl.text = "Mode: Detection"
+                    except Exception:
+                        pass
+
             Clock.schedule_once(lambda dt: self._set_mobile_quick_rail_visible(False), 0)
             Clock.schedule_once(lambda dt: self._refresh_mobile_select_mode_ui(), 0)
-
-            Clock.schedule_once(lambda dt: _show_mobile_section("Files"), 0)
-            Clock.schedule_once(lambda dt: self._set_mobile_sidebar_state(False), 0)
             Clock.schedule_once(lambda dt: self._refresh_mobile_hud_restore_button(), 0)
 
             main.add_widget(workspace)
@@ -10980,7 +11561,11 @@ class FormAlchemistApp(MDApp):
             Clock.schedule_once(lambda dt: self._bind_desktop_shortcuts(), 0)
 
         if is_mobile:
+            if platform == "android" and android_top_modes_card is not None:
+                root.add_widget(android_top_modes_card)
             root.add_widget(main)
+            if platform == "android" and android_bottom_status_card is not None:
+                root.add_widget(android_bottom_status_card)
 
         app_shell = FloatLayout()
         root.size_hint = (1, 1)
@@ -10998,7 +11583,6 @@ class FormAlchemistApp(MDApp):
         Clock.schedule_once(self._hide_android_loading_screen, 0)
         Clock.schedule_once(self._hide_android_loading_screen, 0.12)
         Clock.schedule_once(self._hide_android_loading_screen, 0.45)
-
         return app_shell
 
     def _make_preview_empty_hint(self, palette, is_mobile=False):
@@ -11021,22 +11605,22 @@ class FormAlchemistApp(MDApp):
         self._style_popup_card(hero, palette.get("surface", (0.08, 0.11, 0.16, 1)), radius=dp(16 if is_mobile else 18))
 
         title = Label(
-            text="Open a PDF to begin",
+            text="Welcome! Open a PDF form to begin.",
             color=palette.get("text", (0.93, 0.96, 1.0, 1)),
             size_hint_y=None,
             halign="left",
             valign="middle",
-            font_size=dp(15 if is_mobile else 17),
+            font_size=dp(17 if is_mobile else 19),
             bold=True,
         )
         title.bind(size=self._sync_label_text_size)
-        self._bind_auto_height_label(title, min_height=dp(24), extra_pad=dp(4))
+        self._bind_auto_height_label(title, min_height=dp(26), extra_pad=dp(4))
 
         subtitle = Label(
             text=(
-                "Your live form preview will appear here."
+                "Your filled form preview will appear here once you open a PDF."
                 if is_mobile else
-                "Your live form preview, detected boxes, and mapping guides will appear here."
+                "Your live form preview, detected fields, and mapping guides will appear here."
             ),
             color=palette.get("muted", (0.60, 0.68, 0.80, 1)),
             size_hint_y=None,
@@ -11052,12 +11636,12 @@ class FormAlchemistApp(MDApp):
 
         steps = Label(
             text=(
-                "Quick start\n"
-                "1. Open PDF Form\n"
-                "2. Load data or Google Sheet\n"
-                "3. Choose a record and page\n"
-                "4. Tap Find Fields\n"
-                "5. Tap a box, then save the link"
+                "How to get started:\n"
+                "1. Open a PDF form  (1 Open Files tab)\n"
+                "2. Load your CSV or Excel data file\n"
+                "3. Find fields on the form  (2 Find Fields tab)\n"
+                "4. Link fields to your data columns  (6 Map Fields tab)\n"
+                "5. Export the filled PDFs  (8 Export PDF tab)"
             ),
             color=palette.get("text", (0.93, 0.96, 1.0, 1)),
             size_hint_y=None,
@@ -11066,13 +11650,13 @@ class FormAlchemistApp(MDApp):
             font_size=dp(11.0 if is_mobile else 11.6),
         )
         steps.bind(size=self._sync_label_text_size)
-        self._bind_auto_height_label(steps, min_height=dp(116 if is_mobile else 108), extra_pad=dp(8))
+        self._bind_auto_height_label(steps, min_height=dp(128 if is_mobile else 116), extra_pad=dp(8))
 
         helper = Label(
             text=(
-                "Load a PDF first. The extra status line above this area is now hidden to keep the preview cleaner."
+                "Open a PDF to get started. This guide will disappear once a form is loaded."
                 if is_mobile else
-                "Load a PDF to replace this guide with the live page preview."
+                "Load a PDF form to replace this guide with the live page preview."
             ),
             color=palette.get("accent", (0.96, 0.71, 0.30, 1)),
             size_hint_y=None,
@@ -11386,6 +11970,15 @@ class FormAlchemistApp(MDApp):
         self.statusbar_ready_lbl.text = f"Ready: {readiness}"
         if hasattr(self, "mobile_meta_lbl") and self.mobile_meta_lbl is not None:
             self.mobile_meta_lbl.text = ""
+        if getattr(self, "android_status_file_lbl", None) is not None:
+            self.android_status_file_lbl.text = f"File: {pdf_name[:24]}"
+        if getattr(self, "android_status_page_lbl", None) is not None:
+            self.android_status_page_lbl.text = f"Page: {page_idx + 1}/{max(total_pages, 1)}"
+        if getattr(self, "android_status_boxes_lbl", None) is not None:
+            self.android_status_boxes_lbl.text = f"Boxes: {box_count} • Sel: {sel_count}"
+        if getattr(self, "android_status_mode_lbl", None) is not None:
+            mode_txt = str(getattr(self, "_mobile_active_section", "Files") or "Files")
+            self.android_status_mode_lbl.text = f"Mode: {mode_txt}"
 
     def _bind_desktop_shortcuts(self):
         if platform == "android":
@@ -11991,7 +12584,18 @@ class FormAlchemistApp(MDApp):
         self._status_text = text
         self._status_hold_until = now + max(0.0, float(hold_seconds or 0.0)) if hold_seconds else 0.0
 
-        self.status_lbl.text = text
+        # Thread-safety: schedule UI update on the Kivy main thread
+        def _apply_status_text(dt):
+            try:
+                self.status_lbl.text = text
+            except Exception:
+                pass
+        Clock.schedule_once(_apply_status_text, 0)
+        # Best-effort immediate update (safe if already on main thread)
+        try:
+            self.status_lbl.text = text
+        except Exception:
+            pass
         if hasattr(self, "desktop_status_detail_lbl") and self.desktop_status_detail_lbl is not None:
             self.desktop_status_detail_lbl.text = text.replace("\n", " • ")[:220]
         try:
@@ -12105,19 +12709,19 @@ class FormAlchemistApp(MDApp):
 
         if getattr(self, "mobile_flow_lbl", None) is not None:
             if not has_pdf:
-                self.mobile_flow_lbl.text = "Start in 1 Files. Open a PDF first."
+                self.mobile_flow_lbl.text = "Step 1: Tap '1 Open Files' and load your PDF form."
             elif not has_data:
-                self.mobile_flow_lbl.text = "PDF loaded. Next: load CSV/XLSX or a public Google Sheet."
+                self.mobile_flow_lbl.text = "PDF loaded! Now tap '1 Open Files' and load your CSV or Excel data file."
             elif not detection_ok:
-                self.mobile_flow_lbl.text = "Data ready. Preview works, but detection is unavailable in this build."
+                self.mobile_flow_lbl.text = "Data ready. Preview works, but field detection is not available in this build."
             elif not self.engine.all_boxes:
-                self.mobile_flow_lbl.text = "Data ready. Go to 3 Detect and run detection on the current page."
+                self.mobile_flow_lbl.text = "Data loaded. Tap '2 Find Fields' to detect fillable areas on this page."
             elif not self.engine.custom_mappings:
-                self.mobile_flow_lbl.text = "Detection finished. Go to 4 Mapping and assign fields to columns."
+                self.mobile_flow_lbl.text = "Fields found! Tap '6 Map Fields' and link each field to a data column."
             elif not export_ok:
-                self.mobile_flow_lbl.text = "Mappings saved. Export is unavailable in this build."
+                self.mobile_flow_lbl.text = "Field links saved. PDF export is not available in this build."
             else:
-                self.mobile_flow_lbl.text = "Ready. Go to 5 Export and generate one PDF or a full batch."
+                self.mobile_flow_lbl.text = "All set! Tap '8 Export PDF' to create your filled PDF."
 
         self._refresh_preview_empty_hint()
         self._update_selection_inspector()
@@ -12234,13 +12838,23 @@ class FormAlchemistApp(MDApp):
             raise ValueError(f"Invalid settings input: {e}")
 
     def get_app_output_dir(self):
-        """Return a writable app-controlled directory for generated files/configs."""
-        base_dir = getattr(self, "user_data_dir", None)
+        """Return a writable app-private directory for generated files/configs.
+        Always prefers app.user_data_dir so no storage permissions are needed.
+        """
+        base_dir = str(getattr(self, "user_data_dir", "") or "").strip()
+        if not base_dir:
+            try:
+                base_dir = get_form_alchemist_private_storage_root("form_alchemist")
+            except Exception:
+                pass
         if not base_dir:
             base_dir = os.path.join(os.path.expanduser("~"), "FormAlchemist")
-
         out_dir = os.path.join(base_dir, "output")
-        os.makedirs(out_dir, exist_ok=True)
+        try:
+            os.makedirs(out_dir, exist_ok=True)
+        except Exception:
+            out_dir = base_dir
+            os.makedirs(out_dir, exist_ok=True)
         return out_dir
 
     def get_default_file_path(self):
@@ -12987,6 +13601,7 @@ class FormAlchemistApp(MDApp):
         if hasattr(self, "preview_info") and self.preview_info is not None:
             self.preview_info.text = f"Selected: {ids} • {mapping}"
         self._update_selection_inspector()
+        self._refresh_android_selection_inspector()
         self._update_bottom_statusbar()
         try:
             if hasattr(self, '_show_desktop_right_section') and platform != 'android':
@@ -13047,6 +13662,21 @@ class FormAlchemistApp(MDApp):
     def _sync_mobile_tools_layout(self, *_):
         if not getattr(self, "ui_mobile", False):
             return
+        if platform == "android":
+            fab = getattr(self, "btn_mobile_tools_fab", None)
+            panel = getattr(self, "mobile_bottom_panel", None)
+            dock = getattr(self, "mobile_bottom_dock", None)
+            for widget in (fab, panel, dock):
+                if widget is not None:
+                    try:
+                        widget.opacity = 0
+                        widget.disabled = True
+                        widget.size_hint = (None, None)
+                        widget.size = (0, 0)
+                        widget.pos = (-10000, -10000)
+                    except Exception:
+                        pass
+            return
         fab = getattr(self, "btn_mobile_tools_fab", None)
         panel = getattr(self, "mobile_bottom_panel", None)
         tray_open = bool(getattr(self, "mobile_tools_tray_open", False))
@@ -13069,6 +13699,22 @@ class FormAlchemistApp(MDApp):
                 pass
 
     def _set_mobile_tools_tray_visible(self, open_state=True):
+        if platform == "android":
+            self.mobile_tools_tray_open = False
+            panel = getattr(self, "mobile_bottom_panel", None)
+            fab = getattr(self, "btn_mobile_tools_fab", None)
+            dock = getattr(self, "mobile_bottom_dock", None)
+            for widget in (panel, fab, dock):
+                if widget is not None:
+                    try:
+                        widget.opacity = 0
+                        widget.disabled = True
+                        widget.size_hint = (None, None)
+                        widget.size = (0, 0)
+                        widget.pos = (-10000, -10000)
+                    except Exception:
+                        pass
+            return
         self.mobile_tools_tray_open = bool(open_state)
         if self.mobile_tools_tray_open and bool(getattr(self, "_mobile_sidebar_open", False)):
             self._set_mobile_sidebar_state(False)
@@ -13096,6 +13742,8 @@ class FormAlchemistApp(MDApp):
         self._refresh_mobile_hud_restore_button()
 
     def _toggle_mobile_tools_tray(self, *_):
+        if platform == "android":
+            return
         self._set_mobile_tools_tray_visible(not bool(getattr(self, "mobile_tools_tray_open", False)))
 
     def _refresh_mobile_select_mode_ui(self):
@@ -14682,6 +15330,9 @@ class FormAlchemistApp(MDApp):
                 btn.opacity = 1 if bool(getattr(self, "_mobile_quick_rail_open", False)) else 0
 
     def _set_mobile_sidebar_state(self, open_state, *_):
+        if platform == "android":
+            self._mobile_sidebar_open = False
+            return
         self._mobile_sidebar_open = bool(open_state)
         if self._mobile_sidebar_open and bool(getattr(self, "mobile_tools_tray_open", False)):
             self._set_mobile_tools_tray_visible(False)
@@ -14716,17 +15367,125 @@ class FormAlchemistApp(MDApp):
                 except Exception:
                     pass
 
+
+
+    def _refresh_android_selection_inspector(self):
+        ids = sorted(set(int(x) for x in getattr(self.engine, "selected_box_ids", []) if isinstance(x, int) or str(x).isdigit()))
+        lbl = getattr(self, "android_inspector_selected_lbl", None)
+        if lbl is not None:
+            lbl.text = ", ".join(str(i) for i in ids) if ids else "None"
+        lbl = getattr(self, "android_inspector_count_lbl", None)
+        if lbl is not None:
+            lbl.text = str(len(ids))
+
+        box_text = "No selection"
+        mapping_text = "Choose a box in the preview to inspect it."
+        resolved_text = "Resolved preview value: —"
+        if ids:
+            first = ids[0]
+            try:
+                box_type = self.engine.box_types[first] if first < len(self.engine.box_types) else "field"
+            except Exception:
+                box_type = "field"
+            rect = self.engine.all_boxes[first] if first < len(self.engine.all_boxes) else None
+            rect_text = ""
+            if rect is not None:
+                try:
+                    rect_text = f" | ({int(rect.x0)}, {int(rect.y0)}) → ({int(rect.x1)}, {int(rect.y1)})"
+                except Exception:
+                    rect_text = ""
+            box_text = f"Box {first} • {box_type}{rect_text}"
+            try:
+                mapping = self.engine.describe_box_mapping(first, self.current_page_idx())
+            except Exception:
+                mapping = ""
+            mapping_text = mapping if mapping and mapping != "EMPTY" else "Unmapped"
+            try:
+                mapping_payload = self._find_mapping_for_box(first, self.current_page_idx()) or {}
+            except Exception:
+                mapping_payload = {}
+            try:
+                resolved_text = "Resolved preview value: " + self._get_selected_column_preview(
+                    mapping_payload.get("column", self.column_spinner.text if hasattr(self, "column_spinner") else ""),
+                    trigger=mapping_payload.get("trigger", self.trigger_input.text if hasattr(self, "trigger_input") else ""),
+                    is_grid=bool(mapping_payload.get("g", getattr(self.grid_flag_chk, "active", False) if hasattr(self, "grid_flag_chk") else False)),
+                    grid_n=int(mapping_payload.get("n", self.grid_n_input.text if hasattr(self, "grid_n_input") else "1") or 1),
+                )
+            except Exception:
+                resolved_text = "Resolved preview value: —"
+
+        for attr, value in [
+            ("android_inspector_box_lbl", box_text),
+            ("android_inspector_mapping_lbl", mapping_text),
+            ("android_inspector_resolution_lbl", resolved_text),
+        ]:
+            lbl = getattr(self, attr, None)
+            if lbl is not None:
+                lbl.text = value
+
+    def _refresh_android_capture_review_panel(self):
+        summary_lbl = getattr(self, "android_capture_summary_lbl", None)
+        cand_lbl = getattr(self, "android_capture_candidate_lbl", None)
+        hint_lbl = getattr(self, "android_capture_action_hint_lbl", None)
+        analysis = dict(getattr(self, "_capture_active_template", {}) or {})
+        candidates = list(getattr(self, "_capture_shape_candidates", []) or [])
+        idx = int(getattr(self, "_capture_shape_candidate_index", 0) or 0)
+        if cand_lbl is not None:
+            cand_lbl.text = (f"Candidate: {idx + 1} / {len(candidates)}" if candidates else "Candidate: ROI logic")
+        if not analysis:
+            if summary_lbl is not None:
+                summary_lbl.text = "No captured area yet."
+            if hint_lbl is not None:
+                hint_lbl.text = "Review stays here on Android. Popup is optional."
+            return
+        try:
+            rect = analysis.get("source_rect")
+            rr = rect if isinstance(rect, fitz.Rect) else fitz.Rect(rect)
+            rect_txt = f"ROI: ({int(rr.x0)}, {int(rr.y0)}) → ({int(rr.x1)}, {int(rr.y1)})"
+        except Exception:
+            rect_txt = "ROI: —"
+        template_kind = str(analysis.get("template_kind", "field") or "field")
+        split_count = int(analysis.get("split_count", 0) or 0)
+        resolved_types = [str(v) for v in (analysis.get("resolved_types", []) or [])]
+        kinds_txt = ", ".join(resolved_types[:4]) if resolved_types else "field"
+        if summary_lbl is not None:
+            summary_lbl.text = f"{rect_txt}\nType: {template_kind} • Targets: {split_count}\nResolved: {kinds_txt}"
+        if hint_lbl is not None:
+            hint_lbl.text = "Use panel actions after capture. Popup is optional." if bool(getattr(self, "_capture_mode_active", False)) else "Template ready. Use panel actions or open popup."
+
+    def _refresh_android_capture_stage_ui(self):
+        lbl = getattr(self, "android_capture_stage_lbl", None)
+        if lbl is None:
+            return
+        if bool(getattr(self, "_capture_mode_active", False)):
+            point_count = len(list(getattr(self, "_capture_points", []) or []))
+            if point_count <= 0:
+                lbl.text = "Stage: Capture active • tap top-left"
+            elif point_count == 1:
+                lbl.text = "Stage: Capture active • tap bottom-right"
+            elif bool(getattr(self, "_capture_shape_candidates", []) or []):
+                lbl.text = f"Stage: {len(list(getattr(self, '_capture_shape_candidates', []) or []))} candidate(s) ready"
+            else:
+                lbl.text = "Stage: Capture active"
+        else:
+            if getattr(self, "_capture_active_template", None):
+                lbl.text = "Stage: Template ready"
+            else:
+                lbl.text = "Stage: Idle"
+
     def _toggle_mobile_sidebar(self, *_):
         self._set_mobile_sidebar_state(not getattr(self, "_mobile_sidebar_open", False))
 
     def _update_capture_button_state(self):
         btn = getattr(self, 'btn_mobile_capture', None)
         if btn is None:
+            self._refresh_android_capture_stage_ui()
             return
         try:
             btn.text = 'Cancel Cap' if bool(getattr(self, '_capture_mode_active', False)) else 'Capture'
         except Exception:
             pass
+        self._refresh_android_capture_stage_ui()
 
     def _clear_manual_capture_preview(self, preserve_mode=False):
         self._capture_points = []
@@ -14822,10 +15581,17 @@ class FormAlchemistApp(MDApp):
             try:
                 if self._pick_capture_shape_candidate_at_point(img_pt):
                     try:
-                        self.set_status('Trace selected. Opening actions...')
+                        self.set_status('Trace selected. Review actions in the Capture panel.')
                     except Exception:
                         pass
-                    Clock.schedule_once(lambda dt: self._open_manual_area_capture_confirm_popup(), 0)
+                    if platform == "android":
+                        try:
+                            self._show_mobile_section("Capture")
+                        except Exception:
+                            pass
+                        self._refresh_android_capture_review_panel()
+                    else:
+                        Clock.schedule_once(lambda dt: self._open_manual_area_capture_confirm_popup(), 0)
                     return True
             except Exception:
                 pass
@@ -14836,10 +15602,17 @@ class FormAlchemistApp(MDApp):
                     px = float(img_pt[0]); py = float(img_pt[1])
                     if rr.x0 <= px <= rr.x1 and rr.y0 <= py <= rr.y1:
                         try:
-                            self.set_status('Using current trace selection. Opening actions...')
+                            self.set_status('Using current trace selection. Review actions in the Capture panel.')
                         except Exception:
                             pass
-                        Clock.schedule_once(lambda dt: self._open_manual_area_capture_confirm_popup(), 0)
+                        if platform == "android":
+                            try:
+                                self._show_mobile_section("Capture")
+                            except Exception:
+                                pass
+                            self._refresh_android_capture_review_panel()
+                        else:
+                            Clock.schedule_once(lambda dt: self._open_manual_area_capture_confirm_popup(), 0)
                         return True
             except Exception:
                 pass
@@ -14854,6 +15627,8 @@ class FormAlchemistApp(MDApp):
         self._capture_points.append(point)
         if len(self._capture_points) == 1:
             self._refresh_manual_capture_overlay()
+            self._refresh_android_capture_stage_ui()
+            self._refresh_android_capture_review_panel()
             self.set_status('Top-left captured. Tap the bottom-right corner.')
             return True
         p1 = self._capture_points[0]
@@ -14987,6 +15762,7 @@ class FormAlchemistApp(MDApp):
     def _select_capture_shape_candidate(self, offset=0):
         candidates = list(getattr(self, '_capture_shape_candidates', []) or [])
         if not candidates:
+            self._refresh_android_capture_review_panel()
             return dict(getattr(self, '_capture_active_template', {}) or {})
         idx = int(getattr(self, '_capture_shape_candidate_index', 0) or 0)
         idx = (idx + int(offset or 0)) % max(len(candidates), 1)
@@ -15000,6 +15776,7 @@ class FormAlchemistApp(MDApp):
         shape_template = dict(analysis.get('shape_template', {}) or {})
         self._capture_outline_preview = [self.engine._shape_template_preview_path(shape_template, preview_zoom=getattr(self, '_last_preview_render_zoom', PREVIEW_SCALE))] if shape_template else []
         self._refresh_manual_capture_overlay()
+        self._refresh_android_capture_review_panel()
         return analysis
 
     def _open_manual_area_capture_confirm_popup(self):
@@ -17161,7 +17938,7 @@ class FormAlchemistApp(MDApp):
             text=current_col if current_col else COLUMN_SELECT_TEXT,
             values=self.column_spinner.values,
             placeholder=COLUMN_SELECT_TEXT,
-            picker_title="Choose a data column",
+            picker_title="Choose which column fills this field",
             search_hint="Type to find a column name",
             size_hint_y=None,
             height=dp(46),
@@ -17466,39 +18243,44 @@ class FormAlchemistApp(MDApp):
                 self._load_dataframe_from_local_path(path)
             except Exception as e:
                 traceback.print_exc()
-                self.set_status(f"Load data error:\n{e}")
+                msg = str(e)
+                if "codec" in msg.lower() or "encoding" in msg.lower() or "decode" in msg.lower():
+                    friendly = "Could not read the file — try saving it as UTF-8 CSV and reload."
+                elif "empty" in msg.lower() or "no columns" in msg.lower():
+                    friendly = "The file appears to be empty or has no data columns."
+                elif "sheet" in msg.lower():
+                    friendly = "Could not read the spreadsheet. Make sure it is a valid XLSX or CSV file."
+                else:
+                    friendly = "Could not load the data file. Make sure it is a valid CSV or XLSX file."
+                self.set_status(friendly, kind="error")
         popup.dismiss()
 
     def _load_config_from_local_path(self, path):
         if not path.lower().endswith(".json"):
             raise ValueError("Please select a JSON config file.")
 
-        with open(path, "r", encoding="utf-8") as f:
-            cfg = json.load(f)
+        cfg = self.engine.load_config(path)
+        self._reset_config_runtime_state()
+        self.push_engine_settings_to_ui()
 
         saved_pdf_path = str(cfg.get("pdf_path", "") or "").strip()
         loaded_pdf = False
         loaded_total = 0
-        pdf_restore_error = ""
         if saved_pdf_path:
             try:
                 if os.path.exists(saved_pdf_path):
                     loaded_total = int(self.engine.load_pdf(saved_pdf_path) or 0)
                     loaded_pdf = True
                 else:
-                    pdf_restore_error = (
+                    self.set_status(
                         f"Config loaded, but saved PDF was not found:\n{saved_pdf_path}"
                     )
             except Exception as e:
                 traceback.print_exc()
-                pdf_restore_error = (
+                self.set_status(
                     f"Config loaded, but PDF restore failed:\n{os.path.basename(saved_pdf_path)}\n{e}"
                 )
 
-        self.engine.apply_config(cfg)
-        self.engine.persist_learning_session(current_page_idx=self.engine.detected_page_idx or 0)
-        self._reset_config_runtime_state()
-        self.push_engine_settings_to_ui()
         self._apply_runtime_config_state(cfg)
 
         if loaded_pdf:
@@ -17520,7 +18302,7 @@ class FormAlchemistApp(MDApp):
                     f"Config loaded, but preview restore failed:\n{os.path.basename(path)}\n{e}"
                 )
         else:
-            self.set_status(pdf_restore_error or f"Config loaded:\n{os.path.basename(path)}")
+            self.set_status(f"Config loaded:\n{os.path.basename(path)}")
 
         self._persist_runtime_session_state(current_page_idx=self.current_page_idx())
         self.refresh_backend_capabilities_ui()
@@ -17577,25 +18359,7 @@ class FormAlchemistApp(MDApp):
         self.engine.all_boxes = []
         self.engine.box_types = []
         self.push_engine_settings_to_ui()
-
-        page_idx = self.current_page_idx()
-        anchor = None
-        try:
-            anchor = self._capture_preview_anchor()
-        except Exception:
-            anchor = None
-        try:
-            self._refresh_after_config_import(page_idx=page_idx, reason="Config merged", anchor=anchor)
-        except Exception:
-            traceback.print_exc()
-
-        merged_templates = sum(len(v or []) for v in ((getattr(self.engine, 'area_templates_by_page', {}) or {}).values()))
-        merged_patches = sum(len(v or []) for v in ((getattr(self.engine, 'repair_patches_by_page', {}) or {}).values()))
-        merged_sticky = sum(len(v or []) for v in ((getattr(self.engine, 'sticky_detections_by_page', {}) or {}).values()))
-        self.set_status(
-            f"Config merged:\n{os.path.basename(path)}\n"
-            f"Templates: {merged_templates} • Repair patches: {merged_patches} • Sticky detections: {merged_sticky}"
-        )
+        self.set_status(f"Config merged:\n{os.path.basename(path)}")
 
     def on_merge_config(self, instance):
         if platform == "android":
@@ -18057,14 +18821,24 @@ class FormAlchemistApp(MDApp):
             self.set_status(summary, kind="detect", hold_seconds=3.5, force=True)
         except Exception as e:
             traceback.print_exc()
-            self.set_status(f"Detect error:\n{e}", kind="error", force=True)
+            msg = str(e)
+            if "memory" in msg.lower() or "oom" in msg.lower():
+                friendly = "Detection ran out of memory.\nTry reducing the zoom or closing other apps."
+            elif "opencv" in msg.lower() or "cv2" in msg.lower():
+                friendly = "Field detection is not available on this device.\nYou can still map fields manually."
+            else:
+                friendly = "Detection failed. Try refreshing the preview first, then detect again."
+            self.set_status(friendly, kind="error", force=True)
 
     def on_preview(self, instance):
         try:
             return self._render_session_page(page_idx=self.current_page_idx(), reason="Preview refreshed")
         except Exception as e:
             traceback.print_exc()
-            self.set_status(f"Preview error:\n{e}")
+            self.set_status(
+                "Could not render the preview.\nTap Refresh to try again.",
+                kind="error",
+            )
 
     def on_assign_mapping(self, instance):
         try:
@@ -18258,7 +19032,16 @@ class FormAlchemistApp(MDApp):
             Clock.schedule_once(lambda dt: self._finish_pdf_load_preview(path, total), 0.05)
         except Exception as e:
             traceback.print_exc()
-            self.set_status(f"PDF Error: {e}")
+            msg = str(e)
+            if "password" in msg.lower() or "encrypt" in msg.lower():
+                friendly = "This PDF is password-protected and cannot be opened."
+            elif "permission" in msg.lower() or "access" in msg.lower():
+                friendly = "Could not read the file. Check that it is accessible and try again."
+            elif "corrupt" in msg.lower() or "invalid" in msg.lower() or "eof" in msg.lower():
+                friendly = "The PDF file appears to be damaged or invalid."
+            else:
+                friendly = "Could not open the PDF. Make sure it is a valid PDF file."
+            self.set_status(f"{friendly}", kind="error")
 
     def _copy_android_uri_to_local_pdf(self, uri):
         return self._copy_android_uri_to_local_file(
@@ -18317,7 +19100,16 @@ class FormAlchemistApp(MDApp):
                 Clock.schedule_once(lambda dt: self._finish_pdf_load_preview(path, total), 0.05)
             except Exception as e:
                 traceback.print_exc()
-                self.set_status(f"PDF Error: {e}")
+                _emsg = str(e or "")
+                if "not found" in _emsg.lower() or "no such file" in _emsg.lower():
+                    _emsg = "The PDF file could not be found. Please try selecting it again."
+                elif "invalid" in _emsg.lower() or "header" in _emsg.lower() or "pdf" in _emsg.lower():
+                    _emsg = "The selected file does not appear to be a valid PDF. Please choose a different file."
+                elif "permission" in _emsg.lower():
+                    _emsg = "Permission denied when accessing the PDF. Try selecting it through the file picker again."
+                else:
+                    _emsg = f"Could not open the PDF. Details: {e}"
+                self.set_status(f"PDF Error: {_emsg}")
 
     def _finish_pdf_load_preview(self, path, total):
         try:
@@ -18344,7 +19136,11 @@ class FormAlchemistApp(MDApp):
             )
         except Exception as e:
             traceback.print_exc()
-            self.set_status(f"PDF Preview Error: {e}")
+            self.set_status(
+                "Preview could not be rendered.\n"
+                "Try tapping Refresh, or reload the PDF.",
+                kind="error",
+            )
 
 
     def open_text_input_popup(self, title, hint_text, on_submit_callback, default_text=""):
@@ -18489,6 +19285,222 @@ class FormAlchemistApp(MDApp):
             traceback.print_exc()
             self.set_status("Batch Error: " + str(e))
 
+
+
+    # ================================================================
+    # Android-Optimized: Runtime permissions + First-run onboarding
+    # ================================================================
+
+    def on_start(self):
+        """Called by Kivy after build() completes."""
+        if platform == "android":
+            Clock.schedule_once(self._request_android_permissions, 0.3)
+        Clock.schedule_once(self._maybe_show_first_run_welcome, 0.8)
+
+    def _request_android_permissions(self, *_):
+        """Request READ/WRITE_EXTERNAL_STORAGE on Android 6+ (API 23+).
+        SAF-based picking works without these, but they improve compatibility
+        with older pre-SAF workflows.
+        """
+        try:
+            from android.permissions import (
+                request_permissions,
+                Permission,
+                check_permission,
+            )
+            needed = []
+            for perm in [
+                Permission.READ_EXTERNAL_STORAGE,
+                Permission.WRITE_EXTERNAL_STORAGE,
+            ]:
+                try:
+                    if not check_permission(perm):
+                        needed.append(perm)
+                except Exception:
+                    needed.append(perm)
+            if needed:
+                def _on_permissions(permissions, grants):
+                    denied = [p for p, g in zip(permissions, grants) if not g]
+                    if denied:
+                        Clock.schedule_once(lambda dt: self.set_status(
+                            "Storage permission denied.\n"
+                            "File picking still works via the system picker.\n"
+                            "Grant permission in Settings > Apps > MediMapPro if needed.",
+                            kind="warning",
+                        ), 0)
+                request_permissions(needed, _on_permissions)
+        except Exception:
+            pass  # android.permissions unavailable — SAF still works fine
+
+    def _maybe_show_first_run_welcome(self, *_):
+        """Show the onboarding popup only on the very first launch."""
+        flag_path = os.path.join(
+            get_form_alchemist_private_storage_root("form_alchemist"),
+            "first_run_done.flag",
+        )
+        if os.path.exists(flag_path):
+            return
+        try:
+            os.makedirs(os.path.dirname(flag_path), exist_ok=True)
+            with open(flag_path, "w") as _fh:
+                _fh.write("1")
+        except Exception:
+            pass
+        Clock.schedule_once(lambda dt: self._show_first_run_welcome_popup(), 0)
+
+    def _show_first_run_welcome_popup(self):
+        """First-run welcome dialog explaining the 3-step workflow."""
+        palette = getattr(self, "ui_palette", {}) or {}
+        is_mobile = bool(getattr(self, "ui_mobile", False))
+
+        outer = BoxLayout(
+            orientation="vertical",
+            spacing=dp(14),
+            padding=[dp(16), dp(16), dp(16), dp(16)],
+        )
+
+        title_lbl = Label(
+            text="Welcome to MediMapPro",
+            color=palette.get("text", (0.97, 0.98, 1.0, 1)),
+            bold=True,
+            size_hint_y=None,
+            height=dp(34),
+            halign="left",
+            valign="middle",
+            font_size=dp(18) if is_mobile else dp(20),
+        )
+        title_lbl.bind(size=self._sync_label_text_size)
+        outer.add_widget(title_lbl)
+
+        steps_text = (
+            "Here is how to get started in 3 steps:\n\n"
+            "Step 1 — Load PDF\n"
+            "  Tap Load PDF and select a blank PDF form from your device.\n\n"
+            "Step 2 — Load Data\n"
+            "  Tap Load Data File and select a CSV or Excel spreadsheet\n"
+            "  (one row per patient / record), or paste a Google Sheet URL.\n\n"
+            "Step 3 — Map and Export\n"
+            "  Tap Find Fields to detect fill areas on the form.\n"
+            "  Tap a box, choose a data column, press Save Link.\n"
+            "  Then tap Export Current Record PDF to save a filled copy.\n\n"
+            "Tap the ? button at the top right for this guide again at any time."
+        )
+        steps_lbl = Label(
+            text=steps_text,
+            color=palette.get("muted", (0.71, 0.79, 0.93, 1)),
+            size_hint_y=None,
+            height=dp(280) if is_mobile else dp(240),
+            halign="left",
+            valign="top",
+            font_size=dp(12) if is_mobile else dp(13),
+        )
+        steps_lbl.bind(size=self._sync_label_text_size)
+        outer.add_widget(steps_lbl)
+
+        btn_ok = self._make_compact_action_button("Got it — Start Now", tone="primary")
+        btn_ok.size_hint = (1, None)
+        btn_ok.height = dp(48)
+        outer.add_widget(btn_ok)
+
+        popup, _w = self._make_styled_popup(
+            "Welcome",
+            outer,
+            subtitle="Quick-start guide",
+            size_hint=(0.94 if is_mobile else 0.62, 0.86 if is_mobile else 0.76),
+        )
+        btn_ok.bind(on_release=lambda *_a: popup.dismiss())
+        popup.open()
+
+    def _show_help_popup(self, *_):
+        """Quick-reference help popup — accessible any time via the ? button."""
+        palette = getattr(self, "ui_palette", {}) or {}
+        is_mobile = bool(getattr(self, "ui_mobile", False))
+
+        outer = BoxLayout(
+            orientation="vertical",
+            spacing=dp(12),
+            padding=[dp(14), dp(14), dp(14), dp(14)],
+        )
+
+        help_text = (
+            "MediMapPro — Quick Reference\n\n"
+            "Load PDF\n"
+            "  Opens your device file picker. Select a blank PDF form.\n"
+            "  The form is shown in the preview panel on the right.\n\n"
+            "Load Data File\n"
+            "  Select a CSV or Excel spreadsheet with one row per record.\n"
+            "  Or use Google Sheet to paste a public Google Sheets URL.\n\n"
+            "Find Fields (Detect)\n"
+            "  Scans the current page for fill areas, lines, and checkboxes.\n"
+            "  Detected areas are shown as coloured overlays on the preview.\n\n"
+            "Mapping\n"
+            "  Tap a detected area in the preview to select it.\n"
+            "  Choose the matching data column, then tap Save Link.\n"
+            "  Repeat for each area you want to fill.\n\n"
+            "Export\n"
+            "  Export Current Record PDF — saves one filled PDF for the selected record.\n"
+            "  Export All Record PDFs — saves a ZIP with one PDF per row."
+        )
+        help_lbl = Label(
+            text=help_text,
+            color=palette.get("text", (0.97, 0.98, 1.0, 1)),
+            size_hint_y=None,
+            height=dp(360) if is_mobile else dp(300),
+            halign="left",
+            valign="top",
+            font_size=dp(11.5) if is_mobile else dp(12.5),
+        )
+        help_lbl.bind(size=self._sync_label_text_size)
+        outer.add_widget(help_lbl)
+
+        btn_close = self._make_compact_action_button("Close", tone="plain")
+        btn_close.size_hint = (1, None)
+        btn_close.height = dp(44)
+        outer.add_widget(btn_close)
+
+        popup, _w = self._make_styled_popup(
+            "How to Use MediMapPro",
+            outer,
+            subtitle="Quick-start reference",
+            size_hint=(0.94 if is_mobile else 0.62, 0.90 if is_mobile else 0.80),
+        )
+        btn_close.bind(on_release=lambda *_a: popup.dismiss())
+        popup.open()
+
+    def _show_user_error_popup(self, title, message):
+        """Show a user-friendly error popup instead of a raw stack trace."""
+        palette = getattr(self, "ui_palette", {}) or {}
+        is_mobile = bool(getattr(self, "ui_mobile", False))
+
+        outer = BoxLayout(
+            orientation="vertical",
+            spacing=dp(12),
+            padding=[dp(14), dp(14), dp(14), dp(14)],
+        )
+        msg_lbl = Label(
+            text=str(message or "An unexpected error occurred. Please try again."),
+            color=palette.get("text", (0.97, 0.98, 1.0, 1)),
+            size_hint_y=None,
+            height=dp(180) if is_mobile else dp(130),
+            halign="left",
+            valign="top",
+            font_size=dp(12) if is_mobile else dp(13),
+        )
+        msg_lbl.bind(size=self._sync_label_text_size)
+        outer.add_widget(msg_lbl)
+
+        btn_ok = self._make_compact_action_button("OK", tone="primary")
+        btn_ok.size_hint = (1, None)
+        btn_ok.height = dp(44)
+        outer.add_widget(btn_ok)
+
+        popup, _w = self._make_styled_popup(
+            title,
+            outer,
+            size_hint=(0.88 if is_mobile else 0.52, 0.46 if is_mobile else 0.38),
+        )
+        btn_ok.bind(on_release=lambda *_a: popup.dismiss())
+        popup.open()
 
 # App entry point
 
