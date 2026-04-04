@@ -1,5 +1,5 @@
 # =========================
-# main_android_optimized.py  —  MediMapPro v1.5.0
+# main_android_optimized.py  —  Form Alchemist v1.6.0
 # Android-optimized build entry point
 #
 # Patches applied over main.py:
@@ -1214,7 +1214,7 @@ def android_render_pdf_page(path, page_idx=0, preview_zoom=1.5):
 # ============================================================
 # Defaults
 # ============================================================
-APP_TITLE = "MediMapPro"
+APP_TITLE = "Form Alchemist"
 CONFIG_FILENAME = "form_alchemist_config.json"
 if platform == "android":
     ZOOM = 4.0
