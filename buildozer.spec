@@ -7,7 +7,7 @@ source.dir = .
 source.include_exts = py,png,jpg,jpeg,kv,atlas,xlsx,pdf,json,csv,java,ttf,otf,txt
 version = 1.6.0
 
-requirements = python3==3.10.11,hostpython3==3.10.11,kivy,kivymd,androidssystemfilechooser,opencv,openpyxl,pypdf,typing_extensions,reportlab,pillow
+requirements = python3==3.10.11,hostpython3==3.10.11,kivy,kivymd,androidssystemfilechooser,opencv,numpy,openpyxl,pypdf,typing_extensions,reportlab,pillow
 
 orientation = portrait
 fullscreen = 0
