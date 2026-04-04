@@ -10368,7 +10368,7 @@ class FormAlchemistApp(MDApp):
             btn_android_load_pdf = self._make_compact_action_button("Load PDF", tone="primary")
             btn_android_load_pdf.bind(on_release=self.on_load_pdf)
             btn_android_load_data = self._make_compact_action_button("Load Data", tone="plain")
-            btn_android_load_data.bind(on_release=self.on_load_df)
+            btn_android_load_data.bind(on_release=self.on_load_csv)
             btn_android_templates = self._make_compact_action_button("Templates", tone="plain")
             btn_android_templates.bind(on_release=self._open_area_template_library_popup)
             btn_android_detect_jump = self._make_compact_action_button("Find Fields", tone="accent")
