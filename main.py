@@ -71,7 +71,216 @@ except Exception as _fitz_exc:
     FITZ_IMPORT_ERROR = repr(_fitz_exc)
 
 import numpy as np
-import pandas as pd
+
+try:
+    import pandas as pd
+    PANDAS_AVAILABLE = True
+except Exception:
+    PANDAS_AVAILABLE = False
+
+    class _MiniColumns(list):
+        def tolist(self):
+            return list(self)
+
+    class _MiniValueCounts(dict):
+        def to_dict(self):
+            return dict(self)
+
+    class _MiniSeries:
+        def __init__(self, data=None, index=None, dtype=None):
+            self._data = list(data or [])
+            self.index = list(index) if index is not None else list(range(len(self._data)))
+            self.dtype = dtype
+
+        def __iter__(self):
+            return iter(self._data)
+
+        def __len__(self):
+            return len(self._data)
+
+        def __getitem__(self, idx):
+            return self._data[idx]
+
+        def __eq__(self, other):
+            return [str(v) == str(other) for v in self._data]
+
+        def tolist(self):
+            return list(self._data)
+
+        def dropna(self):
+            return _MiniSeries([v for v in self._data if not _mini_isna(v)])
+
+        def astype(self, dtype):
+            if dtype in (str, "str", "string"):
+                return _MiniSeries(["" if _mini_isna(v) else str(v) for v in self._data], index=self.index, dtype=dtype)
+            if dtype in (int, "int", "int64"):
+                out = []
+                for v in self._data:
+                    if _mini_isna(v) or str(v).strip() == "":
+                        out.append(0)
+                    else:
+                        out.append(int(float(v)))
+                return _MiniSeries(out, index=self.index, dtype=dtype)
+            return _MiniSeries(list(self._data), index=self.index, dtype=dtype)
+
+        def unique(self):
+            seen = []
+            for v in self._data:
+                if v not in seen:
+                    seen.append(v)
+            return seen
+
+        def value_counts(self):
+            counts = {}
+            for v in self._data:
+                counts[v] = counts.get(v, 0) + 1
+            return _MiniValueCounts(counts)
+
+    class _MiniRow(dict):
+        pass
+
+    class _MiniILoc:
+        def __init__(self, df):
+            self._df = df
+
+        def __getitem__(self, idx):
+            return _MiniRow(dict(self._df._rows[idx]))
+
+    class _MiniDataFrame:
+        def __init__(self, rows=None):
+            self._rows = [dict(r) for r in (rows or [])]
+            cols = []
+            for row in self._rows:
+                for key in row.keys():
+                    if key not in cols:
+                        cols.append(key)
+            self._columns = _MiniColumns(cols)
+
+        def __len__(self):
+            return len(self._rows)
+
+        @property
+        def empty(self):
+            return len(self._rows) == 0
+
+        @property
+        def columns(self):
+            return self._columns
+
+        @property
+        def index(self):
+            return list(range(len(self._rows)))
+
+        @property
+        def iloc(self):
+            return _MiniILoc(self)
+
+        def iterrows(self):
+            for idx, row in enumerate(self._rows):
+                yield idx, _MiniRow(dict(row))
+
+        def fillna(self, value=""):
+            for row in self._rows:
+                for key, val in list(row.items()):
+                    if _mini_isna(val):
+                        row[key] = value
+            return self
+
+        def __getitem__(self, key):
+            if isinstance(key, str):
+                return _MiniSeries([row.get(key, "") for row in self._rows], index=self.index)
+            if isinstance(key, (list, tuple)):
+                if all(isinstance(v, bool) for v in key):
+                    filtered = [row for row, keep in zip(self._rows, key) if keep]
+                    return _MiniDataFrame(filtered)
+                return _MiniDataFrame([{k: row.get(k, "") for k in key} for row in self._rows])
+            raise KeyError(key)
+
+        def __setitem__(self, key, value):
+            if isinstance(value, _MiniSeries):
+                values = value.tolist()
+            elif isinstance(value, list):
+                values = list(value)
+            else:
+                values = [value] * len(self._rows)
+            if len(self._rows) == 0 and values:
+                self._rows = [{} for _ in range(len(values))]
+            if len(values) < len(self._rows):
+                values.extend([""] * (len(self._rows) - len(values)))
+            for idx, row in enumerate(self._rows):
+                row[key] = values[idx] if idx < len(values) else ""
+            if key not in self._columns:
+                self._columns.append(key)
+
+    def _mini_isna(value):
+        if value is None:
+            return True
+        try:
+            import math
+            if isinstance(value, float) and math.isnan(value):
+                return True
+        except Exception:
+            pass
+        return False
+
+    def _mini_read_csv(src, dtype=str):
+        import csv
+        import io as _io
+        if hasattr(src, "read"):
+            raw = src.read()
+            if isinstance(raw, bytes):
+                text = raw.decode("utf-8-sig", errors="replace")
+            else:
+                text = str(raw)
+        else:
+            with open(src, "r", encoding="utf-8-sig", newline="") as fh:
+                text = fh.read()
+        reader = csv.DictReader(_io.StringIO(text))
+        rows = []
+        for row in reader:
+            rows.append({str(k): "" if _mini_isna(v) else str(v) for k, v in row.items()})
+        return _MiniDataFrame(rows)
+
+    def _mini_read_excel(src, dtype=str):
+        from openpyxl import load_workbook
+        wb = load_workbook(src, data_only=True, read_only=True)
+        ws = wb[wb.sheetnames[0]]
+        rows_iter = ws.iter_rows(values_only=True)
+        try:
+            headers = next(rows_iter)
+        except StopIteration:
+            wb.close()
+            return _MiniDataFrame([])
+        headers = ["" if h is None else str(h) for h in headers]
+        rows = []
+        for row in rows_iter:
+            item = {}
+            for idx, header in enumerate(headers):
+                if not header:
+                    continue
+                val = row[idx] if idx < len(row) else ""
+                item[header] = "" if _mini_isna(val) else str(val)
+            rows.append(item)
+        wb.close()
+        return _MiniDataFrame(rows)
+
+    class _MiniPandasModule:
+        DataFrame = _MiniDataFrame
+        Series = _MiniSeries
+
+        @staticmethod
+        def read_csv(src, dtype=str):
+            return _mini_read_csv(src, dtype=dtype)
+
+        @staticmethod
+        def read_excel(src, dtype=str):
+            return _mini_read_excel(src, dtype=dtype)
+
+        @staticmethod
+        def isna(value):
+            return _mini_isna(value)
+
+    pd = _MiniPandasModule()
 
 from pypdf import PdfReader, PdfWriter
 
@@ -10368,7 +10577,7 @@ class FormAlchemistApp(MDApp):
             btn_android_load_pdf = self._make_compact_action_button("Load PDF", tone="primary")
             btn_android_load_pdf.bind(on_release=self.on_load_pdf)
             btn_android_load_data = self._make_compact_action_button("Load Data", tone="plain")
-            btn_android_load_data.bind(on_release=self.on_load_csv)
+            btn_android_load_data.bind(on_release=self.on_load_df)
             btn_android_templates = self._make_compact_action_button("Templates", tone="plain")
             btn_android_templates.bind(on_release=self._open_area_template_library_popup)
             btn_android_detect_jump = self._make_compact_action_button("Find Fields", tone="accent")
@@ -10417,130 +10626,12 @@ class FormAlchemistApp(MDApp):
                 det_actions.add_widget(_w)
             android_detection_body.add_widget(det_actions)
 
-            def _make_detection_mirror_input(source_widget):
-                mirrored = make_input(getattr(source_widget, "text", "") or "", getattr(source_widget, "hint_text", "") or "")
-                try:
-                    mirrored.text = str(getattr(source_widget, "text", "") or "")
-                except Exception:
-                    pass
-                _sync_state = {"busy": False}
-
-                def _copy_text(src, dst):
-                    if _sync_state["busy"]:
-                        return
-                    try:
-                        src_text = str(getattr(src, "text", "") or "")
-                        dst_text = str(getattr(dst, "text", "") or "")
-                        if src_text == dst_text:
-                            return
-                        _sync_state["busy"] = True
-                        dst.text = src_text
-                    except Exception:
-                        pass
-                    finally:
-                        _sync_state["busy"] = False
-
-                try:
-                    source_widget.bind(text=lambda inst, value, dst=mirrored: _copy_text(inst, dst))
-                except Exception:
-                    pass
-                try:
-                    mirrored.bind(text=lambda inst, value, dst=source_widget: _copy_text(inst, dst))
-                except Exception:
-                    pass
-                return mirrored
-
-            def _make_searchable_select_mirror(source_widget, placeholder, picker_title, search_hint):
-                mirrored = SearchableSelectField(
-                    text=str(getattr(source_widget, "text", placeholder) or placeholder),
-                    values=list(getattr(source_widget, "values", []) or []),
-                    placeholder=placeholder,
-                    picker_title=picker_title,
-                    search_hint=search_hint,
-                    allow_clear=getattr(source_widget, "allow_clear", True),
-                    size_hint_y=None,
-                    height=dp(44),
-                )
-                try:
-                    mirrored.background_normal = ""
-                    mirrored.background_down = ""
-                    mirrored.background_color = getattr(source_widget, "background_color", (0.11, 0.135, 0.185, 1))
-                    mirrored.color = getattr(source_widget, "color", palette["text"])
-                except Exception:
-                    pass
-                _sync_state = {"busy": False}
-
-                def _copy_text(src, dst):
-                    if _sync_state["busy"]:
-                        return
-                    try:
-                        src_text = str(getattr(src, "text", "") or "")
-                        dst_text = str(getattr(dst, "text", "") or "")
-                        if src_text == dst_text:
-                            return
-                        _sync_state["busy"] = True
-                        dst.text = src_text
-                    except Exception:
-                        pass
-                    finally:
-                        _sync_state["busy"] = False
-
-                def _copy_values(src, dst):
-                    try:
-                        src_values = list(getattr(src, "values", []) or [])
-                        dst.values = src_values
-                        current_text = str(getattr(dst, "text", "") or "")
-                        if current_text and current_text not in src_values and current_text != placeholder:
-                            dst.text = placeholder
-                    except Exception:
-                        pass
-
-                try:
-                    source_widget.bind(text=lambda inst, value, dst=mirrored: _copy_text(inst, dst))
-                    source_widget.bind(values=lambda inst, value, dst=mirrored: _copy_values(inst, dst))
-                except Exception:
-                    pass
-                try:
-                    mirrored.bind(text=lambda inst, value, dst=source_widget: _copy_text(inst, dst))
-                except Exception:
-                    pass
-                _copy_values(source_widget, mirrored)
-                return mirrored
-
-            def _make_label_mirror(source_label):
-                mirrored = Label(
-                    text=str(getattr(source_label, "text", "") or ""),
-                    color=getattr(source_label, "color", palette["muted"]),
-                    size_hint_y=None,
-                    height=getattr(source_label, "height", dp(42)),
-                    halign=getattr(source_label, "halign", "left"),
-                    valign=getattr(source_label, "valign", "middle"),
-                    font_size=getattr(source_label, "font_size", dp(11)),
-                )
-                try:
-                    mirrored.bind(size=self._sync_label_text_size)
-                    self._bind_auto_height_label(mirrored, min_height=dp(36), extra_pad=dp(4))
-                except Exception:
-                    pass
-
-                def _sync_text(inst, value, dst=mirrored):
-                    try:
-                        dst.text = str(value or "")
-                    except Exception:
-                        pass
-
-                try:
-                    source_label.bind(text=_sync_text)
-                except Exception:
-                    pass
-                return mirrored
-
             det_compact = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=dp(132))
             compact_detection_fields = [
-                (detection_ui_label("f_area", "Field Area"), _make_detection_mirror_input(self.f_area)),
-                (detection_ui_label("line_minw", "Line Min Width"), _make_detection_mirror_input(self.line_minw)),
-                (detection_ui_label("c_strict", "Checkbox Strict"), _make_detection_mirror_input(self.c_strict)),
-                (detection_ui_label("c_size_max", "Checkbox Max"), _make_detection_mirror_input(self.c_size_max)),
+                (detection_ui_label("f_area", "Field Area"), self.f_area),
+                (detection_ui_label("line_minw", "Line Min Width"), self.line_minw),
+                (detection_ui_label("c_strict", "Checkbox Strict"), self.c_strict),
+                (detection_ui_label("c_size_max", "Checkbox Max"), self.c_size_max),
             ]
             for _label_txt, _widget in compact_detection_fields:
                 det_compact.add_widget(labeled_field(_label_txt, _widget))
@@ -10554,9 +10645,9 @@ class FormAlchemistApp(MDApp):
             btn_android_map_save = self._make_compact_action_button("Save Field Link", tone="primary")
             btn_android_map_save.bind(on_release=self.on_assign_mapping)
             btn_android_map_clear = self._make_compact_action_button("Clear Field Links", tone="ghost")
-            btn_android_map_clear.bind(on_release=self.on_clear_selected_mapping)
+            btn_android_map_clear.bind(on_release=self.on_clear_mapping)
             btn_android_select_toggle = self._make_compact_action_button("Select Mode", tone="plain")
-            btn_android_select_toggle.bind(on_release=self._toggle_mobile_selection_mode)
+            btn_android_select_toggle.bind(on_release=self.toggle_select_mode)
             btn_android_map_templates = self._make_compact_action_button("Templates", tone="plain")
             btn_android_map_templates.bind(on_release=self._open_area_template_library_popup)
             for _w in (btn_android_map_save, btn_android_map_clear, btn_android_select_toggle, btn_android_map_templates):
@@ -10564,20 +10655,8 @@ class FormAlchemistApp(MDApp):
                 _w.height = dp(42)
                 map_action_grid.add_widget(_w)
             android_mapping_body.add_widget(map_action_grid)
-            android_patient_spinner_mirror = _make_searchable_select_mirror(
-                self.patient_spinner,
-                RECORD_SELECT_TEXT,
-                "Choose a patient / record",
-                "Type to search for a patient or record",
-            )
-            android_column_spinner_mirror = _make_searchable_select_mirror(
-                self.column_spinner,
-                COLUMN_SELECT_TEXT,
-                "Choose which column fills this field",
-                "Type to find which column fills this field",
-            )
-            android_mapping_body.add_widget(labeled_field("Record", android_patient_spinner_mirror))
-            android_mapping_body.add_widget(labeled_field("Column", android_column_spinner_mirror))
+            android_mapping_body.add_widget(labeled_field("Record", self.patient_spinner))
+            android_mapping_body.add_widget(labeled_field("Column", self.column_spinner))
 
             android_export_card, android_export_body = _make_android_panel_card(
                 "8 Export PDF",
@@ -10597,8 +10676,7 @@ class FormAlchemistApp(MDApp):
                 _w.height = dp(42)
                 export_action_grid.add_widget(_w)
             android_export_body.add_widget(export_action_grid)
-            android_export_note_lbl = _make_label_mirror(self.export_note_lbl)
-            android_export_body.add_widget(android_export_note_lbl)
+            android_export_body.add_widget(self.export_note_lbl)
 
             self._mobile_section_cards["Files"] = android_files_card
             self._mobile_section_cards["Session"] = android_session_card
@@ -18261,18 +18339,6 @@ class FormAlchemistApp(MDApp):
                 self.engine.custom_mappings[k] = kept
             else:
                 del self.engine.custom_mappings[k]
-
-    def on_load_df(self, instance):
-        """Compatibility wrapper for older Android button wiring."""
-        return self.on_load_csv(instance)
-
-    def on_clear_mapping(self, *_):
-        """Compatibility wrapper for Android compact mapping panel."""
-        return self.on_clear_selected_mapping(*_)
-
-    def toggle_select_mode(self, *_):
-        """Compatibility wrapper for Android compact mapping panel."""
-        return self._toggle_mobile_selection_mode(*_)
 
     def on_clear_selected_mapping(self, *_):
         ids = sorted(set(int(x) for x in getattr(self.engine, "selected_box_ids", []) if isinstance(x, int) or str(x).isdigit()))
