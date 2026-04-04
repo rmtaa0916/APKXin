@@ -1,5 +1,5 @@
 # =========================
-# main_android_optimized.py  —  MediMapPro v1.5.0
+# main_android_optimized.py  —  Form Alchemist v1.6.0
 # Android-optimized build entry point
 #
 # Patches applied over main.py:
@@ -1214,7 +1214,7 @@ def android_render_pdf_page(path, page_idx=0, preview_zoom=1.5):
 # ============================================================
 # Defaults
 # ============================================================
-APP_TITLE = "MediMapPro"
+APP_TITLE = "Form Alchemist"
 CONFIG_FILENAME = "form_alchemist_config.json"
 if platform == "android":
     ZOOM = 4.0
@@ -10577,7 +10577,7 @@ class FormAlchemistApp(MDApp):
             btn_android_load_pdf = self._make_compact_action_button("Load PDF", tone="primary")
             btn_android_load_pdf.bind(on_release=self.on_load_pdf)
             btn_android_load_data = self._make_compact_action_button("Load Data", tone="plain")
-            btn_android_load_data.bind(on_release=self.on_load_df)
+            btn_android_load_data.bind(on_release=self.on_load_csv)
             btn_android_templates = self._make_compact_action_button("Templates", tone="plain")
             btn_android_templates.bind(on_release=self._open_area_template_library_popup)
             btn_android_detect_jump = self._make_compact_action_button("Find Fields", tone="accent")
@@ -10626,16 +10626,21 @@ class FormAlchemistApp(MDApp):
                 det_actions.add_widget(_w)
             android_detection_body.add_widget(det_actions)
 
-            det_compact = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=dp(132))
-            compact_detection_fields = [
-                (detection_ui_label("f_area", "Field Area"), self.f_area),
-                (detection_ui_label("line_minw", "Line Min Width"), self.line_minw),
-                (detection_ui_label("c_strict", "Checkbox Strict"), self.c_strict),
-                (detection_ui_label("c_size_max", "Checkbox Max"), self.c_size_max),
-            ]
-            for _label_txt, _widget in compact_detection_fields:
-                det_compact.add_widget(labeled_field(_label_txt, _widget))
-            android_detection_body.add_widget(det_compact)
+            # NOTE: do not reuse detection TextInput widgets here because they are
+            # already mounted in the main settings layout; Kivy widgets can have
+            # only one parent at a time.
+            det_compact_note = Label(
+                text="Use [b]Open Tuning[/b] to edit detection thresholds.",
+                markup=True,
+                color=palette["muted"],
+                size_hint_y=None,
+                height=dp(28),
+                halign="left",
+                valign="middle",
+                font_size=dp(12),
+            )
+            det_compact_note.bind(size=self._sync_label_text_size)
+            android_detection_body.add_widget(det_compact_note)
 
             android_mapping_card, android_mapping_body = _make_android_panel_card(
                 "6 Map Fields",
@@ -10645,7 +10650,7 @@ class FormAlchemistApp(MDApp):
             btn_android_map_save = self._make_compact_action_button("Save Field Link", tone="primary")
             btn_android_map_save.bind(on_release=self.on_assign_mapping)
             btn_android_map_clear = self._make_compact_action_button("Clear Field Links", tone="ghost")
-            btn_android_map_clear.bind(on_release=self.on_clear_mapping)
+            btn_android_map_clear.bind(on_release=self.on_clear_selected_mapping)
             btn_android_select_toggle = self._make_compact_action_button("Select Mode", tone="plain")
             btn_android_select_toggle.bind(on_release=self.toggle_select_mode)
             btn_android_map_templates = self._make_compact_action_button("Templates", tone="plain")
