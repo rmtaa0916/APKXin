@@ -11797,11 +11797,7 @@ class FormAlchemistApp(MDApp):
             Clock.schedule_once(lambda dt: self._bind_desktop_shortcuts(), 0)
 
         if is_mobile:
-            if platform == "android" and android_top_modes_card is not None:
-                root.add_widget(android_top_modes_card)
             root.add_widget(main)
-            if platform == "android" and android_bottom_status_card is not None:
-                root.add_widget(android_bottom_status_card)
 
         app_shell = FloatLayout()
         root.size_hint = (1, 1)
