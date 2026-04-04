@@ -10652,7 +10652,7 @@ class FormAlchemistApp(MDApp):
             btn_android_map_clear = self._make_compact_action_button("Clear Field Links", tone="ghost")
             btn_android_map_clear.bind(on_release=self.on_clear_selected_mapping)
             btn_android_select_toggle = self._make_compact_action_button("Select Mode", tone="plain")
-            btn_android_select_toggle.bind(on_release=self.toggle_select_mode)
+            btn_android_select_toggle.bind(on_release=self._toggle_mobile_selection_mode)
             btn_android_map_templates = self._make_compact_action_button("Templates", tone="plain")
             btn_android_map_templates.bind(on_release=self._open_area_template_library_popup)
             for _w in (btn_android_map_save, btn_android_map_clear, btn_android_select_toggle, btn_android_map_templates):
