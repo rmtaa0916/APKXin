@@ -10660,8 +10660,20 @@ class FormAlchemistApp(MDApp):
                 _w.height = dp(42)
                 map_action_grid.add_widget(_w)
             android_mapping_body.add_widget(map_action_grid)
-            android_mapping_body.add_widget(labeled_field("Record", self.patient_spinner))
-            android_mapping_body.add_widget(labeled_field("Column", self.column_spinner))
+            # NOTE: these selectors are already mounted in the primary mapping UI.
+            # Re-adding them here causes Kivy parent conflicts.
+            map_compact_note = Label(
+                text="Choose [b]Record[/b] and [b]Column[/b] in the main Mapping panel.",
+                markup=True,
+                color=palette["muted"],
+                size_hint_y=None,
+                height=dp(28),
+                halign="left",
+                valign="middle",
+                font_size=dp(12),
+            )
+            map_compact_note.bind(size=self._sync_label_text_size)
+            android_mapping_body.add_widget(map_compact_note)
 
             android_export_card, android_export_body = _make_android_panel_card(
                 "8 Export PDF",
@@ -10681,7 +10693,17 @@ class FormAlchemistApp(MDApp):
                 _w.height = dp(42)
                 export_action_grid.add_widget(_w)
             android_export_body.add_widget(export_action_grid)
-            android_export_body.add_widget(self.export_note_lbl)
+            self.export_note_lbl_android = Label(
+                text="",
+                color=palette["muted"],
+                size_hint_y=None,
+                height=dp(42),
+                halign="left",
+                valign="middle",
+                font_size=dp(11),
+            )
+            self.export_note_lbl_android.bind(size=self._sync_label_text_size)
+            android_export_body.add_widget(self.export_note_lbl_android)
 
             self._mobile_section_cards["Files"] = android_files_card
             self._mobile_section_cards["Session"] = android_session_card
@@ -12909,17 +12931,20 @@ class FormAlchemistApp(MDApp):
                 f"Create PDFs: {'ready' if export_ok else 'not available'} • Next step: {next_step}"
             )
 
-        if hasattr(self, "export_note_lbl") and self.export_note_lbl is not None:
-            if not export_ok:
-                self.export_note_lbl.text = "PDF export is not available in this build."
-            elif not has_pdf and not has_data:
-                self.export_note_lbl.text = "Open a PDF form and a data file to enable export."
-            elif not has_pdf:
-                self.export_note_lbl.text = "Open a PDF form to enable export."
-            elif not has_data:
-                self.export_note_lbl.text = "Load a data file to enable export."
-            else:
-                self.export_note_lbl.text = "Export is ready. Create one PDF or the full batch."
+        export_note_text = ""
+        if not export_ok:
+            export_note_text = "PDF export is not available in this build."
+        elif not has_pdf and not has_data:
+            export_note_text = "Open a PDF form and a data file to enable export."
+        elif not has_pdf:
+            export_note_text = "Open a PDF form to enable export."
+        elif not has_data:
+            export_note_text = "Load a data file to enable export."
+        else:
+            export_note_text = "Export is ready. Create one PDF or the full batch."
+        for _note in (getattr(self, "export_note_lbl", None), getattr(self, "export_note_lbl_android", None)):
+            if _note is not None:
+                _note.text = export_note_text
 
         if getattr(self, "mobile_flow_lbl", None) is not None:
             if not has_pdf:
