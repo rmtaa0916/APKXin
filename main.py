@@ -1,5 +1,5 @@
 # =========================
-# main_android_optimized.py  —  MediMapPro v1.5.0
+# main_android_optimized.py  —  Form Alchemist v1.6.0
 # Android-optimized build entry point
 #
 # Patches applied over main.py:
@@ -1214,7 +1214,7 @@ def android_render_pdf_page(path, page_idx=0, preview_zoom=1.5):
 # ============================================================
 # Defaults
 # ============================================================
-APP_TITLE = "MediMapPro"
+APP_TITLE = "Form Alchemist"
 CONFIG_FILENAME = "form_alchemist_config.json"
 if platform == "android":
     ZOOM = 4.0
@@ -10577,7 +10577,7 @@ class FormAlchemistApp(MDApp):
             btn_android_load_pdf = self._make_compact_action_button("Load PDF", tone="primary")
             btn_android_load_pdf.bind(on_release=self.on_load_pdf)
             btn_android_load_data = self._make_compact_action_button("Load Data", tone="plain")
-            btn_android_load_data.bind(on_release=self.on_load_df)
+            btn_android_load_data.bind(on_release=self.on_load_csv)
             btn_android_templates = self._make_compact_action_button("Templates", tone="plain")
             btn_android_templates.bind(on_release=self._open_area_template_library_popup)
             btn_android_detect_jump = self._make_compact_action_button("Find Fields", tone="accent")
@@ -10645,7 +10645,7 @@ class FormAlchemistApp(MDApp):
             btn_android_map_save = self._make_compact_action_button("Save Field Link", tone="primary")
             btn_android_map_save.bind(on_release=self.on_assign_mapping)
             btn_android_map_clear = self._make_compact_action_button("Clear Field Links", tone="ghost")
-            btn_android_map_clear.bind(on_release=self.on_clear_mapping)
+            btn_android_map_clear.bind(on_release=self.on_clear_selected_mapping)
             btn_android_select_toggle = self._make_compact_action_button("Select Mode", tone="plain")
             btn_android_select_toggle.bind(on_release=self.toggle_select_mode)
             btn_android_map_templates = self._make_compact_action_button("Templates", tone="plain")
