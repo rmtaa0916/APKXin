@@ -10626,16 +10626,21 @@ class FormAlchemistApp(MDApp):
                 det_actions.add_widget(_w)
             android_detection_body.add_widget(det_actions)
 
-            det_compact = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=dp(132))
-            compact_detection_fields = [
-                (detection_ui_label("f_area", "Field Area"), self.f_area),
-                (detection_ui_label("line_minw", "Line Min Width"), self.line_minw),
-                (detection_ui_label("c_strict", "Checkbox Strict"), self.c_strict),
-                (detection_ui_label("c_size_max", "Checkbox Max"), self.c_size_max),
-            ]
-            for _label_txt, _widget in compact_detection_fields:
-                det_compact.add_widget(labeled_field(_label_txt, _widget))
-            android_detection_body.add_widget(det_compact)
+            # NOTE: do not reuse detection TextInput widgets here because they are
+            # already mounted in the main settings layout; Kivy widgets can have
+            # only one parent at a time.
+            det_compact_note = Label(
+                text="Use [b]Open Tuning[/b] to edit detection thresholds.",
+                markup=True,
+                color=palette["muted"],
+                size_hint_y=None,
+                height=dp(28),
+                halign="left",
+                valign="middle",
+                font_size=dp(12),
+            )
+            det_compact_note.bind(size=self._sync_label_text_size)
+            android_detection_body.add_widget(det_compact_note)
 
             android_mapping_card, android_mapping_body = _make_android_panel_card(
                 "6 Map Fields",
