@@ -9502,8 +9502,8 @@ class FloatingPreviewHUD(BoxLayout):
         else:
             self.height = max(self._drag_handle_height + dp(8), float(self._expanded_height or self.height or dp(150)))
         if self._toggle_button is not None:
-            collapsed_label = getattr(self._toggle_button, '_collapsed_label', '✦')
-            expanded_label = getattr(self._toggle_button, '_expanded_label', '—')
+            collapsed_label = getattr(self._toggle_button, '_collapsed_label', 'Show')
+            expanded_label = getattr(self._toggle_button, '_expanded_label', 'Hide')
             self._toggle_button.text = collapsed_label if self._collapsed else expanded_label
         self._emit_collapse_state()
 
@@ -10016,11 +10016,11 @@ class FormAlchemistApp(MDApp):
                 font_size=dp(9.5),
             )
             hud_drag_hint.bind(size=self._sync_label_text_size)
-            self.btn_hud_pin = self._make_compact_action_button(("Hide" if is_mobile else "—"), tone="accent")
-            self.btn_hud_pin._expanded_label = "Hide" if is_mobile else "—"
-            self.btn_hud_pin._collapsed_label = "Show" if is_mobile else "✦"
+            self.btn_hud_pin = self._make_compact_action_button("Hide", tone="accent")
+            self.btn_hud_pin._expanded_label = "Hide"
+            self.btn_hud_pin._collapsed_label = "Show"
             self.btn_hud_pin.size_hint = (None, None)
-            self.btn_hud_pin.size = ((dp(54), dp(32)) if is_mobile else (dp(38), dp(26)))
+            self.btn_hud_pin.size = ((dp(58), dp(32)) if is_mobile else (dp(54), dp(26)))
             hud_header.add_widget(self.preview_hud_title_lbl)
             hud_header.add_widget(hud_drag_hint)
             hud_header.add_widget(self.btn_hud_pin)
