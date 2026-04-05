@@ -10735,7 +10735,9 @@ class FormAlchemistApp(MDApp):
             android_export_body.add_widget(self.export_note_lbl_android)
 
             self._mobile_section_cards["Files"] = android_files_card
-            self._mobile_section_cards["Session"] = android_session_card
+            # Keep the full Session card on Android so record selection/picker
+            # (including imported Google Sheet rows) remains available.
+            self._mobile_section_cards["Session"] = nav_card
             self._mobile_section_cards["Detection"] = android_detection_card
             self._mobile_section_cards["Mapping"] = android_mapping_card
             self._mobile_section_cards["Export"] = android_export_card
@@ -11305,6 +11307,7 @@ class FormAlchemistApp(MDApp):
                 ("ROI", (0.35, 0.70, 1.00, 1)),
                 ("Trace", (1.00, 0.60, 0.18, 1)),
             ]:
+                chip = Label(text=str(_txt), color=_col, halign="left", valign="middle", font_size=dp(10.5))
                 chip = Label(text=f"[color=#{int(_col[0]*255):02x}{int(_col[1]*255):02x}{int(_col[2]*255):02x}]●[/color] {_txt}", markup=True, color=palette["muted"], halign="left", valign="middle", font_size=dp(10.5))
                 chip.bind(size=self._sync_label_text_size)
                 legend_row.add_widget(chip)
@@ -11436,9 +11439,10 @@ class FormAlchemistApp(MDApp):
             _focus_btn_size = dp(48)
             self.btn_focus_mode = self._make_compact_action_button("Focus", tone="ghost")
             self.btn_focus_mode.size_hint = (None, None)
-            self.btn_focus_mode.size = (_focus_btn_size, _focus_btn_size)
+            self.btn_focus_mode.size = (dp(72), dp(42))
             self.btn_focus_mode.pos_hint = {"x": 0.01, "top": 0.99}
             self.btn_focus_mode.opacity = 0.72
+            self.btn_focus_mode.font_size = dp(11)
             self.btn_focus_mode.bind(on_release=self._toggle_focus_mode)
             preview_stage.add_widget(self.btn_focus_mode)
 
@@ -12295,8 +12299,6 @@ class FormAlchemistApp(MDApp):
         self._update_preview_hud()
 
     def _update_bottom_statusbar(self):
-        if not hasattr(self, "statusbar_file_lbl"):
-            return
         pdf_name = os.path.basename(getattr(self.engine, "pdf_path", "") or "") or "No PDF"
         try:
             page_idx = self.current_page_idx()
@@ -12316,15 +12318,20 @@ class FormAlchemistApp(MDApp):
         if self.engine.supports_export_backend():
             ready.append("EXPORT")
         readiness = " • ".join(ready) if ready else "Idle"
-        self.statusbar_file_lbl.text = f"File: {pdf_name}"
-        self.statusbar_page_lbl.text = f"Page: {page_idx + 1}/{max(total_pages, 1)}"
-        self.statusbar_patient_lbl.text = f"Record: {patient}"
-        self.statusbar_boxes_lbl.text = f"Boxes: {box_count} • Selected: {sel_count}"
-        self.statusbar_ready_lbl.text = f"Ready: {readiness}"
+        if hasattr(self, "statusbar_file_lbl") and self.statusbar_file_lbl is not None:
+            self.statusbar_file_lbl.text = f"File: {pdf_name}"
+        if hasattr(self, "statusbar_page_lbl") and self.statusbar_page_lbl is not None:
+            self.statusbar_page_lbl.text = f"Page: {page_idx + 1}/{max(total_pages, 1)}"
+        if hasattr(self, "statusbar_patient_lbl") and self.statusbar_patient_lbl is not None:
+            self.statusbar_patient_lbl.text = f"Record: {patient}"
+        if hasattr(self, "statusbar_boxes_lbl") and self.statusbar_boxes_lbl is not None:
+            self.statusbar_boxes_lbl.text = f"Boxes: {box_count} • Selected: {sel_count}"
+        if hasattr(self, "statusbar_ready_lbl") and self.statusbar_ready_lbl is not None:
+            self.statusbar_ready_lbl.text = f"Ready: {readiness}"
         if hasattr(self, "mobile_meta_lbl") and self.mobile_meta_lbl is not None:
             self.mobile_meta_lbl.text = ""
         if getattr(self, "android_status_file_lbl", None) is not None:
-            self.android_status_file_lbl.text = f"File: {pdf_name[:24]}"
+            self.android_status_file_lbl.text = f"File: {pdf_name}"
         if getattr(self, "android_status_page_lbl", None) is not None:
             self.android_status_page_lbl.text = f"Page: {page_idx + 1}/{max(total_pages, 1)}"
         if getattr(self, "android_status_boxes_lbl", None) is not None:
