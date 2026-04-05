@@ -9173,9 +9173,6 @@ class InteractivePreview(Image):
 
         pt = self._touch_to_image_point(touch)
         hit = self._find_hit_box_for_touch(touch)
-        if pt is None and hit is None:
-            return super().on_touch_down(touch)
-
         self._touch_refs[touch.uid] = touch
         self._set_pointed_box(hit, notify=True)
         self._touch_start[touch.uid] = (touch.x, touch.y)
@@ -9186,14 +9183,11 @@ class InteractivePreview(Image):
             self._begin_android_pinch()
             return True
 
-        if pt is not None:
-            try:
-                touch.grab(self)
-            except Exception:
-                pass
-            return True
-
-        return super().on_touch_down(touch)
+        try:
+            touch.grab(self)
+        except Exception:
+            pass
+        return True
 
     def on_touch_move(self, touch):
         if platform == "android":
@@ -9522,11 +9516,9 @@ class FloatingPreviewHUD(BoxLayout):
             return False
         if self._toggle_button is not None and self._touch_hits_widget_tree(self._toggle_button, touch):
             return False
-        try:
-            _, ly = self.to_widget(*touch.pos, relative=True)
-        except Exception:
+        if self._touch_hits_interactive(touch):
             return False
-        return ly >= max(0.0, self.height - self._drag_handle_height)
+        return True
 
     def _find_deepest_touch_target(self, widget, touch):
         if widget is None:
@@ -11301,6 +11293,15 @@ class FormAlchemistApp(MDApp):
             helper_body.add_widget(status_row)
 
             legend_row = BoxLayout(orientation="horizontal", spacing=dp(6), size_hint_y=None, height=dp(22))
+            legend_lbl = Label(
+                text="Legend: Field / Check / ROI / Trace",
+                color=palette["muted"],
+                halign="left",
+                valign="middle",
+                font_size=dp(10.5),
+            )
+            legend_lbl.bind(size=self._sync_label_text_size)
+            legend_row.add_widget(legend_lbl)
             for _txt, _col in [
                 ("Field", (0.25, 0.90, 0.42, 1)),
                 ("Check", (1.00, 0.88, 0.25, 1)),
