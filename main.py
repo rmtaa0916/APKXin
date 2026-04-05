@@ -11252,6 +11252,11 @@ class FormAlchemistApp(MDApp):
             self.btn_android_helper_toggle._collapsed_label = "Show"
             self.btn_android_helper_toggle.size_hint = (None, None)
             self.btn_android_helper_toggle.size = (dp(50), dp(24))
+            self.btn_android_helper_toggle = self._make_compact_action_button("—", tone="ghost")
+            self.btn_android_helper_toggle._expanded_label = "—"
+            self.btn_android_helper_toggle._collapsed_label = "✦"
+            self.btn_android_helper_toggle.size_hint = (None, None)
+            self.btn_android_helper_toggle.size = (dp(34), dp(24))
             helper_header.add_widget(helper_title)
             helper_header.add_widget(helper_drag_lbl)
             helper_header.add_widget(self.btn_android_helper_toggle)
@@ -11278,6 +11283,16 @@ class FormAlchemistApp(MDApp):
             )
             legend_lbl.bind(size=self._sync_label_text_size)
             legend_row.add_widget(legend_lbl)
+            for _txt, _col in [
+                ("Field", (0.25, 0.90, 0.42, 1)),
+                ("Check", (1.00, 0.88, 0.25, 1)),
+                ("ROI", (0.35, 0.70, 1.00, 1)),
+                ("Trace", (1.00, 0.60, 0.18, 1)),
+            ]:
+                chip = Label(text=str(_txt), color=_col, halign="left", valign="middle", font_size=dp(10.5))
+                chip = Label(text=f"[color=#{int(_col[0]*255):02x}{int(_col[1]*255):02x}{int(_col[2]*255):02x}]●[/color] {_txt}", markup=True, color=palette["muted"], halign="left", valign="middle", font_size=dp(10.5))
+                chip.bind(size=self._sync_label_text_size)
+                legend_row.add_widget(chip)
             helper_body.add_widget(legend_row)
 
             android_bottom_status_card.add_widget(helper_header)
@@ -11287,6 +11302,7 @@ class FormAlchemistApp(MDApp):
             android_bottom_status_card.register_interactive_widgets(self.btn_android_helper_toggle)
             android_bottom_status_card.set_drag_enabled(True)
             android_bottom_status_card.set_allow_body_passthrough(False)
+            android_bottom_status_card.set_allow_body_passthrough(True)
 
         if is_mobile:
             main.spacing = 0
@@ -11382,6 +11398,7 @@ class FormAlchemistApp(MDApp):
             self.preview_hud.pos_hint = {"right": 0.985, "y": 0.10}
             self.preview_hud.set_drag_enabled(True)
             self.preview_hud.set_allow_body_passthrough(False)
+            self.preview_hud.set_allow_body_passthrough(True)
             self.preview_hud.opacity = 0
             self.preview_hud.disabled = True
             preview_stage.add_widget(self.preview_hud)
@@ -12076,6 +12093,8 @@ class FormAlchemistApp(MDApp):
                 panel.x = clamped_x
             if abs(float(panel.y) - clamped_y) > 0.01:
                 panel.y = clamped_y
+            panel.x = min(max(0.0, float(panel.x)), max_x)
+            panel.y = min(max(0.0, float(panel.y)), max_y)
         except Exception:
             pass
 
@@ -12085,6 +12104,7 @@ class FormAlchemistApp(MDApp):
             return
         try:
             panel.bind(size=lambda *_: self._clamp_overlay_panel_to_preview_stage(panel))
+            panel.bind(pos=lambda *_: self._clamp_overlay_panel_to_preview_stage(panel))
             stage.bind(size=lambda *_: self._clamp_overlay_panel_to_preview_stage(panel))
             Clock.schedule_once(lambda dt: self._clamp_overlay_panel_to_preview_stage(panel), 0)
         except Exception:
