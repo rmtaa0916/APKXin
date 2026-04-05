@@ -11227,36 +11227,62 @@ class FormAlchemistApp(MDApp):
             android_panel_scroll.add_widget(android_panel_host)
             android_panel_card.add_widget(android_panel_scroll)
 
-            android_bottom_status_card = BoxLayout(
+            android_bottom_status_card = FloatingPreviewHUD(
                 orientation="vertical",
                 spacing=dp(4),
-                size_hint_y=None,
-                height=dp(74),
+                size_hint=(None, None),
+                width=dp(300),
+                height=dp(136),
                 padding=[dp(10), dp(8), dp(10), dp(8)],
+                pos_hint={},
             )
-            style_card(android_bottom_status_card, palette["surface_alt"], radius=dp(16))
+            self._style_popup_card(android_bottom_status_card, palette.get("surface_alt", (0.042, 0.068, 0.138, 0.995)), radius=dp(16))
 
-            status_row = GridLayout(cols=2, rows=2, spacing=dp(4), size_hint=(1, None), height=dp(38))
-            self.android_status_file_lbl = Label(text="File: No PDF", color=palette["muted"], halign="left", valign="middle", font_size=dp(11))
-            self.android_status_page_lbl = Label(text="Page: 1/1", color=palette["muted"], halign="left", valign="middle", font_size=dp(11))
-            self.android_status_boxes_lbl = Label(text="Boxes: 0", color=palette["muted"], halign="left", valign="middle", font_size=dp(11))
-            self.android_status_mode_lbl = Label(text="Mode: Files", color=palette["text"], halign="left", valign="middle", font_size=dp(12), bold=True)
+            helper_header = BoxLayout(orientation="horizontal", spacing=dp(6), size_hint_y=None, height=dp(28))
+            helper_title = Label(text="Preview Helper", color=palette["text"], halign="left", valign="middle", font_size=dp(11.5), bold=True)
+            helper_title.bind(size=self._sync_label_text_size)
+            helper_drag_lbl = Label(text="drag", color=palette["muted"], size_hint=(None, None), width=dp(44), height=dp(18), halign="right", valign="middle", font_size=dp(9.5))
+            helper_drag_lbl.bind(size=self._sync_label_text_size)
+            self.btn_android_helper_toggle = self._make_compact_action_button("—", tone="ghost")
+            self.btn_android_helper_toggle._expanded_label = "—"
+            self.btn_android_helper_toggle._collapsed_label = "✦"
+            self.btn_android_helper_toggle.size_hint = (None, None)
+            self.btn_android_helper_toggle.size = (dp(34), dp(24))
+            helper_header.add_widget(helper_title)
+            helper_header.add_widget(helper_drag_lbl)
+            helper_header.add_widget(self.btn_android_helper_toggle)
+
+            helper_body = BoxLayout(orientation="vertical", spacing=dp(4), size_hint_y=None)
+            helper_body.bind(minimum_height=helper_body.setter("height"))
+            status_row = GridLayout(cols=2, rows=2, spacing=dp(4), size_hint=(1, None), height=dp(42))
+            self.android_status_file_lbl = Label(text="File: No PDF", color=palette["muted"], halign="left", valign="middle", font_size=dp(10.5))
+            self.android_status_page_lbl = Label(text="Page: 1/1", color=palette["muted"], halign="left", valign="middle", font_size=dp(10.5))
+            self.android_status_boxes_lbl = Label(text="Boxes: 0 • Sel: 0", color=palette["muted"], halign="left", valign="middle", font_size=dp(10.5))
+            self.android_status_mode_lbl = Label(text="Mode: Files", color=palette["text"], halign="left", valign="middle", font_size=dp(11.5), bold=True)
             for _lbl in (self.android_status_file_lbl, self.android_status_page_lbl, self.android_status_boxes_lbl, self.android_status_mode_lbl):
                 _lbl.bind(size=self._sync_label_text_size)
                 status_row.add_widget(_lbl)
-            android_bottom_status_card.add_widget(status_row)
+            helper_body.add_widget(status_row)
 
-            legend_row = BoxLayout(orientation="horizontal", spacing=dp(6), size_hint_y=None, height=dp(20))
+            legend_row = BoxLayout(orientation="horizontal", spacing=dp(6), size_hint_y=None, height=dp(22))
             for _txt, _col in [
                 ("Field", (0.25, 0.90, 0.42, 1)),
                 ("Check", (1.00, 0.88, 0.25, 1)),
                 ("ROI", (0.35, 0.70, 1.00, 1)),
                 ("Trace", (1.00, 0.60, 0.18, 1)),
             ]:
-                chip = Label(text=f"[color=#{int(_col[0]*255):02x}{int(_col[1]*255):02x}{int(_col[2]*255):02x}]●[/color] {_txt}", markup=True, color=palette["muted"], halign="left", valign="middle", font_size=dp(11))
+                chip = Label(text=f"[color=#{int(_col[0]*255):02x}{int(_col[1]*255):02x}{int(_col[2]*255):02x}]●[/color] {_txt}", markup=True, color=palette["muted"], halign="left", valign="middle", font_size=dp(10.5))
                 chip.bind(size=self._sync_label_text_size)
                 legend_row.add_widget(chip)
-            android_bottom_status_card.add_widget(legend_row)
+            helper_body.add_widget(legend_row)
+
+            android_bottom_status_card.add_widget(helper_header)
+            android_bottom_status_card.add_widget(helper_body)
+            android_bottom_status_card.set_body_widget(helper_body, expanded_height=dp(132))
+            android_bottom_status_card.set_toggle_button(self.btn_android_helper_toggle)
+            android_bottom_status_card.register_interactive_widgets(self.btn_android_helper_toggle)
+            android_bottom_status_card.set_drag_enabled(True)
+            android_bottom_status_card.set_allow_body_passthrough(False)
 
         if is_mobile:
             main.spacing = 0
@@ -11350,17 +11376,21 @@ class FormAlchemistApp(MDApp):
             self.preview_hud.width = dp(228) if is_mobile else dp(258)
             self.preview_hud.height = dp(126) if is_mobile else dp(142)
             self.preview_hud.pos_hint = {"right": 0.985, "y": 0.10}
-            self.preview_hud.set_drag_enabled(False)
+            self.preview_hud.set_drag_enabled(True)
+            self.preview_hud.set_allow_body_passthrough(False)
             self.preview_hud.opacity = 0
             self.preview_hud.disabled = True
             preview_stage.add_widget(self.preview_hud)
+            self._bind_overlay_panel_bounds(self.preview_hud)
 
             self.btn_show_hud = None
 
             self.preview_shell.add_widget(preview_stage)
             stage_column.add_widget(self.preview_shell)
             if platform == "android" and android_bottom_status_card is not None:
-                stage_column.add_widget(android_bottom_status_card)
+                android_bottom_status_card.pos = (dp(10), dp(10))
+                preview_stage.add_widget(android_bottom_status_card)
+                self._bind_overlay_panel_bounds(android_bottom_status_card)
 
             # Focus Mode: floating toggle button anchored to top-left of the preview stage.
             # Tapping it hides the control panels so the preview fills the screen.
@@ -12027,6 +12057,33 @@ class FormAlchemistApp(MDApp):
         stack.size_hint_y = None
         stack.width = max(dp(1), wrap_w, preview_w)
         stack.height = max(dp(1), preview_h + info_h + (info_spacing if info_h > 0 else 0.0))
+
+    def _clamp_overlay_panel_to_preview_stage(self, panel, *_):
+        stage = getattr(self, "preview_stage", None)
+        if panel is None or stage is None:
+            return
+        try:
+            max_x = max(0.0, float(stage.width) - float(panel.width))
+            max_y = max(0.0, float(stage.height) - float(panel.height))
+            clamped_x = min(max(0.0, float(panel.x)), max_x)
+            clamped_y = min(max(0.0, float(panel.y)), max_y)
+            if abs(float(panel.x) - clamped_x) > 0.01:
+                panel.x = clamped_x
+            if abs(float(panel.y) - clamped_y) > 0.01:
+                panel.y = clamped_y
+        except Exception:
+            pass
+
+    def _bind_overlay_panel_bounds(self, panel):
+        stage = getattr(self, "preview_stage", None)
+        if panel is None or stage is None:
+            return
+        try:
+            panel.bind(size=lambda *_: self._clamp_overlay_panel_to_preview_stage(panel))
+            stage.bind(size=lambda *_: self._clamp_overlay_panel_to_preview_stage(panel))
+            Clock.schedule_once(lambda dt: self._clamp_overlay_panel_to_preview_stage(panel), 0)
+        except Exception:
+            pass
 
     def _on_preview_viewport_change(self, *_):
         Clock.unschedule(self._refresh_preview_for_viewport)
