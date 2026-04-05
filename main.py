@@ -11255,11 +11255,11 @@ class FormAlchemistApp(MDApp):
             helper_title.bind(size=self._sync_label_text_size)
             helper_drag_lbl = Label(text="drag", color=palette["muted"], size_hint=(None, None), width=dp(44), height=dp(18), halign="right", valign="middle", font_size=dp(9.5))
             helper_drag_lbl.bind(size=self._sync_label_text_size)
-            self.btn_android_helper_toggle = self._make_compact_action_button("Hide", tone="ghost")
-            self.btn_android_helper_toggle._expanded_label = "Hide"
-            self.btn_android_helper_toggle._collapsed_label = "Show"
+            self.btn_android_helper_toggle = self._make_compact_action_button("—", tone="ghost")
+            self.btn_android_helper_toggle._expanded_label = "—"
+            self.btn_android_helper_toggle._collapsed_label = "✦"
             self.btn_android_helper_toggle.size_hint = (None, None)
-            self.btn_android_helper_toggle.size = (dp(50), dp(24))
+            self.btn_android_helper_toggle.size = (dp(34), dp(24))
             helper_header.add_widget(helper_title)
             helper_header.add_widget(helper_drag_lbl)
             helper_header.add_widget(self.btn_android_helper_toggle)
@@ -11294,7 +11294,7 @@ class FormAlchemistApp(MDApp):
             android_bottom_status_card.set_toggle_button(self.btn_android_helper_toggle)
             android_bottom_status_card.register_interactive_widgets(self.btn_android_helper_toggle)
             android_bottom_status_card.set_drag_enabled(True)
-            android_bottom_status_card.set_allow_body_passthrough(False)
+            android_bottom_status_card.set_allow_body_passthrough(True)
 
         if is_mobile:
             main.spacing = 0
@@ -11389,7 +11389,7 @@ class FormAlchemistApp(MDApp):
             self.preview_hud.height = dp(126) if is_mobile else dp(142)
             self.preview_hud.pos_hint = {"right": 0.985, "y": 0.10}
             self.preview_hud.set_drag_enabled(True)
-            self.preview_hud.set_allow_body_passthrough(False)
+            self.preview_hud.set_allow_body_passthrough(True)
             self.preview_hud.opacity = 0
             self.preview_hud.disabled = True
             preview_stage.add_widget(self.preview_hud)
@@ -12077,12 +12077,8 @@ class FormAlchemistApp(MDApp):
         try:
             max_x = max(0.0, float(stage.width) - float(panel.width))
             max_y = max(0.0, float(stage.height) - float(panel.height))
-            clamped_x = min(max(0.0, float(panel.x)), max_x)
-            clamped_y = min(max(0.0, float(panel.y)), max_y)
-            if abs(float(panel.x) - clamped_x) > 0.01:
-                panel.x = clamped_x
-            if abs(float(panel.y) - clamped_y) > 0.01:
-                panel.y = clamped_y
+            panel.x = min(max(0.0, float(panel.x)), max_x)
+            panel.y = min(max(0.0, float(panel.y)), max_y)
         except Exception:
             pass
 
@@ -12092,6 +12088,7 @@ class FormAlchemistApp(MDApp):
             return
         try:
             panel.bind(size=lambda *_: self._clamp_overlay_panel_to_preview_stage(panel))
+            panel.bind(pos=lambda *_: self._clamp_overlay_panel_to_preview_stage(panel))
             stage.bind(size=lambda *_: self._clamp_overlay_panel_to_preview_stage(panel))
             Clock.schedule_once(lambda dt: self._clamp_overlay_panel_to_preview_stage(panel), 0)
         except Exception:
