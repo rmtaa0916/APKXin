@@ -9503,6 +9503,11 @@ class FloatingPreviewHUD(BoxLayout):
 
     def _local_point_in_widget(self, widget, touch):
         try:
+            if widget.collide_point(*touch.pos):
+                return True
+        except Exception:
+            pass
+        try:
             lx, ly = widget.to_widget(*touch.pos, relative=True)
             return (0 <= lx <= widget.width) and (0 <= ly <= widget.height)
         except Exception:
