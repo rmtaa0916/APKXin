@@ -513,7 +513,7 @@ class SearchableSelectField(Button):
         quick_pick_btn = Button(
             text="Pick Top Match",
             size_hint_y=None,
-            height=dp(38),
+            height=dp(44),
             background_normal="",
             background_color=_c("surface_alt", (0.11, 0.135, 0.185, 1)),
             color=_c("text", (0.93, 0.96, 1.0, 1)),
@@ -522,7 +522,7 @@ class SearchableSelectField(Button):
         outer.add_widget(quick_pick_btn)
 
         results_scroll = ScrollView(size_hint=(1, 1), do_scroll_x=False, bar_width=dp(6))
-        results_grid = GridLayout(cols=1, spacing=dp(6), size_hint_y=None)
+        results_grid = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
         results_grid.bind(minimum_height=results_grid.setter("height"))
         results_scroll.add_widget(results_grid)
         outer.add_widget(results_scroll)
@@ -596,7 +596,7 @@ class SearchableSelectField(Button):
                     btn = Button(
                         text=value,
                         size_hint_y=None,
-                        height=dp(42),
+                        height=dp(44),
                         halign="left",
                         valign="middle",
                         shorten=True,
@@ -9912,7 +9912,7 @@ class FormAlchemistApp(MDApp):
             box.add_widget(widget)
             if helper:
                 hlp = Label(text=helper, color=palette["muted"], size_hint_y=None,
-                            height=dp(16), halign="left", valign="middle", font_size=dp(10))
+                            height=dp(18), halign="left", valign="middle", font_size=dp(12) if is_mobile else dp(11))
                 hlp.bind(size=self._sync_label_text_size)
                 self._bind_auto_height_label(hlp, min_height=dp(14), extra_pad=dp(4))
                 box.add_widget(hlp)
@@ -9920,7 +9920,7 @@ class FormAlchemistApp(MDApp):
 
         def labeled_checkbox(label_text, checkbox, helper=None):
             slot_w = dp(56 if is_mobile else 64)
-            row_h = dp(42 if is_mobile else 34)
+            row_h = dp(44 if is_mobile else 36)
             row = BoxLayout(orientation="horizontal", size_hint_y=None, height=row_h, spacing=dp(8))
             lbl_cls = MDLabel if KIVYMD_AVAILABLE and MDLabel is not None else Label
             lbl_kwargs = dict(text=label_text, halign="left", valign="middle")
@@ -9942,7 +9942,7 @@ class FormAlchemistApp(MDApp):
                 padding=(0, 0, dp(8 if is_mobile else 4), 0),
             )
             checkbox.size_hint = (None, None)
-            checkbox.size = ((dp(24), dp(18)) if is_mobile else (dp(32), dp(22)))
+            checkbox.size = ((dp(32), dp(24)) if is_mobile else (dp(32), dp(22)))
             toggle_slot.add_widget(checkbox)
             row.add_widget(toggle_slot)
             if helper:
@@ -9950,8 +9950,8 @@ class FormAlchemistApp(MDApp):
                 wrap.bind(minimum_height=wrap.setter("height"))
                 wrap.add_widget(row)
                 sub = Label(text=helper, color=palette["muted"], size_hint_y=None,
-                            height=(dp(22) if is_mobile else dp(14)), halign="left", valign="middle",
-                            font_size=(dp(9.5) if is_mobile else dp(10)))
+                            height=(dp(22) if is_mobile else dp(16)), halign="left", valign="middle",
+                            font_size=(dp(11) if is_mobile else dp(11)))
                 sub.bind(size=self._sync_label_text_size)
                 self._bind_auto_height_label(sub, min_height=(dp(18) if is_mobile else dp(14)), extra_pad=dp(4))
                 wrap.add_widget(sub)
@@ -10139,7 +10139,7 @@ class FormAlchemistApp(MDApp):
             height=dp(44) if is_mobile else dp(48),
             halign="left" if is_mobile else "center",
             valign="middle",
-            font_size=dp(10.5) if is_mobile else dp(11),
+            font_size=dp(12) if is_mobile else dp(11),
             padding=(dp(12), dp(0)),
         )
         status_chip.bind(size=self._sync_label_text_size)
@@ -10184,10 +10184,10 @@ class FormAlchemistApp(MDApp):
                 text="Next",
                 color=palette["muted"],
                 size_hint_y=None,
-                height=dp(14),
+                height=dp(16),
                 halign="left",
                 valign="middle",
-                font_size=dp(9.5),
+                font_size=dp(11),
             )
             flow_title.bind(size=self._sync_label_text_size)
             mobile_flow_card.add_widget(flow_title)
@@ -10325,9 +10325,9 @@ class FormAlchemistApp(MDApp):
                 bar_width=0,
                 scroll_type=["content"],
                 size_hint_y=None,
-                height=dp(38),
+                height=dp(44),
             )
-            row = BoxLayout(orientation="horizontal", spacing=dp(7), size_hint=(None, None), height=dp(38))
+            row = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint=(None, None), height=dp(44))
             row.bind(minimum_width=row.setter("width"))
             display_map = {
                 "Files": "1 Open Files",
@@ -10344,7 +10344,7 @@ class FormAlchemistApp(MDApp):
             for name in section_names:
                 btn = self._make_compact_action_button(display_map.get(name, name), tone="ghost")
                 btn.size_hint = (None, None)
-                btn.size = (dp(90), dp(34))
+                btn.size = (dp(90), dp(44))
                 btn.bind(on_release=lambda inst, n=name: _show_mobile_section(n))
                 self._mobile_section_buttons[name] = btn
                 row.add_widget(btn)
@@ -10657,7 +10657,7 @@ class FormAlchemistApp(MDApp):
             btn_android_map_templates.bind(on_release=self._open_area_template_library_popup)
             for _w in (btn_android_map_save, btn_android_map_clear, btn_android_select_toggle, btn_android_map_templates):
                 _w.size_hint = (1, None)
-                _w.height = dp(42)
+                _w.height = dp(44)
                 map_action_grid.add_widget(_w)
             android_mapping_body.add_widget(map_action_grid)
             # NOTE: these selectors are already mounted in the primary mapping UI.
@@ -10690,7 +10690,7 @@ class FormAlchemistApp(MDApp):
             btn_android_load_cfg.bind(on_release=self.on_load_config)
             for _w in (btn_android_export_one, btn_android_export_batch, btn_android_save_cfg, btn_android_load_cfg):
                 _w.size_hint = (1, None)
-                _w.height = dp(42)
+                _w.height = dp(44)
                 export_action_grid.add_widget(_w)
             android_export_body.add_widget(export_action_grid)
             self.export_note_lbl_android = Label(
@@ -11166,10 +11166,10 @@ class FormAlchemistApp(MDApp):
                 text="Workspace",
                 color=palette["muted"],
                 size_hint_y=None,
-                height=dp(14),
+                height=dp(16),
                 halign="left",
                 valign="middle",
-                font_size=dp(9.5),
+                font_size=dp(11),
             )
             mode_title.bind(size=self._sync_label_text_size)
             android_top_modes_card.add_widget(mode_title)
@@ -11179,9 +11179,9 @@ class FormAlchemistApp(MDApp):
 
             android_quick_actions_card = BoxLayout(
                 orientation="horizontal",
-                spacing=dp(6),
+                spacing=dp(8),
                 size_hint_y=None,
-                height=dp(42),
+                height=dp(44),
             )
             btn_top_capture = self._make_compact_action_button("3 Draw Area", tone="accent")
             btn_top_capture.bind(on_release=lambda *_: self._show_mobile_section("Capture"))
@@ -11193,7 +11193,7 @@ class FormAlchemistApp(MDApp):
             btn_top_help.bind(on_release=lambda *_: self._show_help_popup())
             for _w in (btn_top_capture, btn_top_templates, btn_top_repair, btn_top_help):
                 _w.size_hint = (1, None)
-                _w.height = dp(38)
+                _w.height = dp(44)
                 android_quick_actions_card.add_widget(_w)
             android_top_modes_card.add_widget(android_quick_actions_card)
 
@@ -11209,10 +11209,10 @@ class FormAlchemistApp(MDApp):
                 text="Panel",
                 color=palette["muted"],
                 size_hint_y=None,
-                height=dp(14),
+                height=dp(16),
                 halign="left",
                 valign="middle",
-                font_size=dp(9.5),
+                font_size=dp(11),
             )
             panel_title.bind(size=self._sync_label_text_size)
             android_panel_card.add_widget(panel_title)
@@ -11237,23 +11237,23 @@ class FormAlchemistApp(MDApp):
             style_card(android_bottom_status_card, palette["surface_alt"], radius=dp(16))
 
             status_row = GridLayout(cols=2, rows=2, spacing=dp(4), size_hint=(1, None), height=dp(38))
-            self.android_status_file_lbl = Label(text="File: No PDF", color=palette["muted"], halign="left", valign="middle", font_size=dp(10))
-            self.android_status_page_lbl = Label(text="Page: 1/1", color=palette["muted"], halign="left", valign="middle", font_size=dp(10))
-            self.android_status_boxes_lbl = Label(text="Boxes: 0", color=palette["muted"], halign="left", valign="middle", font_size=dp(10))
-            self.android_status_mode_lbl = Label(text="Mode: Files", color=palette["text"], halign="left", valign="middle", font_size=dp(10.5), bold=True)
+            self.android_status_file_lbl = Label(text="File: No PDF", color=palette["muted"], halign="left", valign="middle", font_size=dp(11))
+            self.android_status_page_lbl = Label(text="Page: 1/1", color=palette["muted"], halign="left", valign="middle", font_size=dp(11))
+            self.android_status_boxes_lbl = Label(text="Boxes: 0", color=palette["muted"], halign="left", valign="middle", font_size=dp(11))
+            self.android_status_mode_lbl = Label(text="Mode: Files", color=palette["text"], halign="left", valign="middle", font_size=dp(12), bold=True)
             for _lbl in (self.android_status_file_lbl, self.android_status_page_lbl, self.android_status_boxes_lbl, self.android_status_mode_lbl):
                 _lbl.bind(size=self._sync_label_text_size)
                 status_row.add_widget(_lbl)
             android_bottom_status_card.add_widget(status_row)
 
-            legend_row = BoxLayout(orientation="horizontal", spacing=dp(6), size_hint_y=None, height=dp(16))
+            legend_row = BoxLayout(orientation="horizontal", spacing=dp(6), size_hint_y=None, height=dp(20))
             for _txt, _col in [
                 ("Field", (0.25, 0.90, 0.42, 1)),
                 ("Check", (1.00, 0.88, 0.25, 1)),
                 ("ROI", (0.35, 0.70, 1.00, 1)),
                 ("Trace", (1.00, 0.60, 0.18, 1)),
             ]:
-                chip = Label(text=f"[color=#{int(_col[0]*255):02x}{int(_col[1]*255):02x}{int(_col[2]*255):02x}]●[/color] {_txt}", markup=True, color=palette["muted"], halign="left", valign="middle", font_size=dp(9.3))
+                chip = Label(text=f"[color=#{int(_col[0]*255):02x}{int(_col[1]*255):02x}{int(_col[2]*255):02x}]●[/color] {_txt}", markup=True, color=palette["muted"], halign="left", valign="middle", font_size=dp(11))
                 chip.bind(size=self._sync_label_text_size)
                 legend_row.add_widget(chip)
             android_bottom_status_card.add_widget(legend_row)
@@ -11362,12 +11362,26 @@ class FormAlchemistApp(MDApp):
             if platform == "android" and android_bottom_status_card is not None:
                 stage_column.add_widget(android_bottom_status_card)
 
+            # Focus Mode: floating toggle button anchored to top-left of the preview stage.
+            # Tapping it hides the control panels so the preview fills the screen.
+            self._focus_mode_active = False
+            self.android_top_modes_card = android_top_modes_card
+            self.android_panel_card = android_panel_card
+            _focus_btn_size = dp(48)
+            self.btn_focus_mode = self._make_compact_action_button("Focus", tone="ghost")
+            self.btn_focus_mode.size_hint = (None, None)
+            self.btn_focus_mode.size = (_focus_btn_size, _focus_btn_size)
+            self.btn_focus_mode.pos_hint = {"x": 0.01, "top": 0.99}
+            self.btn_focus_mode.opacity = 0.72
+            self.btn_focus_mode.bind(on_release=self._toggle_focus_mode)
+            preview_stage.add_widget(self.btn_focus_mode)
+
             quick_rail = BoxLayout(
                 orientation="vertical",
-                spacing=dp(5),
+                spacing=dp(6),
                 size_hint=(None, None),
-                width=dp(84),
-                height=dp(134),
+                width=dp(88),
+                height=dp(156),
                 padding=[dp(7), dp(7), dp(7), dp(7)],
                 pos_hint={"right": 0.992, "center_y": 0.56},
             )
@@ -11386,7 +11400,7 @@ class FormAlchemistApp(MDApp):
                 self.btn_mobile_rail_zoom_reset,
             ]:
                 w.size_hint = (None, None)
-                w.size = (dp(70), dp(34))
+                w.size = (dp(74), dp(44))
                 quick_rail.add_widget(w)
             self.mobile_quick_rail = quick_rail
             self._set_widget_enabled(quick_rail, False)
@@ -11410,16 +11424,16 @@ class FormAlchemistApp(MDApp):
             primary_row = GridLayout(
                 cols=4,
                 rows=1,
-                spacing=dp(4),
+                spacing=dp(6),
                 size_hint=(1, None),
-                height=dp(40),
+                height=dp(44),
             )
             view_row = GridLayout(
                 cols=4,
                 rows=1,
-                spacing=dp(4),
+                spacing=dp(6),
                 size_hint=(1, None),
-                height=dp(40),
+                height=dp(44),
             )
             context_row = GridLayout(
                 cols=6,
@@ -11717,7 +11731,15 @@ class FormAlchemistApp(MDApp):
             self.btn_fit_page.bind(on_release=self._fit_preview_page)
             self.btn_toolbar_export = make_button("Export PDF", tone="accent")
             self.btn_toolbar_export.bind(on_release=self.on_generate_single)
-            for w in [self.btn_open_pdf_toolbar, self.btn_open_data_toolbar, self.btn_toolbar_detect, self.btn_toolbar_refresh, self.btn_toolbar_prev, self.btn_toolbar_next, self.btn_zoom_out, zoom_chip, self.btn_zoom_in, self.btn_zoom_reset, self.btn_fit_width, self.btn_fit_page, self.btn_toolbar_export]:
+            self.btn_toolbar_focus = make_button("Focus", tone="ghost")
+            self.btn_toolbar_focus.size_hint = (None, 1)
+            self.btn_toolbar_focus.width = dp(70)
+            self.btn_toolbar_focus.bind(on_release=self._toggle_focus_mode)
+            self._focus_mode_active = False
+            self._desktop_left_wrap = None
+            self._desktop_right_wrap = None
+            self.btn_focus_mode = self.btn_toolbar_focus
+            for w in [self.btn_open_pdf_toolbar, self.btn_open_data_toolbar, self.btn_toolbar_detect, self.btn_toolbar_refresh, self.btn_toolbar_prev, self.btn_toolbar_next, self.btn_zoom_out, zoom_chip, self.btn_zoom_in, self.btn_zoom_reset, self.btn_fit_width, self.btn_fit_page, self.btn_toolbar_export, self.btn_toolbar_focus]:
                 toolbar.add_widget(w)
             center_wrap.add_widget(toolbar)
 
@@ -11772,6 +11794,9 @@ class FormAlchemistApp(MDApp):
             self._desktop_right_section_cards["Export"] = export_card
             Clock.schedule_once(lambda dt: _show_desktop_right_section("Selection"), 0)
 
+            self._desktop_left_wrap = left_wrap
+            self._desktop_center_wrap = center_wrap
+            self._desktop_right_wrap = right_wrap
             main.add_widget(left_wrap)
             main.add_widget(center_wrap)
             main.add_widget(right_wrap)
@@ -12673,7 +12698,7 @@ class FormAlchemistApp(MDApp):
             )
             summary.bind(size=self._sync_label_text_size)
             self._bind_auto_height_label(summary, min_height=dp(42), extra_pad=dp(2))
-            btn_row = GridLayout(cols=3, spacing=dp(8), size_hint_y=None, height=dp(36))
+            btn_row = GridLayout(cols=3, spacing=dp(8), size_hint_y=None, height=dp(44))
             btn_view = self._make_compact_action_button("View", tone="plain")
             btn_compare = self._make_compact_action_button("Compare", tone="soft")
             btn_use = self._make_compact_action_button("Use as Current", tone="soft")
@@ -12816,16 +12841,27 @@ class FormAlchemistApp(MDApp):
         self._status_text = text
         self._status_hold_until = now + max(0.0, float(hold_seconds or 0.0)) if hold_seconds else 0.0
 
+        # Map kind to a visible text color so users can distinguish severity at a glance
+        _palette = getattr(self, "ui_palette", {}) or {}
+        _kind_color = {
+            "error":   _palette.get("danger",  (1.0, 0.36, 0.56, 1)),
+            "warning": _palette.get("accent",  (0.96, 0.71, 0.30, 1)),
+            "action":  _palette.get("primary", (0.255, 0.50, 0.98, 1)),
+            "detect":  _palette.get("aurora",  (0.255, 0.82, 0.96, 1)),
+        }.get(kind, _palette.get("text", (0.97, 0.98, 1.0, 1)))
+
         # Thread-safety: schedule UI update on the Kivy main thread
         def _apply_status_text(dt):
             try:
                 self.status_lbl.text = text
+                self.status_lbl.color = _kind_color
             except Exception:
                 pass
         Clock.schedule_once(_apply_status_text, 0)
         # Best-effort immediate update (safe if already on main thread)
         try:
             self.status_lbl.text = text
+            self.status_lbl.color = _kind_color
         except Exception:
             pass
         if hasattr(self, "desktop_status_detail_lbl") and self.desktop_status_detail_lbl is not None:
@@ -15711,6 +15747,167 @@ class FormAlchemistApp(MDApp):
     def _toggle_mobile_sidebar(self, *_):
         self._set_mobile_sidebar_state(not getattr(self, "_mobile_sidebar_open", False))
 
+    # ------------------------------------------------------------------
+    # Focus Mode — hide control panels so the preview fills the screen
+    # ------------------------------------------------------------------
+
+    def _toggle_focus_mode(self, *_):
+        self._set_focus_mode(not bool(getattr(self, "_focus_mode_active", False)))
+
+    def _set_focus_mode(self, active, *_):
+        """Enter or exit Focus Mode.
+
+        Mobile (Android): collapses android_top_modes_card and
+        android_panel_card by animating their height and opacity to 0.
+
+        Mobile (emulation): hides the bottom dock and sidebar overlay.
+
+        Desktop: collapses left_wrap and right_wrap so the preview
+        center column expands to fill the full window width.
+        """
+        self._focus_mode_active = bool(active)
+        focus_btn = getattr(self, "btn_focus_mode", None)
+
+        # ---- Desktop path ----------------------------------------
+        if not getattr(self, "_is_mobile_ui", getattr(self, "ui_mobile", False)):
+            left_wrap = getattr(self, "_desktop_left_wrap", None)
+            right_wrap = getattr(self, "_desktop_right_wrap", None)
+            center_wrap = getattr(self, "_desktop_center_wrap", None)
+            if self._focus_mode_active:
+                # Collapse left and right panels
+                if left_wrap is not None:
+                    anim = Animation(opacity=0, width=0, duration=0.18, t="out_quad")
+                    anim.start(left_wrap)
+                    try:
+                        left_wrap.size_hint_x = None
+                    except Exception:
+                        pass
+                if right_wrap is not None:
+                    anim = Animation(opacity=0, width=0, duration=0.18, t="out_quad")
+                    anim.start(right_wrap)
+                    try:
+                        right_wrap.size_hint_x = None
+                    except Exception:
+                        pass
+                if center_wrap is not None:
+                    try:
+                        center_wrap.size_hint_x = 1
+                    except Exception:
+                        pass
+                if focus_btn is not None:
+                    try:
+                        focus_btn.text = "Panels"
+                    except Exception:
+                        pass
+            else:
+                # Restore panels
+                if left_wrap is not None:
+                    try:
+                        left_wrap.size_hint_x = None
+                        left_wrap.width = 0
+                        left_wrap.opacity = 0
+                    except Exception:
+                        pass
+                    anim = Animation(opacity=1, width=dp(260), duration=0.18, t="out_quad")
+                    anim.start(left_wrap)
+                if right_wrap is not None:
+                    try:
+                        right_wrap.size_hint_x = None
+                        right_wrap.width = 0
+                        right_wrap.opacity = 0
+                    except Exception:
+                        pass
+                    anim = Animation(opacity=1, width=dp(220), duration=0.18, t="out_quad")
+                    anim.start(right_wrap)
+                if center_wrap is not None:
+                    try:
+                        center_wrap.size_hint_x = 0.57
+                    except Exception:
+                        pass
+                if focus_btn is not None:
+                    try:
+                        focus_btn.text = "Focus"
+                    except Exception:
+                        pass
+            return
+
+        # ---- Android path ----------------------------------------
+        if platform == "android":
+            top_card = getattr(self, "android_top_modes_card", None)
+            panel_card = getattr(self, "android_panel_card", None)
+            if self._focus_mode_active:
+                for card in (top_card, panel_card):
+                    if card is not None:
+                        try:
+                            anim = Animation(opacity=0, height=0, duration=0.20, t="out_quad")
+                            anim.start(card)
+                            card.disabled = True
+                        except Exception:
+                            pass
+                if focus_btn is not None:
+                    try:
+                        focus_btn.text = "Panels"
+                        focus_btn.opacity = 0.9
+                    except Exception:
+                        pass
+            else:
+                if top_card is not None:
+                    try:
+                        anim = Animation(opacity=1, height=dp(98), duration=0.20, t="out_quad")
+                        anim.start(top_card)
+                        top_card.disabled = False
+                    except Exception:
+                        pass
+                if panel_card is not None:
+                    try:
+                        anim = Animation(opacity=1, height=dp(210), duration=0.20, t="out_quad")
+                        anim.start(panel_card)
+                        panel_card.disabled = False
+                    except Exception:
+                        pass
+                if focus_btn is not None:
+                    try:
+                        focus_btn.text = "Focus"
+                        focus_btn.opacity = 0.72
+                    except Exception:
+                        pass
+            return
+
+        # ---- Non-Android mobile (emulation) path -----------------
+        if self._focus_mode_active:
+            # Close sidebar and bottom dock to maximise preview area
+            self._set_mobile_sidebar_state(False)
+            self._set_mobile_tools_tray_visible(False)
+            dock = getattr(self, "mobile_bottom_dock", None)
+            if dock is not None:
+                try:
+                    anim = Animation(opacity=0, duration=0.20, t="out_quad")
+                    anim.bind(on_complete=lambda *_: setattr(dock, "disabled", True))
+                    anim.start(dock)
+                except Exception:
+                    pass
+            if focus_btn is not None:
+                try:
+                    focus_btn.text = "Panels"
+                    focus_btn.opacity = 0.9
+                except Exception:
+                    pass
+        else:
+            dock = getattr(self, "mobile_bottom_dock", None)
+            if dock is not None:
+                try:
+                    dock.disabled = False
+                    anim = Animation(opacity=1, duration=0.20, t="out_quad")
+                    anim.start(dock)
+                except Exception:
+                    pass
+            if focus_btn is not None:
+                try:
+                    focus_btn.text = "Focus"
+                    focus_btn.opacity = 0.72
+                except Exception:
+                    pass
+
     def _update_capture_button_state(self):
         btn = getattr(self, 'btn_mobile_capture', None)
         if btn is None:
@@ -16931,7 +17128,7 @@ class FormAlchemistApp(MDApp):
             meta_row.add_widget(self._make_popup_chip(f"Text {overlap_val:.2f}", tone=('danger' if overlap_val >= 0.24 else 'accent')))
             body.add_widget(meta_row)
             action_cols = 4 if expanded else 4
-            actions = GridLayout(cols=action_cols, spacing=dp(6), size_hint_y=None, height=dp(32))
+            actions = GridLayout(cols=action_cols, spacing=dp(8), size_hint_y=None, height=dp(44))
             btn_use = self._make_compact_action_button('Use Area', tone='accent')
             btn_run = self._make_compact_action_button('Find Page', tone='plain')
             btn_form2 = self._make_compact_action_button('Find Form', tone='plain')
@@ -17202,8 +17399,8 @@ class FormAlchemistApp(MDApp):
         palette = getattr(self, "ui_palette", {}) or {}
         if bool(getattr(self, "_is_mobile_ui", getattr(self, "ui_mobile", False))):
             actual_tone = tone if tone in {"primary", "accent", "secondary", "soft", "plain", "ghost", "mini", "danger"} else "plain"
-            compact_height = dp(34 if tone not in ("mini", "ghost") else (29 if tone == "mini" else 31))
-            compact_font = dp(9.6 if tone not in ("mini", "ghost") else (8.7 if tone == "mini" else 9.0))
+            compact_height = dp(44 if tone not in ("mini", "ghost") else (32 if tone == "mini" else 40))
+            compact_font = dp(11.5 if tone not in ("mini", "ghost") else (9.0 if tone == "mini" else 10.5))
             compact_radius = dp(10 if tone not in ("mini", "ghost") else (9 if tone == "mini" else 10))
             compact_padding = [dp(8), dp(4), dp(8), dp(4)] if tone != "mini" else [dp(7), dp(3), dp(7), dp(3)]
             btn = NeoMobileButton(
@@ -17636,7 +17833,7 @@ class FormAlchemistApp(MDApp):
                 row.add_widget(slider)
                 row.add_widget(input_widget)
             if spec.get("helper"):
-                helper = Label(text=spec["helper"], color=palette.get("muted", (0.60, 0.68, 0.80, 0.92)), size_hint_y=None, height=dp(16), halign="left", valign="middle", font_size=dp(9.2))
+                helper = Label(text=spec["helper"], color=palette.get("muted", (0.60, 0.68, 0.80, 0.92)), size_hint_y=None, height=dp(18), halign="left", valign="middle", font_size=dp(11))
                 helper.bind(size=self._sync_label_text_size)
                 self._bind_auto_height_label(helper, min_height=dp(14), extra_pad=dp(2))
                 row.add_widget(helper)
@@ -17658,20 +17855,20 @@ class FormAlchemistApp(MDApp):
             content.add_widget(card)
 
         uppercase_toggle = CheckBox(active=bool(base.get("uppercase", True)))
-        toggle_row = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint_y=None, height=dp(42))
+        toggle_row = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint_y=None, height=dp(44))
         toggle_lbl = Label(text="Force uppercase", color=palette.get("text", (0.93, 0.96, 1.0, 1)), halign="left", valign="middle", font_size=dp(11))
         toggle_lbl.bind(size=self._sync_label_text_size)
         toggle_row.add_widget(toggle_lbl)
-        toggle_slot = AnchorLayout(anchor_x="right", anchor_y="center", size_hint=(None, None), width=dp(56), height=dp(42), padding=(0, 0, dp(10), 0))
+        toggle_slot = AnchorLayout(anchor_x="right", anchor_y="center", size_hint=(None, None), width=dp(56), height=dp(44), padding=(0, 0, dp(10), 0))
         uppercase_toggle.size_hint = (None, None)
-        uppercase_toggle.size = (dp(24), dp(18))
+        uppercase_toggle.size = (dp(32), dp(24))
         toggle_slot.add_widget(uppercase_toggle)
         toggle_row.add_widget(toggle_slot)
         toggle_wrap = BoxLayout(orientation="vertical", spacing=dp(3), padding=[dp(10), dp(8), dp(10), dp(8)], size_hint_y=None)
         toggle_wrap.bind(minimum_height=toggle_wrap.setter("height"))
         self._style_popup_card(toggle_wrap, palette.get("surface_alt", (0.11, 0.135, 0.185, 1)), radius=dp(16))
         toggle_wrap.add_widget(toggle_row)
-        toggle_help = Label(text="Keep this on if you want the whole form to stay visually uniform.", color=palette.get("muted", (0.60, 0.68, 0.80, 0.96)), halign="left", valign="middle", font_size=dp(9.5), size_hint_y=None)
+        toggle_help = Label(text="Keep this on if you want the whole form to stay visually uniform.", color=palette.get("muted", (0.60, 0.68, 0.80, 0.96)), halign="left", valign="middle", font_size=dp(11), size_hint_y=None)
         toggle_help.bind(size=self._sync_label_text_size)
         self._bind_auto_height_label(toggle_help, min_height=dp(18), extra_pad=dp(4))
         toggle_wrap.add_widget(toggle_help)
@@ -17775,7 +17972,7 @@ class FormAlchemistApp(MDApp):
             block.bind(minimum_height=block.setter("height"))
             block.add_widget(widget)
             if helper_text:
-                helper = Label(text=helper_text, color=palette.get("muted", (0.60, 0.68, 0.80, 0.92)), size_hint_y=None, height=(dp(16) if getattr(self, "ui_mobile", False) else dp(14)), halign="left", valign="middle", font_size=(dp(8.0) if getattr(self, "ui_mobile", False) else dp(9.2)))
+                helper = Label(text=helper_text, color=palette.get("muted", (0.60, 0.68, 0.80, 0.92)), size_hint_y=None, height=(dp(18) if getattr(self, "ui_mobile", False) else dp(16)), halign="left", valign="middle", font_size=(dp(11) if getattr(self, "ui_mobile", False) else dp(11)))
                 helper.bind(size=self._sync_label_text_size)
                 self._bind_auto_height_label(helper, min_height=(dp(14) if getattr(self, "ui_mobile", False) else dp(14)), extra_pad=dp(2))
                 block.add_widget(helper)
@@ -19724,17 +19921,25 @@ class FormAlchemistApp(MDApp):
         msg_lbl.bind(size=self._sync_label_text_size)
         outer.add_widget(msg_lbl)
 
+        btn_row = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(44), spacing=dp(8))
+        btn_help = self._make_compact_action_button("? Help", tone="plain")
+        btn_help.size_hint = (None, None)
+        btn_help.width = dp(96)
+        btn_help.height = dp(44)
         btn_ok = self._make_compact_action_button("OK", tone="primary")
         btn_ok.size_hint = (1, None)
         btn_ok.height = dp(44)
-        outer.add_widget(btn_ok)
+        btn_row.add_widget(btn_help)
+        btn_row.add_widget(btn_ok)
+        outer.add_widget(btn_row)
 
         popup, _w = self._make_styled_popup(
             title,
             outer,
-            size_hint=(0.88 if is_mobile else 0.52, 0.46 if is_mobile else 0.38),
+            size_hint=(0.88 if is_mobile else 0.52, 0.50 if is_mobile else 0.42),
         )
         btn_ok.bind(on_release=lambda *_a: popup.dismiss())
+        btn_help.bind(on_release=lambda *_a: (popup.dismiss(), self._show_help_popup()))
         popup.open()
 
 # App entry point
