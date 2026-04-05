@@ -6,6 +6,7 @@
 ![Framework](https://img.shields.io/badge/Framework-Kivy-5C2D91?logo=python&logoColor=white)
 ![Language](https://img.shields.io/badge/Language-Python%203.10-3776AB?logo=python&logoColor=white)
 ![Status](https://img.shields.io/badge/Status-Active%20Development-0A84FF)
+![Updated](https://img.shields.io/badge/Updated-2026--04--05-6f42c1)
 
 Form Alchemist is a Kivy-based Android application for working with structured PDF documents on mobile. It is built for workflows where users need to open a PDF, inspect pages, detect likely fields or answer regions, review results manually, map data to selected targets, and export filled output.
 
@@ -80,8 +81,9 @@ Form Alchemist is suited for workflows such as:
 ├── main.py
 ├── buildozer.spec
 ├── android_src/
+├── android_res/
 ├── assets/
-└── ...
+└── README.md
 ```
 
 ### `main.py`
@@ -124,6 +126,19 @@ Based on the current codebase, the app includes support for:
 - export of filled PDF output
 
 ---
+
+
+## Getting Started (Repository)
+
+```bash
+git clone <your-fork-or-repo-url>
+cd APKXin
+python -m venv .venv
+source .venv/bin/activate
+pip install -U pip buildozer
+```
+
+> Use Linux or WSL for Android builds. Buildozer is not officially supported natively on Windows.
 
 ## Quick Start
 
