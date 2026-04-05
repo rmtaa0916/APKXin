@@ -10609,25 +10609,6 @@ class FormAlchemistApp(MDApp):
                 files_quick.add_widget(_w)
             android_files_body.add_widget(files_quick)
 
-            android_session_card, android_session_body = _make_android_panel_card(
-                "7 Settings",
-                "Navigate pages and refresh the form preview."
-            )
-            session_grid = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=dp(92))
-            btn_android_prev = self._make_compact_action_button("Prev Page", tone="plain")
-            btn_android_prev.bind(on_release=self.on_prev_page)
-            btn_android_next = self._make_compact_action_button("Next Page", tone="plain")
-            btn_android_next.bind(on_release=self.on_next_page)
-            btn_android_find = self._make_compact_action_button("Find", tone="accent")
-            btn_android_find.bind(on_release=self.on_run_detect)
-            btn_android_preview = self._make_compact_action_button("Refresh Preview", tone="ghost")
-            btn_android_preview.bind(on_release=self.on_preview)
-            for _w in (btn_android_prev, btn_android_next, btn_android_find, btn_android_preview):
-                _w.size_hint = (1, None)
-                _w.height = dp(42)
-                session_grid.add_widget(_w)
-            android_session_body.add_widget(session_grid)
-
             android_detection_card, android_detection_body = _make_android_panel_card(
                 "2 Find Fields",
                 "Find fillable areas on the form and adjust detection settings."
