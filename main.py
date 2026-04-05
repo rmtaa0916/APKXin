@@ -9249,13 +9249,22 @@ class InteractivePreview(Image):
             return super().on_touch_move(touch)
 
         if touch.uid in self._active_touches:
+            prev_pt = self._active_touches.get(touch.uid, (touch.x, touch.y))
             self._active_touches[touch.uid] = (touch.x, touch.y)
             if len(self._active_touches) >= 2 and callable(self.zoom_request_callback):
                 pts = list(self._active_touches.values())[:2]
                 cur_dist = math.hypot(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1])
                 if self._pinch_start_dist and cur_dist > 0:
                     factor = cur_dist / float(max(self._pinch_start_dist, 1e-6))
-                    self.zoom_request_callback("scale", self._pinch_start_scale * factor)
+                    midpoint = (
+                        (float(pts[0][0]) + float(pts[1][0])) / 2.0,
+                        (float(pts[0][1]) + float(pts[1][1])) / 2.0,
+                    )
+                    self.zoom_request_callback("gesture", {
+                        "scale": self._pinch_start_scale * factor,
+                        "focus": midpoint,
+                        "pan": (float(touch.x) - float(prev_pt[0]), float(touch.y) - float(prev_pt[1])),
+                    })
                     return True
         return super().on_touch_move(touch)
 
@@ -9350,10 +9359,13 @@ class InteractivePreview(Image):
             except Exception:
                 moved = False
 
+        had_multi_touch = len(self._active_touches) >= 2
         if touch.uid in self._active_touches:
             self._active_touches.pop(touch.uid, None)
             if len(self._active_touches) < 2:
                 self._pinch_start_dist = None
+                if had_multi_touch and callable(self.zoom_request_callback):
+                    self.zoom_request_callback("gesture_end", None)
 
         if self.collide_point(*touch.pos):
             pt = self._touch_to_image_point(touch)
