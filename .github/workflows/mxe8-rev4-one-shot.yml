@@ -1,0 +1,57 @@
+name: MXE8 revision 4 one-time publication
+on:
+  push:
+    branches: [macrorify-editor-sync]
+    paths: ['.github/workflows/mxe8-rev4-one-shot.yml']
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - name: Verify and repair the encrypted Git blob, then publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, json, os, pathlib, urllib.request
+          candidate_sha = 'e881d7e3655e3133a73029201bbd7714b423bdb4'
+          expected_sha = 'dbf0ac0218525037910066eb3ab7fa726ff9f1ee'
+          req = urllib.request.Request(
+              'https://api.github.com/repos/rmtaa0916/APKXin/git/blobs/' + candidate_sha,
+              headers={'Accept': 'application/vnd.github+json',
+                       'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                       'X-GitHub-Api-Version': '2022-11-28'})
+          with urllib.request.urlopen(req, timeout=35) as r:
+              obj = json.load(r)
+          if obj.get('encoding') != 'base64':
+              raise ValueError('Unexpected Git blob encoding')
+          data = base64.b64decode(''.join(obj['content'].split()))
+          def git_sha(blob):
+              return hashlib.sha1(b'blob ' + str(len(blob)).encode() + b'\0' + blob).hexdigest()
+          assert len(data) == 25918 and git_sha(data) == candidate_sha, 'Candidate Git blob mismatch'
+          wrong = b'UkfiXHVkiEj1m0G3-Re5603vUb'
+          right = b'UkfiXHVkiEj1mG3-Re5603vUb'
+          assert data.count(wrong) == 1, 'Expected one-byte correction location not unique'
+          corrected = data.replace(wrong, right, 1)
+          assert len(corrected) == 25917 and git_sha(corrected) == expected_sha, 'Repaired full-file SHA mismatch'
+          payload = json.loads(corrected)
+          assert payload['format'] == 'mxe8-online-sync-v1' and payload['revision'] == 4
+          assert payload['plaintext_bytes'] == 130340
+          assert payload['plaintext_sha256'] == '440ca05bd95ab9383320bb231c999d06afb2a44d8fced8110bca120756833166'
+          assert payload['source_title_marker'] == 'ONLINE-SYNC-TEST | AUTO-REV4'
+          dest = pathlib.Path('macrorify-editor-sync/working.enc.json')
+          existing = json.loads(dest.read_text('utf-8'))
+          assert existing['revision'] == 3 and existing['plaintext_sha256'] == 'c2b78b139beb89cea079f9799cef7b485ec8f189e574c583f2ee7193ec8620de', 'Unexpected concurrent change'
+          dest.write_bytes(corrected)
+          pathlib.Path('.github/workflows/mxe8-rev4-one-shot.yml').unlink()
+          print('Verified exact Git blob and revision4 JSON; replaced online working source and removed one-shot workflow')
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- macrorify-editor-sync/working.enc.json .github/workflows/mxe8-rev4-one-shot.yml
+          git commit -m 'Publish checksum-verified MXE8 revision 4 encrypted source'
+          git push origin HEAD:macrorify-editor-sync
