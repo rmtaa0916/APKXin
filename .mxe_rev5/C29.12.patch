@@ -1,0 +1,224 @@
+--- C29.11-rev4
++++ C29.12-local
+@@ -1,18 +1,19 @@
+-var PRODUCTION_VERSION = "DIAG-SIGHT-C29.11 | ONLINE-SYNC-TEST | AUTO-REV4 | 2026-09-16 | LEARNING-INTEGRITY GATE + TARGET-DIRECTED SIGT + CROSS-VALIDATED SIGD/ANTI | NO GAMEPLAY TAP"
++var PRODUCTION_VERSION = "DIAG-SIGHT-C29.12 | REF-NOISE PREARM + NEG-QGATE | 2026-09-17 | LEARNING-INTEGRITY GATE + TARGET-DIRECTED SIGT + CROSS-VALIDATED SIGD/ANTI | NO GAMEPLAY TAP"
+ // ============================================================
+-// C29.11 — PRODUCTION SIGHT FADE LAB | LEARNING-INTEGRITY GATE + TARGET-DIRECTED SIGT + CROSS-VALIDATED SIGD/ANTI
++// C29.12 — PRODUCTION SIGHT FADE LAB | REF-NOISE PREARM + NEGATIVE QUALITY GATE + LEARNING-INTEGRITY
+ // SOURCE_PRODUCTION: R16.9.191 | TARGET: 2340x1080 Landscape
+ // PURPOSE: Production-like CAPTURE + real target names + automatic identity acquisition, then
+ // sensor-safe frozen HUD, quiet baseline, earliest fade measurement, 8-scan pre-trigger trace,
+ // parallel RAW ring + RTG32 + ITG16, learned SIGD8 + ANTI6 plus target-directed SIGT8 evaluation, measurement-quality flags,
+ // one-call 48-point hot acquisition, confirmed-streak timing, dual holdout validation, strict quality-gated positive learning/accounting, and automatic re-arm.
+ // C29.11: positive evidence stays trial-local until final target validation passes; unstable target refs / QBAD timing are excluded from learning and fade holdout accounting.
++// C29.12: reject unstable target references before arming; exclude QBAD negative trials from cumulative counters, training and holdout while retaining trial-local diagnostic evidence.
+ // No target tap, skill tap, spell tap, or gameplay controller.
+ // NORMAL FLOW: CAPTURE -> tap PLAYER NAME -> show target once -> hide -> automatic FADE trial.
+ // NEG FLOW: toggle TEST: NEG -> hide selected target -> automatic 4 s negative-control trial.
+ // ============================================================
+ 
+-var c29Version = "C29.11"
++var c29Version = "C29.12"
+ var c29Source = "R16.9.191"
+ var c29PollMs = 1
+ var c29FadeTimeoutMs = 4000
+@@ -228,6 +229,7 @@
+ var c29NegativeTrialClassification = "NOT_NEG"
+ var c29NegativeCountersCommitted = 0
+ var c29NegativeEvidence = "NA"
++var c29NegativeLearningExclusion = "NOT_EVALUATED"
+ 
+ var c29FadeQualityEligible = 0
+ var c29FadeQualityExclusion = "NOT_EVALUATED"
+@@ -565,7 +567,7 @@
+     c29HideControls()
+     c29ShowPersistentControls()
+     if (c29State == 0) {
+-        c29SetHud("SIGHT FADE LAB | C29.11","STEP 1: OPEN ENEMY ROSTER | TAP CAPTURE","PRODUCTION CAPTURE + NAMES | NO GAMEPLAY TAP","#FFFFFFFF")
++        c29SetHud("SIGHT FADE LAB | C29.12","STEP 1: OPEN ENEMY ROSTER | TAP CAPTURE","PRODUCTION CAPTURE + NAMES | NO GAMEPLAY TAP","#FFFFFFFF")
+         return 1
+     }
+     if (c29State == 1) {
+@@ -1117,6 +1119,18 @@
+     return 1
+ }
+ 
++fun c29TargetRefNoiseOk() {
++    if (c29TargetReferenceValid != 1) { return 0 }
++    if (c29InnerTargetReferenceValid != 1) { return 0 }
++    if (c29TargetNoiseAB > c29TargetReferenceRingNoiseLimit) { return 0 }
++    if (c29TargetNoiseBC > c29TargetReferenceRingNoiseLimit) { return 0 }
++    if (c29TargetNoiseAC > c29TargetReferenceRingNoiseLimit) { return 0 }
++    if (c29InnerTargetNoiseAB > c29TargetReferenceInnerNoiseLimit) { return 0 }
++    if (c29InnerTargetNoiseBC > c29TargetReferenceInnerNoiseLimit) { return 0 }
++    if (c29InnerTargetNoiseAC > c29TargetReferenceInnerNoiseLimit) { return 0 }
++    return 1
++}
++
+ fun c29TryAutoMap() {
+     if (c29Selected < 1) { return 0 }
+     var match = c29FindSelectedStrictFresh()
+@@ -1127,6 +1141,12 @@
+     c29InnerTargetReferenceValid = 0
+     if (c29CaptureTargetReference() == 0) {
+         c29SetHud("TARGET REF WAIT | "+c29SelectedName+" | R"+c29StickyRoi,"KEEP TARGET FULLY VISIBLE","RETRYING RING + 3F INNER SIGNATURE","#FFFFFF00")
++        return 0
++    }
++    if (c29TargetRefNoiseOk() != 1) {
++        c29TargetReferenceValid = 0
++        c29InnerTargetReferenceValid = 0
++        c29SetHud("TARGET REF MOVING | "+c29SelectedName+" | R"+c29StickyRoi,"KEEP TARGET FULLY VISIBLE + STILL","AUTO RETRY; NO THRESHOLD RELAXATION","#FFFFFF00")
+         return 0
+     }
+     c29State = 3
+@@ -1148,6 +1168,7 @@
+     if (c29InnerTargetReferenceA.size != 16) { return 4 }
+     if (c29InnerTargetReferenceB.size != 16) { return 4 }
+     if (c29InnerTargetReferenceC.size != 16) { return 4 }
++    if (c29TargetRefNoiseOk() != 1) { return 4 }
+     var stillVisible = c29FindSelectedStrictFresh()
+     if (stillVisible != null) { return 3 }
+     Cache.screen()
+@@ -1331,6 +1352,7 @@
+     c29NegativeTrialClassification = "NOT_NEG"
+     c29NegativeCountersCommitted = 0
+     c29NegativeEvidence = "NA"
++    c29NegativeLearningExclusion = "NOT_EVALUATED"
+     c29FadeQualityEligible = 0
+     c29FadeQualityExclusion = "NOT_EVALUATED"
+     c29PositiveLearningEligible = 0
+@@ -2623,7 +2645,7 @@
+     report = report+"\nring_fade_confirmed="+c29Csv(c29TargetFadeConfirmed)+"\nring_fade_missed="+c29Csv(c29TargetFadeMissed)
+     report = report+"\ninner_fade_confirmed="+c29Csv(c29InnerFadeConfirmed)+"\ninner_fade_missed="+c29Csv(c29InnerFadeMissed)
+     report = report+"\nnegative_trials="+c29NegativeTrials
+-    report = report+"\nnegative_trial_classification="+c29NegativeTrialClassification+"\nnegative_counters_committed="+c29NegativeCountersCommitted+"\nnegative_evidence="+c29NegativeEvidence
++    report = report+"\nnegative_trial_classification="+c29NegativeTrialClassification+"\nnegative_counters_committed="+c29NegativeCountersCommitted+"\nnegative_evidence="+c29NegativeEvidence+"\nnegative_learning_exclusion="+c29NegativeLearningExclusion
+     report = report+"\nraw_negative_candidate_frames="+c29Csv(c29NegativeCandidateFrames)+"\nraw_negative_confirm_events="+c29Csv(c29NegativeConfirmEvents)+"\nraw_negative_max_changed="+c29Csv(c29NegativeMaxChanged)
+     report = report+"\nraw_negative_trial_candidate_frames="+c29Csv(c29NegTrialCandidateFrames)+"\nraw_negative_trial_confirm_events="+c29Csv(c29NegTrialConfirmEvents)+"\nraw_negative_trial_max_changed="+c29Csv(c29NegTrialMaxChanged)+"\nraw_negative_trial_clean="+c29NegTrialRawClean
+     report = report+"\nring_negative_candidate_frames="+c29Csv(c29TargetNegativeCandidateFrames)+"\nring_negative_confirm_events="+c29Csv(c29TargetNegativeConfirmEvents)+"\nring_negative_max_changed="+c29Csv(c29TargetNegativeMaxChanged)
+@@ -2856,54 +2878,70 @@
+         c29TimingQualityTag = "QBAD"
+         c29NegativeTrialClassification = "READ_FAIL"
+         c29NegativeEvidence = "EXCLUDED"
++        c29NegativeLearningExclusion = "READ_FAIL"
+     }
+     if (c29Ended == "NEG_INNER_READ_FAIL") {
+         c29TimingQuality = "READ_FAIL"
+         c29TimingQualityTag = "QBAD"
+         c29NegativeTrialClassification = "READ_FAIL"
+         c29NegativeEvidence = "EXCLUDED"
++        c29NegativeLearningExclusion = "READ_FAIL"
+     }
+     if (c29Ended == "NONE") {
+         var endMatch = c29FindSelectedStrictFresh()
+         if (endMatch == null) {
+             c29LastTrialValid = 1
+-            c29NegativeTrials = c29NegativeTrials+1
+-            var i = 0
+-            while (i < 7) {
+-                c29NegativeCandidateFrames[i] = c29NegativeCandidateFrames[i]+c29NegTrialCandidateFrames[i]
+-                c29NegativeConfirmEvents[i] = c29NegativeConfirmEvents[i]+c29NegTrialConfirmEvents[i]
+-                if (c29NegTrialMaxChanged[i] > c29NegativeMaxChanged[i]) { c29NegativeMaxChanged[i] = c29NegTrialMaxChanged[i] }
+-                c29TargetNegativeCandidateFrames[i] = c29TargetNegativeCandidateFrames[i]+c29TargetNegTrialCandidateFrames[i]
+-                c29TargetNegativeConfirmEvents[i] = c29TargetNegativeConfirmEvents[i]+c29TargetNegTrialConfirmEvents[i]
+-                if (c29TargetNegTrialMaxChanged[i] > c29TargetNegativeMaxChanged[i]) { c29TargetNegativeMaxChanged[i] = c29TargetNegTrialMaxChanged[i] }
+-                c29InnerNegativeCandidateFrames[i] = c29InnerNegativeCandidateFrames[i]+c29InnerNegTrialCandidateFrames[i]
+-                c29InnerNegativeConfirmEvents[i] = c29InnerNegativeConfirmEvents[i]+c29InnerNegTrialConfirmEvents[i]
+-                if (c29InnerNegTrialMaxChanged[i] > c29InnerNegativeMaxChanged[i]) { c29InnerNegativeMaxChanged[i] = c29InnerNegTrialMaxChanged[i] }
+-                i = i+1
+-            }
+-            if (c29TrialHoldoutEligible == 1) {
+-                c29SigHoldoutNegTrials = c29SigHoldoutNegTrials+1
+-                c29SigHoldoutNegConfirmEvents = c29SigHoldoutNegConfirmEvents+c29SigNegConfirmEvents
+-                c29ProtectedHoldoutNegTrials = c29ProtectedHoldoutNegTrials+1
+-                c29ProtectedHoldoutNegConfirmEvents = c29ProtectedHoldoutNegConfirmEvents+c29ProtectedNegConfirmEvents
+-            }
+-            if (c29TrialSigTHoldoutEligible == 1) {
+-                var th = 0
+-                while (th < 3) {
+-                    c29SigTHoldoutNegTrials[th] = c29SigTHoldoutNegTrials[th]+1
+-                    c29SigTHoldoutNegConfirmEvents[th] = c29SigTHoldoutNegConfirmEvents[th]+c29SigTNegConfirmEvents[th]
+-                    th = th+1
++            var negExclusion = "NONE"
++            if (c29TargetReferenceStable != 1) { negExclusion = "UNSTABLE_TARGET_REFERENCE" }
++            if (c29TimingQuality != "GOOD") { negExclusion = "TIMING_"+c29TimingQuality }
++            if (c29TrialNegFrames < 1) { negExclusion = "NO_NEGATIVE_FRAMES" }
++            if (negExclusion != "NONE") {
++                c29NegativeCountersCommitted = 0
++                c29NegativeTrialClassification = "NEG_QUALITY_EXCLUDED"
++                c29NegativeEvidence = "EXCLUDED"
++                c29NegativeLearningExclusion = negExclusion
++                c29Ended = "NEG_QBAD"
++            } else {
++                c29NegativeTrials = c29NegativeTrials+1
++                var i = 0
++                while (i < 7) {
++                    c29NegativeCandidateFrames[i] = c29NegativeCandidateFrames[i]+c29NegTrialCandidateFrames[i]
++                    c29NegativeConfirmEvents[i] = c29NegativeConfirmEvents[i]+c29NegTrialConfirmEvents[i]
++                    if (c29NegTrialMaxChanged[i] > c29NegativeMaxChanged[i]) { c29NegativeMaxChanged[i] = c29NegTrialMaxChanged[i] }
++                    c29TargetNegativeCandidateFrames[i] = c29TargetNegativeCandidateFrames[i]+c29TargetNegTrialCandidateFrames[i]
++                    c29TargetNegativeConfirmEvents[i] = c29TargetNegativeConfirmEvents[i]+c29TargetNegTrialConfirmEvents[i]
++                    if (c29TargetNegTrialMaxChanged[i] > c29TargetNegativeMaxChanged[i]) { c29TargetNegativeMaxChanged[i] = c29TargetNegTrialMaxChanged[i] }
++                    c29InnerNegativeCandidateFrames[i] = c29InnerNegativeCandidateFrames[i]+c29InnerNegTrialCandidateFrames[i]
++                    c29InnerNegativeConfirmEvents[i] = c29InnerNegativeConfirmEvents[i]+c29InnerNegTrialConfirmEvents[i]
++                    if (c29InnerNegTrialMaxChanged[i] > c29InnerNegativeMaxChanged[i]) { c29InnerNegativeMaxChanged[i] = c29InnerNegTrialMaxChanged[i] }
++                    i = i+1
+                 }
+-            }
+-            c29CommitNegativeLearning()
+-            c29NegativeCountersCommitted = 1
+-            c29NegativeTrialClassification = "VALID_NEG"
+-            c29NegativeEvidence = "INCLUDED"
+-            c29Ended = "NEG_DONE"
++                if (c29TrialHoldoutEligible == 1) {
++                    c29SigHoldoutNegTrials = c29SigHoldoutNegTrials+1
++                    c29SigHoldoutNegConfirmEvents = c29SigHoldoutNegConfirmEvents+c29SigNegConfirmEvents
++                    c29ProtectedHoldoutNegTrials = c29ProtectedHoldoutNegTrials+1
++                    c29ProtectedHoldoutNegConfirmEvents = c29ProtectedHoldoutNegConfirmEvents+c29ProtectedNegConfirmEvents
++                }
++                if (c29TrialSigTHoldoutEligible == 1) {
++                    var th = 0
++                    while (th < 3) {
++                        c29SigTHoldoutNegTrials[th] = c29SigTHoldoutNegTrials[th]+1
++                        c29SigTHoldoutNegConfirmEvents[th] = c29SigTHoldoutNegConfirmEvents[th]+c29SigTNegConfirmEvents[th]
++                        th = th+1
++                    }
++                }
++                c29CommitNegativeLearning()
++                c29NegativeCountersCommitted = 1
++                c29NegativeTrialClassification = "VALID_NEG"
++                c29NegativeEvidence = "INCLUDED"
++                c29NegativeLearningExclusion = "NONE"
++                c29Ended = "NEG_DONE"
++            }
+         } else {
+             c29NegativeCountersCommitted = 0
+             c29NegativeTrialClassification = "TARGET_INTRUSION"
+             c29NegativeEvidence = "EXCLUDED"
++            c29NegativeLearningExclusion = "TARGET_INTRUSION"
+             c29Ended = "INVALID_TARGET_ENTERED_NEG"
+         }
+     }
+@@ -2965,6 +3003,12 @@
+                     c29TargetReferenceValid = 0
+                     c29InnerTargetReferenceValid = 0
+                     if (c29CaptureTargetReference() == 1) {
++                        if (c29TargetRefNoiseOk() != 1) {
++                            c29TargetReferenceValid = 0
++                            c29InnerTargetReferenceValid = 0
++                            c29SetHud("RESET REF MOVING | "+c29SelectedName,"KEEP TARGET FULLY VISIBLE + STILL","AUTO RETRY; NO LEARNING FROM UNSTABLE REF","#FFFFFF00")
++                            return 0
++                        }
+                         c29NeedVisibleReset = 0
+                         c29State = 3
+                         c29SetHud("RESET OK | "+c29SelectedName+" | R"+c29StickyRoi,"RING + 3F INNER SIGNATURE REFRESHED","HIDE TARGET TO ARM "+c29ModeText(),"#FF38BDF8")
+@@ -3011,7 +3055,7 @@
+ 
+ fun c29Main() {
+     if (c29Setup() == 0) {
+-        Con.out("C29.11: screen geometry does not fit 2340x1080 diagnostic.")
++        Con.out("C29.12: screen geometry does not fit 2340x1080 diagnostic.")
+         return 0
+     }
+     while (1) {
