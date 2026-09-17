@@ -1,0 +1,56 @@
+name: MXE8 revision 5 one-time publication
+on:
+  push:
+    branches: [macrorify-editor-sync]
+    paths: ['.github/workflows/mxe8-rev5-one-shot.yml']
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - name: Assemble, verify and publish encrypted revision 5
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_sizes=(3500 3500 3500 3500 3500 3500 3500 3433)
+          for i in 0 1 2 3 4 5 6 7; do
+            f=$(printf '.mxe_rev5_chunks/chunk%02d' "$i")
+            test -f "$f"
+            actual=$(wc -c < "$f")
+            test "$actual" -eq "${expected_sizes[$i]}"
+          done
+          cat .mxe_rev5_chunks/chunk00 .mxe_rev5_chunks/chunk01 .mxe_rev5_chunks/chunk02 .mxe_rev5_chunks/chunk03 .mxe_rev5_chunks/chunk04 .mxe_rev5_chunks/chunk05 .mxe_rev5_chunks/chunk06 .mxe_rev5_chunks/chunk07 > /tmp/working.enc.rev5.json
+          test "$(wc -c < /tmp/working.enc.rev5.json)" -eq 27933
+          echo 'e21a9c36aa4dd4072745b5c32b8e862359e677c787296e224e4b6c2f35201b67  /tmp/working.enc.rev5.json' | sha256sum -c -
+          python3 - <<'PY'
+          import hashlib, json, pathlib
+          candidate = pathlib.Path('/tmp/working.enc.rev5.json').read_bytes()
+          payload = json.loads(candidate)
+          assert payload['format'] == 'mxe8-online-sync-v1'
+          assert payload['session_id'] == 'macrorify-editor-c29-main'
+          assert payload['revision'] == 5
+          assert payload['algorithm'] == 'AES-GCM-256'
+          assert payload['compression'] == 'gzip'
+          assert payload['aad'] == 'macrorify-editor-c29-main|rev:5|gzip'
+          assert payload['plaintext_sha256'] == '0dd70cc3e894bad8710b3950f606eff0e43f833631ceb38d64faa5e861728b52'
+          assert payload['plaintext_bytes'] == 133043
+          assert payload['source_version'] == 'C29.12'
+          assert payload['source_title_marker'] == 'REF-NOISE PREARM + NEG-QGATE'
+          dest = pathlib.Path('macrorify-editor-sync/working.enc.json')
+          current = json.loads(dest.read_text('utf-8'))
+          assert current['revision'] == 4, 'Unexpected concurrent online revision'
+          assert current['plaintext_sha256'] == '440ca05bd95ab9383320bb231c999d06afb2a44d8fced8110bca120756833166', 'Unexpected current plaintext hash'
+          dest.write_bytes(candidate)
+          print('Verified exact rev5 encrypted payload and current rev4 predecessor')
+          PY
+          rm -rf .mxe_rev5_chunks .mxe_rev5
+          rm .github/workflows/mxe8-rev5-one-shot.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A -- macrorify-editor-sync/working.enc.json .mxe_rev5_chunks .mxe_rev5 .github/workflows/mxe8-rev5-one-shot.yml
+          git commit -m 'Publish checksum-verified MXE8 revision 5 C29.12'
+          git push origin HEAD:macrorify-editor-sync
