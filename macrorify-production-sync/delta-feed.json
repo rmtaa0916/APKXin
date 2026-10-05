@@ -3,7 +3,7 @@
   "session_id": "macrorify-production-r16-main",
   "base_revision": 1,
   "base_sha256": "01a4df2f2b30a8a3f2106865912b85d9e8ed72f7de42076aad0f9dc4e9910b4a",
-  "latest_revision": 62,
+  "latest_revision": 63,
   "patches": [
     {
       "revision": 2,
@@ -309,6 +309,11 @@
       "revision": 62,
       "filename": "patch-r62.enc.json",
       "blob_sha256": "081ab1990fc0418c128edfa603a1ef5fff2fef248d2d1eae8e78bdbbce74c488"
+    },
+    {
+      "revision": 63,
+      "filename": "patch-r63.enc.json",
+      "blob_sha256": "7b3454339a0667a325b0913551965fe6f703b510ed8061e1414e39b7299b623a"
     }
   ]
 }
